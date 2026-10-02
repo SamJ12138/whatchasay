@@ -645,34 +645,31 @@
     <!-- Keyboard Shortcuts -->
     <div class="section">
       <h2 class="section-title">Keyboard Shortcuts</h2>
-      <div class="keyboard-shortcuts">
-        <div class="shortcut-item">
-          <span>Toggle overlay on/off</span>
+      <div class="keyboard-shortcuts" id="shortcutList">
+        <div class="shortcut-item" data-command="toggle-overlay">
+          <span>Toggle subtitle overlay on/off</span>
           <div class="shortcut-key"><kbd>Alt</kbd><kbd>T</kbd></div>
         </div>
-        <div class="shortcut-item">
-          <span>Start/stop live captions</span>
+        <div class="shortcut-item" data-command="toggle-live-captions">
+          <span>Start/stop live captions for the current tab</span>
           <div class="shortcut-key"><kbd>Alt</kbd><kbd>L</kbd></div>
         </div>
-        <div class="shortcut-item">
-          <span>Swap language order</span>
+        <div class="shortcut-item" data-command="swap-order">
+          <span>Swap language order (primary/secondary)</span>
           <div class="shortcut-key"><kbd>Alt</kbd><kbd>S</kbd></div>
         </div>
-        <div class="shortcut-item">
+        <div class="shortcut-item" data-command="increase-font">
           <span>Increase font size</span>
-          <div class="shortcut-key"><kbd>Alt</kbd><kbd>]</kbd></div>
+          <div class="shortcut-key"><kbd>Alt</kbd><kbd>.</kbd></div>
         </div>
-        <div class="shortcut-item">
-          <span>Decrease font size</span>
-          <div class="shortcut-key"><kbd>Alt</kbd><kbd>[</kbd></div>
-        </div>
-        <div class="shortcut-item">
-          <span>Edit current translation</span>
+        <div class="shortcut-item" data-page-key="Alt+E">
+          <span>Edit the current translation (on the page, while the overlay shows it)</span>
           <div class="shortcut-key"><kbd>Alt</kbd><kbd>E</kbd></div>
         </div>
       </div>
       <p style="margin-top: 16px; font-size: 12px; color: #888;">
-        To change shortcuts, go to chrome://extensions/shortcuts
+        To change shortcuts, go to chrome://extensions/shortcuts. A smaller font is the
+        A- button in the popup.
       </p>
     </div>
     

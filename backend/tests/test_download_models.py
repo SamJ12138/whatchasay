@@ -18,6 +18,7 @@ def dl(monkeypatch):
     calls = []
     monkeypatch.setattr(mod, "fetch_asr", lambda spec, root: calls.append(("asr", spec.name, Path(root))))
     monkeypatch.setattr(mod, "fetch_lid", lambda root: calls.append(("lid", None, Path(root))))
+    monkeypatch.setattr(mod, "fetch_punct", lambda root: calls.append(("punct", None, Path(root))))
     monkeypatch.setattr(mod, "fetch_opus", lambda hf, out: calls.append(("opus", hf, Path(out))))
     monkeypatch.setattr(mod, "fetch_hymt", lambda path: calls.append(("hymt", Path(path).name, Path(path))))
     monkeypatch.setattr(mod, "fetch_llama_server", lambda bin_dir: calls.append(("llama", None, Path(bin_dir))))
@@ -32,10 +33,10 @@ def run(dl, tmp_path, *args):
 def test_default_downloads_asr_and_opus_only(dl, tmp_path, capsys):
     assert run(dl, tmp_path) == 0
     kinds = {c[0] for c in dl.calls}
-    assert kinds == {"asr", "lid", "opus"}, dl.calls
+    assert kinds == {"asr", "lid", "punct", "opus"}, dl.calls
     assert {c[1] for c in dl.calls if c[0] == "asr"} == {
         "sherpa-onnx-streaming-zipformer-en-2023-06-26",
-        "sherpa-onnx-streaming-zipformer-zh-int8-2025-06-30",
+        "sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20",
         "sherpa-onnx-streaming-zipformer-bn-vosk-2026-02-09",
     }
     assert {c[1] for c in dl.calls if c[0] == "opus"} == {
@@ -46,6 +47,7 @@ def test_default_downloads_asr_and_opus_only(dl, tmp_path, capsys):
         assert str(where).startswith(str(tmp_path / "data")), (kind, where)
     out = capsys.readouterr().out
     assert "Tencent" not in out
+    assert "declares no license" not in out  # the default set has a declared license throughout
 
 
 def test_hymt_needs_the_license_flag_and_shows_the_summary(dl, tmp_path, capsys):
@@ -74,3 +76,31 @@ def test_accept_flag_alone_does_not_download_hymt(dl, tmp_path):
 def test_skip_flags(dl, tmp_path):
     assert run(dl, tmp_path, "--skip-asr", "--skip-opus") == 0
     assert dl.calls == []
+
+
+LARGE_ZH = "sherpa-onnx-streaming-zipformer-zh-int8-2025-06-30"
+
+
+def test_mandarin_large_needs_the_flag_and_shows_the_notice(dl, tmp_path, capsys):
+    assert run(dl, tmp_path, "--mandarin-large") == 2
+    assert not dl.calls, "downloaded without accepting the terms"
+    out = capsys.readouterr().out
+    for needle in ("declares", "NO license", "WenetSpeech", "non-commercial", "--accept-mandarin-large-terms", "NOTICE.md"):
+        assert needle in out, needle
+
+
+def test_mandarin_large_with_accepted_terms_adds_it(dl, tmp_path, capsys):
+    assert run(dl, tmp_path, "--mandarin-large", "--accept-mandarin-large-terms") == 0
+    asr = [c[1] for c in dl.calls if c[0] == "asr"]
+    assert LARGE_ZH in asr and "sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20" in asr
+    assert "SUBTITLE_ASR__ZH_MODEL=large" in capsys.readouterr().out
+
+
+def test_accept_flag_alone_does_not_download_the_large_mandarin_model(dl, tmp_path):
+    assert run(dl, tmp_path, "--accept-mandarin-large-terms") == 0
+    assert LARGE_ZH not in [c[1] for c in dl.calls if c[0] == "asr"]
+
+
+def test_punctuation_model_lands_under_data_dir(dl, tmp_path):
+    assert run(dl, tmp_path, "--skip-opus") == 0
+    assert ("punct", None, tmp_path / "data" / "models" / "punct") in dl.calls

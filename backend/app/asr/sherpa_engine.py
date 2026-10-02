@@ -19,7 +19,7 @@ import threading
 import time
 import urllib.request
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from .engine import AsrEvent, SAMPLE_RATE, pcm16_to_float32
 from .. import obs
@@ -49,6 +49,8 @@ class ZipformerModelSpec:
         tokens: str = "tokens.txt",
         modeling_unit: str = "",
         bpe_vocab: str = "",
+        drop: Tuple[str, ...] = (),
+        gated: str = "",
     ):
         self.name = name
         self.encoder = encoder
@@ -57,11 +59,37 @@ class ZipformerModelSpec:
         self.tokens = tokens
         self.modeling_unit = modeling_unit
         self.bpe_vocab = bpe_vocab
+        # files deleted after extraction (unused precisions; saves disk)
+        self.drop = drop
+        # non-empty: the backend never downloads this model; only
+        # scripts/download_models.py does, after its notice (the value is the flag)
+        self.gated = gated
 
     @property
     def url(self) -> str:
         return f"{RELEASE_BASE}{self.name}.tar.bz2"
 
+
+# Mandarin (asr.zh_model). "bilingual" (default): Apache-2.0, Mandarin + English
+# code-switching. "large": lower error rate on read Mandarin but declares no license
+# upstream (NOTICE.md); only `scripts/download_models.py --mandarin-large
+# --accept-mandarin-large-terms` downloads it, never the backend.
+MANDARIN_MODELS: Dict[str, ZipformerModelSpec] = {
+    "bilingual": ZipformerModelSpec(
+        "sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20",
+        encoder="encoder-epoch-99-avg-1.int8.onnx",
+        decoder="decoder-epoch-99-avg-1.onnx",
+        joiner="joiner-epoch-99-avg-1.int8.onnx",
+        drop=("encoder-epoch-99-avg-1.onnx", "joiner-epoch-99-avg-1.onnx", "decoder-epoch-99-avg-1.int8.onnx"),
+    ),
+    "large": ZipformerModelSpec(
+        "sherpa-onnx-streaming-zipformer-zh-int8-2025-06-30",
+        encoder="encoder.int8.onnx",
+        decoder="decoder.onnx",
+        joiner="joiner.int8.onnx",
+        gated="--mandarin-large --accept-mandarin-large-terms",
+    ),
+}
 
 # Verified against the sherpa-onnx pretrained-model catalogue (Sept 2026).
 DEFAULT_MODELS: Dict[str, ZipformerModelSpec] = {
@@ -71,12 +99,7 @@ DEFAULT_MODELS: Dict[str, ZipformerModelSpec] = {
         decoder="decoder-epoch-99-avg-1-chunk-16-left-128.onnx",
         joiner="joiner-epoch-99-avg-1-chunk-16-left-128.int8.onnx",
     ),
-    "zh": ZipformerModelSpec(
-        "sherpa-onnx-streaming-zipformer-zh-int8-2025-06-30",
-        encoder="encoder.int8.onnx",
-        decoder="decoder.onnx",
-        joiner="joiner.int8.onnx",
-    ),
+    "zh": MANDARIN_MODELS["bilingual"],
     "bn": ZipformerModelSpec(
         "sherpa-onnx-streaming-zipformer-bn-vosk-2026-02-09",
         encoder="encoder.onnx",
@@ -84,6 +107,27 @@ DEFAULT_MODELS: Dict[str, ZipformerModelSpec] = {
         joiner="joiner.onnx",
     ),
 }
+
+
+def model_present(spec: ZipformerModelSpec, models_root: Path) -> bool:
+    return (Path(models_root) / spec.name / spec.tokens).exists()
+
+
+def models_for(zh_model: str, models_root: Path) -> Dict[str, ZipformerModelSpec]:
+    """The per-language specs for this config. A configured "large" Mandarin model
+    that is not on disk falls back to the bilingual one with one WARNING line."""
+    models = dict(DEFAULT_MODELS)
+    if zh_model != "bilingual":
+        spec = MANDARIN_MODELS[zh_model]
+        if model_present(spec, models_root):
+            models["zh"] = spec
+        else:
+            msg = (f"Mandarin model {zh_model!r} ({spec.name}) is configured but not downloaded; using the bilingual "
+                   f"model. Download it with: python scripts/download_models.py {spec.gated}")
+            logger.warning(msg)
+            obs.log("startup", "skip", error_type="input_invalid", component="asr_model", lang="zh",
+                    error_message=msg, degraded="bilingual Mandarin model")
+    return models
 
 
 def _find_file(model_dir: Path, preferred: str, patterns: List[str]) -> Path:
@@ -98,11 +142,15 @@ def _find_file(model_dir: Path, preferred: str, patterns: List[str]) -> Path:
     raise FileNotFoundError(f"No file matching {preferred!r} or {patterns} in {model_dir}")
 
 
-def ensure_model(spec: ZipformerModelSpec, models_root: Path) -> Path:
-    """Download + extract the model archive if the directory is missing."""
+def ensure_model(spec: ZipformerModelSpec, models_root: Path, allow_gated: bool = False) -> Path:
+    """Download + extract the model archive if the directory is missing. A gated
+    model is only downloaded by scripts/download_models.py (allow_gated)."""
     model_dir = models_root / spec.name
     if (model_dir / spec.tokens).exists():
         return model_dir
+    if spec.gated and not allow_gated:
+        raise FileNotFoundError(f"{spec.name} is not downloaded; the backend does not download it. "
+                                f"Run: python scripts/download_models.py {spec.gated}")
 
     models_root.mkdir(parents=True, exist_ok=True)
     archive = models_root / f"{spec.name}.tar.bz2"
@@ -111,6 +159,8 @@ def ensure_model(spec: ZipformerModelSpec, models_root: Path) -> Path:
     with tarfile.open(archive) as tf:
         tf.extractall(models_root)
     archive.unlink(missing_ok=True)
+    for name in spec.drop:
+        (model_dir / name).unlink(missing_ok=True)
     if not (model_dir / spec.tokens).exists():
         raise RuntimeError(f"Model archive for {spec.name} did not contain {spec.tokens}")
     logger.info("ASR model %s ready", spec.name)
@@ -227,6 +277,7 @@ class SherpaZipformerEngine:
             "engine": self.name,
             "available": SHERPA_AVAILABLE,
             "languages": sorted(self.models.keys()),
+            "models": {lang: spec.name for lang, spec in self.models.items()},
             "loaded": sorted(self._recognizers.keys()),
         }
 

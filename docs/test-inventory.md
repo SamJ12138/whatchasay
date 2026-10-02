@@ -49,7 +49,7 @@ Run: `cd backend && venv\Scripts\python -m pytest` (fast suite, `-m "not slow"` 
 | `test_routing` :: `test_missing_route_is_none_not_english` | vi→ko has no route (None) | – | – | fast |
 | `test_routing` :: `test_same_language_is_empty_route` | en→en is an empty route | – | – | fast |
 | `test_routing` :: `test_bengali_is_first_class` | bn in supported/ASR/HY-MT languages, 38-char limit, display name | – | – | fast |
-| `test_routing` :: `test_defaults_are_fast_mode` | speed_mode fast, refiner off, batch window > 0 | – | – | fast |
+| `test_routing` :: `test_defaults_are_fast_mode` | fast_mode on, refiner off, batch window > 0 (Phase 3: speed_mode removed) | – | – | fast |
 
 Totals: 2 loaded models (now slow), 5 needed the live server (now fast, in-process), 47 were already pure.
 
@@ -100,3 +100,14 @@ ran without the server's real engines except `test_pipeline`.
 | `test_cloud` (17) | cloud off by default (no engine even with a key); factory and router order; Google/Azure keys in headers, never the URL; HTTP / network / malformed errors carry no key (also through the router, logs and obs); Gemini key in a header; Groq/Gemini refiners need cloud on; `/ws`, `/ws/asr`, `POST /config` cannot set keys; startup line + `/health/json` name the receivers | fast |
 | `extension/tests/cloud-keys.test.js` (4) | migration deletes stored keys and leaves a notice (count, where to put them); no extension source stores, reads or sends keys; defaults carry no key object | node |
 | `test_e2e_extension` :: `test_options_page_holds_no_keys_and_names_the_cloud_receivers[off/on]` | `--path cloud-keys`: legacy keys deleted from storage with a notice; no key fields; the cloud line matches `/health/json` (off: nothing leaves; on: Google Cloud Translation) | **slow** |
+
+## Added in Phase 3
+
+| File :: test | Asserts | Suite |
+|---|---|---|
+| `test_punctuation` (8 fast + 1 slow) | `/ws/asr` restores English finals and partials through the session's `restore_text` hook (final keeps `raw_text`); unchanged text has no `raw_text`; a failing restorer keeps the caption and logs `punctuate` fail; `create_session` uses the package restorer; on by default, English only; a missing model passes text through with one WARNING and no download; `asr.punctuation=false` means no restorer; the MT engine receives the restored text. Slow: the real model restores two sentences exactly, p50 < 50 ms, Mandarin unchanged | fast / **slow** |
+| `test_mandarin_model` (6) | default Mandarin model is the Apache-2.0 bilingual one; unknown `asr.zh_model` refused; `large` configured but absent -> bilingual + one WARNING naming the flags; `large` used when present; the backend never downloads the gated model; unused fp32 files dropped after extraction | fast |
+| `test_download_models` (+4) | default set includes the punctuation model and the bilingual Mandarin model and prints no license warning; `--mandarin-large` shows the notice and exits 2 without `--accept-mandarin-large-terms`; with it, the large model is added; the accept flag alone downloads nothing extra | fast |
+| `test_dead_code` (13) | `/config/speed_mode` is gone (404/405); nine unused settings are gone; no reference to the never-implemented cloud / Whisper ASR engines; the v1 Modelfile and TRAINING.md are gone; startup no longer probes `ollama` / `llama_cpp` | fast |
+| `test_e2e_extension` :: `test_mandarin_tab_audio_with_the_licensed_model` | `--path audio` with a Mandarin WAV, source zh, target en: translated cue in the page, served by the bilingual model (`/health/json` models), TM unchanged | **slow** |
+| `extension/tests/options-shortcuts.test.js` (3) | the Options page lists every manifest command with its suggested key, nothing else but the Alt+E page key (handled in `main.js`), no Alt+[ / Alt+]; it reads the bound keys with `chrome.commands.getAll()` | node |

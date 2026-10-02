@@ -291,6 +291,14 @@ def tm_rows(port: int) -> int:
         return json.loads(r.read())["translation_memory"]["total_translations"]
 
 
+def asr_models(port: int) -> dict:
+    """{lang: model name} of the backend's Zipformer engine, and the punctuation model."""
+    with urllib.request.urlopen(f"http://127.0.0.1:{port}/health/json", timeout=5) as r:
+        asr = json.loads(r.read())["asr"]
+    eng = (asr.get("engines") or {}).get("sherpa-zipformer") or {}
+    return {**eng.get("models", {}), "punctuation": (asr.get("punctuation") or {}).get("model")}
+
+
 def clear_memory_checks(ctx, sw, ext_id: str, port: int, summary: dict) -> bool:
     """D3: the options page's storage sentence and its Clear translation memory button."""
     checks = summary.setdefault("checks", {})
@@ -850,6 +858,9 @@ def main() -> int:
             if args.path == "audio":
                 page.wait_for_timeout(1500)  # let the other target's translation land too
                 summary["tm_rows_after"] = tm_rows(args.port)
+                summary["asr_models"] = asr_models(args.port)
+                summary["finals"] = [(r.get("context") or {}).get("text_len") for r in records
+                                     if r.get("stage") == "ext_render" and (r.get("context") or {}).get("kind") == "final"][:5]
             if got:
                 # D3: an audio session leaves no rows in the persistent TM
                 summary["ok"] = args.path != "audio" or summary["tm_rows_after"] == summary["tm_rows_before"]

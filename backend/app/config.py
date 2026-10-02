@@ -221,8 +221,14 @@ class MTConfig(BaseSettings):
 class ASRConfig(BaseSettings):
     """Streaming speech recognition."""
 
-    engine: str = Field(default="auto", description="auto | sherpa-zipformer | whisper | cloud")
+    engine: str = Field(default="auto", description="auto | sherpa-zipformer (the only engine)")
     models_dir: Path = Field(default=Path("data/models/asr"))
+    # Mandarin model: "bilingual" (Apache-2.0, Mandarin + English) or "large" (lower error
+    # rate on read Mandarin, no declared license; scripts/download_models.py --mandarin-large).
+    zh_model: str = Field(default="bilingual")
+    # English casing + punctuation before translation (asr/punctuation.py; docs/asr-input-quality.md)
+    punctuation: bool = Field(default=True)
+    punct_dir: Path = Field(default=Path("data/models/punct"))
     languages: List[str] = Field(default=["en", "zh", "bn"], description="Languages with streaming models")
     num_threads: int = Field(default=2)
     # Endpoint rules (seconds): trailing silence after speech / after any audio / max utterance
@@ -232,9 +238,13 @@ class ASRConfig(BaseSettings):
     lid_window_s: float = Field(default=2.5)
     partial_interval_ms: int = Field(default=120)
     warmup_languages: List[str] = Field(default=["en", "zh", "bn"], description="Recognizers loaded at startup so auto-detect switches are instant")
-    # Accuracy mode (faster-whisper, delayed)
-    whisper_model: str = Field(default="large-v3-turbo")
-    whisper_bn_model: str = Field(default="mozilla-ai/whisper-large-v3-bn")
+
+    @field_validator("zh_model")
+    @classmethod
+    def _known_zh_model(cls, v: str) -> str:
+        if v not in ("bilingual", "large"):
+            raise ValueError(f"unknown Mandarin model {v!r}; one of ('bilingual', 'large')")
+        return v
 
 
 class CloudConfig(BaseSettings):
@@ -244,9 +254,6 @@ class CloudConfig(BaseSettings):
     they travel to the provider in request headers, never in a URL."""
 
     enabled: bool = Field(default=False, description="master switch for every cloud provider (MT and refiner)")
-    asr_provider: str = Field(default="gladia", description="gladia | elevenlabs")
-    gladia_api_key: str = Field(default="")
-    elevenlabs_api_key: str = Field(default="")
     mt_provider: str = Field(default="google", description="google | azure")
     google_api_key: str = Field(default="")
     azure_translator_key: str = Field(default="")
@@ -268,13 +275,11 @@ class RefinerConfig(BaseSettings):
 
 
 class OllamaConfig(BaseSettings):
-    """Ollama post-editor configuration (used by the refiner when provider=ollama)."""
+    """Local Ollama server for the optional async refiner (refiner.provider=ollama)."""
 
     base_url: str = Field(default="http://localhost:11434")
     model: str = Field(default="qwen3:4b")
-    fallback_model: str = Field(default="qwen2.5:7b")
     timeout: float = Field(default=30.0)
-    max_retries: int = Field(default=1)
     temperature: float = Field(default=0.3)
     context_window_size: int = Field(default=3)
 
@@ -326,14 +331,9 @@ class FeatureFlags(BaseSettings):
     enable_corrections: bool = Field(default=True)
     warmup_on_start: bool = Field(default=True)
 
-    # Kept for the /config/speed_mode endpoint; "fast" is the only mode that
-    # meets the latency target. Batching no longer depends on it.
-    speed_mode: str = Field(default="fast")
-
     # Micro-batching: collect cues for this many ms before one model call.
     batch_window_ms: int = Field(default=30)
     max_batch_size: int = Field(default=8)
-    post_edit_batch_size: int = Field(default=3)
 
 
 class Settings(BaseSettings):

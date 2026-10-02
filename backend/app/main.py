@@ -90,24 +90,17 @@ def _log_cloud_receivers() -> None:
     obs.log("startup", "success", component="cloud", enabled=settings.cloud.enabled, receivers=receivers)
 
 
-# Not needed by the app any more (S1, S4): the v1 post-editor (ollama) and the
-# llama-cpp-python spike were removed. Still reported, without an error type.
-_UNUSED_DEPS = ("ollama", "llama_cpp")
-
-
 def _log_optional_deps() -> None:
     """Record which optional modules import in this venv."""
     import importlib.util
 
-    for mod in ("ollama", "llama_cpp", "ctranslate2", "sherpa_onnx", "torch", "huggingface_hub"):
+    for mod in ("ctranslate2", "sherpa_onnx", "torch", "huggingface_hub"):
         try:
             found = importlib.util.find_spec(mod) is not None
         except Exception:
             found = False
         if found:
             obs.log("dependency", "success", module=mod)
-        elif mod in _UNUSED_DEPS:
-            obs.log("dependency", "skip", module=mod, error_message=f"module {mod!r} not installed (not used by the app)")
         else:
             obs.log("dependency", "skip", error_type="process", error_message=f"module {mod!r} not installed", module=mod)
 
@@ -354,9 +347,6 @@ async def ws_asr(websocket: WebSocket):
                 elif len(raw) % 2:
                     obs.log("asr_chunk", "fail", error_type="input_invalid", path="/ws/asr", bytes=len(raw),
                             error_message="odd byte count; last byte dropped by pcm16_to_float32, frame still decoded")
-                # optional 8-byte float64 header carrying the extension's audio clock
-                if len(raw) >= 8 and (len(raw) - 8) % 2 == 0 and raw[:1] == b"\x00":
-                    pass  # reserved; keep raw PCM path simple
                 # feed() is CPU work (~10 ms); run in the default executor so
                 # sends/translations interleave.
                 f0 = time.perf_counter()
@@ -624,17 +614,6 @@ async def update_config(updates: Dict[str, Any]):
     if "cloud_keys" in updates:
         ignore_cloud_keys(updates, path="/config")
     return await get_config()
-
-
-@app.post("/config/speed_mode")
-async def set_speed_mode(mode: str):
-    """Kept for compatibility. 'fast' = no refiner; 'hybrid'/'accuracy' = async refiner on."""
-    if mode not in ("fast", "hybrid", "accuracy"):
-        return {"error": f"Invalid mode: {mode}"}
-    settings.features.speed_mode = mode
-    settings.refiner.enabled = mode != "fast"
-    settings.features.use_post_editor = mode != "fast"
-    return {"status": "updated", "mode": mode, "refiner_enabled": settings.refiner.enabled, "batch_window_ms": settings.features.batch_window_ms}
 
 
 @app.post("/cache/clear")

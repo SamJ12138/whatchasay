@@ -27,26 +27,32 @@ from its [`asr-models` release](https://github.com/k2-fsa/sherpa-onnx/releases/t
 | Model | License | Notes |
 |---|---|---|
 | `sherpa-onnx-streaming-zipformer-en-2023-06-26` | Apache-2.0 | model card README |
+| `sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20` (Mandarin, default) | Apache-2.0 | [model card](https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20); converted from [pfluo/k2fsa-zipformer-chinese-english-mixed](https://huggingface.co/pfluo/k2fsa-zipformer-chinese-english-mixed) (Apache-2.0). Mandarin with English words mixed in |
 | `sherpa-onnx-streaming-zipformer-bn-vosk-2026-02-09` | Apache-2.0 (upstream) | the converted repo declares none; its files come from [alphacep/vosk-model-small-streaming-bn](https://huggingface.co/alphacep/vosk-model-small-streaming-bn), Apache-2.0 |
 | `sherpa-onnx-whisper-tiny` (language ID) | MIT | OpenAI Whisper weights: "Whisper's code and model weights are released under the MIT License", Copyright (c) 2022 OpenAI ([openai/whisper](https://github.com/openai/whisper)) |
-| `sherpa-onnx-streaming-zipformer-zh-int8-2025-06-30` (Mandarin) | **not declared** | see below |
+| `sherpa-onnx-online-punct-en-2024-08-06` (English punctuation and casing) | Apache-2.0 | from [frankyoujian/Edge-Punct-Casing](https://github.com/frankyoujian/Edge-Punct-Casing) (repository and [Hugging Face model](https://huggingface.co/frankyoujian/Edge-Punct-Casing) both Apache-2.0); paper: "A lightweight and efficient punctuation and word casing prediction model for on-device streaming ASR" ([arXiv:2407.13142](https://arxiv.org/abs/2407.13142)); [punctuation-models release](https://github.com/k2-fsa/sherpa-onnx/releases/tag/punctuation-models) |
+| `sherpa-onnx-streaming-zipformer-zh-int8-2025-06-30` (Mandarin, optional) | **not declared** | only with `--mandarin-large --accept-mandarin-large-terms`; see below |
 
-**The Mandarin model declares no license.** Its [model card](https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-zh-int8-2025-06-30)
-says it was converted from `yuekai/icefall-asr-multi-zh-hans-zipformer-large` (gated; its terms could not be
-read) and was trained on the icefall multi_zh-hans corpus (14,106 h), which includes
-[WenetSpeech](https://wenet-e2e.github.io/WenetSpeech/) (released for non-commercial purposes). It stays the
-default because no streaming Mandarin model with a declared permissive license is comparable in size and error
-rate (CER, lower is better):
+### The optional large Mandarin model declares no license
 
-| Candidate (declared license) | Size (int8) | CER aishell-1 test / WenetSpeech test_net | Verdict |
+Its [model card](https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-zh-int8-2025-06-30) says it was
+converted from `yuekai/icefall-asr-multi-zh-hans-zipformer-large` (gated; its terms could not be read) and was
+trained on the icefall multi_zh-hans corpus (14,106 h), which includes
+[WenetSpeech](https://wenet-e2e.github.io/WenetSpeech/) (released for non-commercial purposes). It was the default
+before Phase 3; it is now opt-in. `scripts/download_models.py --mandarin-large` prints a notice and downloads
+nothing unless `--accept-mandarin-large-terms` is also given; the backend never downloads it; it is used only with
+`SUBTITLE_ASR__ZH_MODEL=large`. Do not redistribute it. Why someone might want it (CER, lower is better):
+
+| Model (declared license) | Size (int8) | CER aishell-1 test / WenetSpeech test_net | |
 |---|---|---|---|
-| current: zipformer-zh-int8-2025-06-30 (none) | ~161 MB | 1.91 / 8.54 ([icefall RESULTS.md](https://github.com/k2-fsa/icefall/blob/master/egs/multi_zh-hans/ASR/RESULTS.md)) | default |
-| [zipformer-multi-zh-hans-2023-12-12](https://huggingface.co/k2-fsa/sherpa-onnx-streaming-zipformer-multi-zh-hans-2023-12-12) (Apache-2.0) | ~72 MB | 3.63 / 9.66 (unmerged [icefall PR 1369](https://github.com/k2-fsa/icefall/pull/1369), larger chunk than the export) | about 1.9x the errors on aishell-1; same WenetSpeech data |
-| [zipformer-bilingual-zh-en-2023-02-20](https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20) (Apache-2.0) | ~198 MB | 3.04 / 8.97 ([upstream card](https://huggingface.co/pfluo/k2fsa-zipformer-chinese-english-mixed)) | about 1.6x the errors on aishell-1; "internal" training data |
-| zipformer-zh-14M-2023-02-23 (Apache-2.0) | ~22 MB encoder | not published | 14M parameters, trained on WenetSpeech |
+| zipformer-bilingual-zh-en-2023-02-20 (Apache-2.0) | ~198 MB | 3.04 / 8.97 ([upstream card](https://huggingface.co/pfluo/k2fsa-zipformer-chinese-english-mixed)) | **default**; also handles English words inside Mandarin speech |
+| zipformer-zh-int8-2025-06-30 (none) | ~161 MB | 1.91 / 8.54 ([icefall RESULTS.md](https://github.com/k2-fsa/icefall/blob/master/egs/multi_zh-hans/ASR/RESULTS.md)) | optional, `--mandarin-large` |
+| [zipformer-multi-zh-hans-2023-12-12](https://huggingface.co/k2-fsa/sherpa-onnx-streaming-zipformer-multi-zh-hans-2023-12-12) (Apache-2.0) | ~72 MB | 3.63 / 9.66 (unmerged [icefall PR 1369](https://github.com/k2-fsa/icefall/pull/1369), larger chunk than the export) | not used: higher error rate than the bilingual model, trained on the same WenetSpeech data |
+| zipformer-zh-14M-2023-02-23 (Apache-2.0) | ~22 MB encoder | not published | not used: 14M parameters, trained on WenetSpeech |
 
-If you need a model with a declared license, the bilingual zh-en model is the closest; do not redistribute the
-default Mandarin model.
+On the two Mandarin sample clips the bilingual and the large model produce the same words except filler particles
+(啊, 呢); on the bilingual model's own code-switched samples the large model garbles the English words
+(`docs/asr-input-quality.md`).
 
 ## Optional: llama.cpp (only with `--hymt`)
 

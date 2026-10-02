@@ -3,12 +3,16 @@
     backend\\venv\\Scripts\\python scripts\\download_models.py              # ASR + OPUS-MT (default engine)
     backend\\venv\\Scripts\\python scripts\\download_models.py --hymt       # shows the HY-MT license summary
     backend\\venv\\Scripts\\python scripts\\download_models.py --hymt --accept-hymt-license
+    backend\\venv\\Scripts\\python scripts\\download_models.py --mandarin-large       # shows its notice
 
 Default: the streaming speech models (sherpa-onnx Zipformer for English, Mandarin and
-Bengali, whisper-tiny for spoken-language ID) and the OPUS-MT models for every
-en/zh/bn direction (converted once to CTranslate2 int8; needs transformers + torch).
+Bengali; the Mandarin one is the Apache-2.0 bilingual zh-en model), whisper-tiny for
+spoken-language ID, the English punctuation/casing model, and the OPUS-MT models for
+every en/zh/bn direction (converted once to CTranslate2 int8; needs transformers + torch).
 --hymt adds Tencent HY-MT1.5-1.8B (GGUF) and llama.cpp's llama-server, the optional GPU
 engine, only after its license summary is shown and --accept-hymt-license is given.
+--mandarin-large adds the larger Mandarin model, which declares no license, only after
+its notice is shown and --accept-mandarin-large-terms is given.
 Files already present are skipped. Licenses: NOTICE.md.
 """
 
@@ -27,6 +31,17 @@ if str(BACKEND) not in sys.path:
 
 HYMT_FILE = "HY-MT1.5-1.8B-Q4_K_M.gguf"
 HYMT_LICENSE_URL = "https://huggingface.co/tencent/HY-MT1.5-1.8B/blob/main/License.txt"
+
+MANDARIN_LARGE_NOTICE = """\
+The large Mandarin model (sherpa-onnx-streaming-zipformer-zh-int8-2025-06-30) declares
+NO license. Its model card says it was converted from a gated upstream model whose terms
+could not be read, and it was trained on data that includes WenetSpeech, which is
+released for non-commercial purposes only. Treat it as for personal, non-commercial use;
+do not redistribute it. Details: NOTICE.md.
+It is optional: the default Mandarin model (bilingual zh-en, Apache-2.0) is already
+downloaded without this flag. The large one has a lower error rate on read Mandarin
+(CER 1.91 vs 3.04 on aishell-1, upstream numbers).
+"""
 
 HYMT_LICENSE_SUMMARY = f"""\
 Tencent HY-MT1.5-1.8B is licensed under the TENCENT HY COMMUNITY LICENSE AGREEMENT.
@@ -50,7 +65,13 @@ not bundle or redistribute it. It is optional: OPUS-MT (CPU) is the default engi
 def fetch_asr(spec, root: Path) -> Path:
     from app.asr.sherpa_engine import ensure_model
 
-    return ensure_model(spec, Path(root))
+    return ensure_model(spec, Path(root), allow_gated=True)
+
+
+def fetch_punct(root: Path) -> Path:
+    from app.asr.punctuation import download_model
+
+    return download_model(Path(root))
 
 
 def fetch_lid(root: Path) -> Path:
@@ -103,6 +124,10 @@ def main(argv=None) -> int:
     ap.add_argument("--skip-opus", action="store_true")
     ap.add_argument("--hymt", action="store_true", help="also the optional HY-MT GPU engine (license gate)")
     ap.add_argument("--accept-hymt-license", action="store_true", help="accept the Tencent HY Community License")
+    ap.add_argument("--mandarin-large", action="store_true",
+                    help="also the larger Mandarin model (declares no license; notice first)")
+    ap.add_argument("--accept-mandarin-large-terms", action="store_true",
+                    help="download the large Mandarin model despite its undeclared license")
     args = ap.parse_args(argv)
 
     models = Path(args.data_dir) / "models"
@@ -113,6 +138,13 @@ def main(argv=None) -> int:
                   "  --hymt --accept-hymt-license")
             return 2
         print("License accepted with --accept-hymt-license.\n")
+    if args.mandarin_large:
+        print(MANDARIN_LARGE_NOTICE)
+        if not args.accept_mandarin_large_terms:
+            print("Not downloading anything. To download the large Mandarin model anyway, run again with:\n"
+                  "  --mandarin-large --accept-mandarin-large-terms")
+            return 2
+        print("Accepted with --accept-mandarin-large-terms.\n")
 
     if not args.skip_asr:
         from app.asr.sherpa_engine import DEFAULT_MODELS
@@ -122,7 +154,17 @@ def main(argv=None) -> int:
             fetch_asr(spec, models / "asr")
         print("Language ID: sherpa-onnx-whisper-tiny")
         fetch_lid(models / "asr")
-        print("Note: the Mandarin model declares no license upstream; see NOTICE.md.")
+        from app.asr.punctuation import PUNCT_MODEL
+
+        print(f"English punctuation/casing: {PUNCT_MODEL}")
+        fetch_punct(models / "punct")
+    if args.mandarin_large:
+        from app.asr.sherpa_engine import MANDARIN_MODELS
+
+        spec = MANDARIN_MODELS["large"]
+        print(f"ASR zh (large): {spec.name}")
+        fetch_asr(spec, models / "asr")
+        print("Enable it with SUBTITLE_ASR__ZH_MODEL=large.")
 
     if not args.skip_opus:
         for name in opus_models([l for l in args.langs.split(",") if l]):

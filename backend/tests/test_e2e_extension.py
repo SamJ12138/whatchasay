@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.conftest import has_zipformer
+from tests.conftest import MODELS_DIR, MODELS_ROOT, has_zipformer, zipformer_dir
 
 ROOT = Path(__file__).resolve().parents[1]
 _env_py = os.environ.get("ST_PLAYWRIGHT_PYTHON")
@@ -31,9 +31,11 @@ pytestmark = [
 
 def run_harness(*args, env=None):
     port = os.environ.get("ST_HARNESS_PORT", "8799")
+    # the backend reads the real models (MODELS_ROOT: backend/data/models or ST_MODELS_ROOT)
+    models = {"SUBTITLE_ASR__MODELS_DIR": str(MODELS_DIR), "SUBTITLE_ASR__PUNCT_DIR": str(MODELS_ROOT / "punct")}
     proc = subprocess.run(
         [PW_PYTHON, str(ROOT / "scripts" / "e2e_extension.py"), "--start-backend", "--port", port, *args],
-        capture_output=True, text=True, timeout=300, env={**os.environ, **(env or {})},
+        capture_output=True, text=True, timeout=300, env={**os.environ, **models, **(env or {})},
     )
     summary = json.loads(proc.stdout.strip().splitlines()[-1])
     return summary, proc
@@ -44,6 +46,18 @@ def test_tab_audio_reaches_content_script_as_translated_cue():
     assert summary["ok"], (summary, proc.stderr[-2000:])
     assert summary["first_translation"]["targets"]
     # D3: the audio session left no trace in the persistent TM
+    assert summary["tm_rows_after"] == summary["tm_rows_before"], summary
+
+
+@pytest.mark.skipif(not has_zipformer("zh"), reason="licensed Mandarin model (bilingual zh-en) not downloaded")
+def test_mandarin_tab_audio_with_the_licensed_model():
+    """Phase 3 Batch A: Mandarin speech through the default Mandarin model, which has a
+    declared license (Apache-2.0), to an English translation in the page."""
+    wav = zipformer_dir("zh") / "test_wavs" / "0.wav"
+    summary, proc = run_harness("--path", "audio", "--wav", str(wav), "--source", "zh", "--targets", "en")
+    assert summary["ok"], (summary, proc.stderr[-2000:])
+    assert "en" in summary["first_translation"]["targets"]
+    assert summary["asr_models"]["zh"] == "sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20", summary
     assert summary["tm_rows_after"] == summary["tm_rows_before"], summary
 
 

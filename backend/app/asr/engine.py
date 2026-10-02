@@ -1,9 +1,9 @@
 """
 Streaming ASR engine interface.
 
-Every engine (local sherpa-onnx Zipformer, cloud providers, accuracy-mode
-Whisper) implements the same tiny protocol so the session layer and the
-WebSocket endpoint never care which one is running.
+Every engine (today: the local sherpa-onnx Zipformer) implements the same tiny
+protocol so the session layer and the WebSocket endpoint never care which one
+is running.
 
 Audio contract: 16 kHz, mono, signed 16-bit PCM little-endian, arbitrary
 chunk sizes (the extension sends ~40 ms frames).

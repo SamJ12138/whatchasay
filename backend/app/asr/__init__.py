@@ -19,13 +19,15 @@ from ..config import settings
 from .. import obs
 from .engine import AsrEvent, AsrSession, StreamingASREngine, SAMPLE_RATE
 from .session import SessionConfig, StreamingASRSession
-from .sherpa_engine import SherpaZipformerEngine, SHERPA_AVAILABLE
+from .sherpa_engine import SherpaZipformerEngine, SHERPA_AVAILABLE, models_for
+from .punctuation import Punctuator
 from .lid import SpokenLanguageId
 
 logger = logging.getLogger(__name__)
 
 _engines: Optional[Dict[str, StreamingASREngine]] = None
 _lid: Optional[SpokenLanguageId] = None
+_punctuator: Optional[Punctuator] = None
 
 
 def get_engines() -> Dict[str, StreamingASREngine]:
@@ -36,36 +38,32 @@ def get_engines() -> Dict[str, StreamingASREngine]:
         if SHERPA_AVAILABLE:
             _engines["sherpa-zipformer"] = SherpaZipformerEngine(
                 models_root=cfg.models_dir,
+                models=models_for(cfg.zh_model, cfg.models_dir),
                 num_threads=cfg.num_threads,
                 rule1_min_trailing_silence=cfg.rule1_min_trailing_silence,
                 rule2_min_trailing_silence=cfg.rule2_min_trailing_silence,
                 rule3_min_utterance_length=cfg.rule3_min_utterance_length,
             )
-        # Optional engines register themselves only if their deps/keys exist.
-        try:
-            from .cloud_engine import make_cloud_engine
-
-            cloud = make_cloud_engine()
-            if cloud is not None:
-                _engines["cloud"] = cloud
-        except Exception as e:  # pragma: no cover
-            logger.debug("Cloud ASR engine not available: %s", e)
-            obs.log_exc("startup", e, event="skip", component="asr_engine", engine="cloud",
-                        degraded="advertised cloud ASR engine not registered (logged at DEBUG only)")
-        try:
-            from .whisper_engine import WhisperAccuracyEngine, WHISPER_AVAILABLE
-
-            if WHISPER_AVAILABLE:
-                _engines["whisper"] = WhisperAccuracyEngine()
-        except Exception as e:  # pragma: no cover
-            logger.debug("Whisper engine not available: %s", e)
-            obs.log_exc("startup", e, event="skip", component="asr_engine", engine="whisper",
-                        degraded="advertised accuracy-mode Whisper engine not registered (logged at DEBUG only)")
-        if not SHERPA_AVAILABLE:
+        else:
             obs.log("startup", "skip", error_type="process", component="asr_engine", engine="sherpa-zipformer",
                     error_message="sherpa_onnx not importable")
         obs.log("startup", "success", component="asr_engines", engines=list(_engines.keys()))
     return _engines
+
+
+def get_punctuator() -> Optional[Punctuator]:
+    """English casing + punctuation for ASR text (asr.punctuation), or None when off."""
+    global _punctuator
+    if not settings.asr.punctuation:
+        return None
+    if _punctuator is None:
+        _punctuator = Punctuator(settings.asr.punct_dir)
+    return _punctuator
+
+
+def _restore_text(text: str, lang: str, final: bool) -> str:
+    p = get_punctuator()
+    return p.restore(text, lang, log=final) if p is not None else text
 
 
 def get_lid() -> SpokenLanguageId:
@@ -95,7 +93,7 @@ def create_session(
         lid_window_s=settings.asr.lid_window_s,
         partial_interval_ms=settings.asr.partial_interval_ms,
     )
-    return StreamingASRSession(cfg, get_engines(), lid_identify=_lid_identify)
+    return StreamingASRSession(cfg, get_engines(), lid_identify=_lid_identify, restore_text=_restore_text)
 
 
 def asr_status() -> dict:
@@ -105,6 +103,7 @@ def asr_status() -> dict:
         "default_engine": settings.asr.engine,
         "languages": settings.asr.languages,
         "engines": {name: eng.status() for name, eng in engines.items()},
+        "punctuation": get_punctuator().status() if get_punctuator() is not None else {"enabled": False},
     }
 
 
@@ -113,6 +112,9 @@ def warmup_asr() -> None:
     eng = engines.get("sherpa-zipformer")
     if eng is not None:
         eng.warmup(settings.asr.warmup_languages)
+    p = get_punctuator()
+    if p is not None and any(p.supports(l) for l in settings.asr.languages):
+        p.load()
 
 
 async def check_asr_available() -> bool:

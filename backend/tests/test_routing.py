@@ -65,6 +65,6 @@ def test_bengali_is_first_class():
 
 
 def test_defaults_are_fast_mode():
-    assert settings.features.speed_mode == "fast"
+    assert settings.features.fast_mode is True
     assert settings.refiner.enabled is False
-    assert settings.features.batch_window_ms > 0  # batching no longer tied to speed_mode
+    assert settings.features.batch_window_ms > 0

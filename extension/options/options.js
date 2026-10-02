@@ -766,6 +766,37 @@ function initEventListeners() {
   initColorPickers();
 }
 
+// Keyboard shortcuts: the list in options.html mirrors the manifest's suggested keys
+// (extension/tests/options-shortcuts.test.js); this shows the keys actually bound,
+// which the user may have changed in chrome://extensions/shortcuts.
+function keyLabel(shortcut) {
+  return shortcut.split('+').map((k) => (k === 'Period' ? '.' : k === 'Comma' ? ',' : k));
+}
+
+async function showBoundShortcuts() {
+  if (!chrome.commands?.getAll) return;
+  let commands = [];
+  try {
+    commands = await chrome.commands.getAll();
+  } catch (_) {
+    return;
+  }
+  for (const cmd of commands) {
+    const item = document.querySelector(`.shortcut-item[data-command="${cmd.name}"] .shortcut-key`);
+    if (!item) continue;
+    item.textContent = '';
+    if (!cmd.shortcut) {
+      item.textContent = 'not set';
+      continue;
+    }
+    for (const k of keyLabel(cmd.shortcut)) {
+      const kbd = document.createElement('kbd');
+      kbd.textContent = k;
+      item.appendChild(kbd);
+    }
+  }
+}
+
 // Initialize on DOM load
 document.addEventListener('DOMContentLoaded', () => {
   console.log('[Options] Initializing...');
@@ -773,6 +804,7 @@ document.addEventListener('DOMContentLoaded', () => {
   loadSettings();
   initEventListeners();
   initCaptionMode();
+  showBoundShortcuts();
 
   // Periodic connection check
   setInterval(() => {

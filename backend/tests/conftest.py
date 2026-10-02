@@ -21,8 +21,12 @@ os.environ.setdefault("SUBTITLE_CORRECTIONS_FILE", str(_SCRATCH / "corrections.j
 os.environ.setdefault("SUBTITLE_CACHE__TM_DATABASE_PATH", str(_SCRATCH / "translation_memory.db"))
 # A developer's backend/.env (cloud keys, D4) must not leak into the tests.
 os.environ.setdefault("SUBTITLE_ENV_FILE", str(_SCRATCH / "no-such.env"))
+# The fast suite never loads the real punctuation model (tests inject a fake restorer).
+os.environ.setdefault("SUBTITLE_ASR__PUNCT_DIR", str(_SCRATCH / "punct"))
 
-MODELS_DIR = ROOT / "data" / "models" / "asr"
+# Real models for the slow tests (read only): backend/data/models, or ST_MODELS_ROOT.
+MODELS_ROOT = Path(os.environ.get("ST_MODELS_ROOT") or ROOT / "data" / "models")
+MODELS_DIR = MODELS_ROOT / "asr"
 
 
 def zipformer_dir(lang: str) -> Path:

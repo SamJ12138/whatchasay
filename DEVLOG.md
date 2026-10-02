@@ -45,7 +45,8 @@ extension merges per cue) → optional `revision`. `reset` tells the overlay to 
 | Translation, optional GPU engine | **Tencent HY-MT1.5-1.8B** GGUF via official `llama-server` CUDA build (36 langs incl. bn, any-to-any), Q4_K_M; only with `SUBTITLE_MT__ENGINE=hymt` after `scripts/download_models.py --hymt --accept-hymt-license` | Tencent HY Community License (territorial limits, AUP pass-through): not a default (D1). NLLB is CC-BY-NC; small general LLMs are worse than NMT into Bengali; `llama-cpp-python` wheels crash (no AVX-512) or predate the HunYuan arch |
 | LLM post-editing | Async refiner only (Ollama / Groq / Gemini), 0.8 s deadline, revision 2 pushed to the UI; skipped for Bengali | Synchronous Qwen2.5-7B post-edit cost seconds per batch |
 | Tab audio capture | tabCapture → offscreen document → AudioWorklet | `getDisplayMedia` from a content script (share picker each time, Chromium bug 40885587 mutes the tab), ScriptProcessorNode |
-| Cloud tiers | Gladia / ElevenLabs (bn streaming), Google / Azure translate, Groq / Gemini refine | OpenAI transcribe (no bn), AssemblyAI Pro (no bn), DeepL (slowest, bn brand-new) |
+| Mandarin ASR model (Phase 3) | `sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20` (Apache-2.0, also handles English words in Mandarin speech) | `zipformer-zh-int8-2025-06-30` (lower CER, no declared license): opt-in with `--mandarin-large` |
+| Cloud tiers | Google / Azure translate, Groq / Gemini refine (cloud ASR never implemented) | OpenAI transcribe (no bn), AssemblyAI Pro (no bn), DeepL (slowest, bn brand-new) |
 
 ## 4. Measured numbers (RTX 4060 Laptop 8 GB, i9-13900H, 16 GB RAM, Windows 11, 2026-09-11)
 
@@ -73,15 +74,16 @@ the final. Typical 5–12-word subtitle sentences land inside the 1 s target; ve
 
 ## 5. Known issues / future work
 
-- Streaming models emit no punctuation and no casing (English model outputs UPPERCASE); a light punctuation restorer
-  would improve both readability and translation quality.
+- Streaming models emit no punctuation and no casing. Phase 3: English is restored before translation
+  (`asr/punctuation.py`, `docs/asr-input-quality.md`); Mandarin and Bengali are not (no measured gain). The bilingual
+  Mandarin model still writes English words in UPPERCASE.
 - Utterances longer than 10 s are force-split (rule3) mid-sentence.
 - Provisional-language start shows a second or two of wrong-language text before LID switches (cleared by `reset`).
 - DRM sites: tab capture likely yields silence; only a "No audio" notice is shown (not verified on Netflix).
 - Chrome Translator API (Tier 0) path is implemented but not yet benchmarked; needs Chrome 138+ and a user-gesture pack download from the popup.
-- Cloud ASR engine (`cloud_engine.py`) is referenced by the registry but not implemented yet (registry skips it gracefully).
-- Accuracy-mode Whisper engine (`whisper_engine.py`) is referenced but not implemented yet.
-- `docs/TRAINING.md` and `docs/LAUNCHER.md` still describe the v1 Ollama post-editor.
+- Cloud ASR and an accuracy-mode Whisper engine were never implemented; Phase 3 removed their registry stubs and
+  settings.
+- `docs/LAUNCHER.md` still describes the v1 Ollama post-editor (removed with the launchers in Phase 3 Batch B).
 - Both Q8_0 and Q4_K_M GGUFs are on disk (3 GB); delete `data/models/mt/HY-MT1.5-1.8B-Q8_0.gguf` if space matters.
 
 ## 6. How to verify
@@ -288,3 +290,29 @@ D4 cloud providers off by default, keys only in backend config.
 - Batch 5: `docs/README-outline.md`: the README's section list, the product statement, and the quickstart / test
   commands as they stand now (Python 3.10+, CI 3.12; Node 22), for Phase 3. Noticed on the way: the Options page's
   shortcut list is stale (Alt+] / Alt+[; the manifest has Alt+Period and no decrease-font command).
+
+### 2026-10-02 — Phase 3: make it public
+- Batch A (pre-publication quality and license fixes):
+  - ASR-style input (`docs/asr-input-quality.md`, `backend/scripts/asr_input_quality.py`): raw UPPERCASE English
+    from the Zipformer translates clearly worse with OPUS-MT (en->zh "the squalid quarter of the brothels" ->
+    有质量的胶片 "quality film"; en->bn unrelated sentences); cased + punctuated text keeps the meaning. Mandarin and
+    Bengali: hand punctuation gave no consistent gain. New `asr/punctuation.py`: sherpa-onnx online punctuation
+    model `sherpa-onnx-online-punct-en-2024-08-06` (Edge-Punct-Casing, Apache-2.0, 7.5 MB int8), p50 4.4 ms /
+    p95 6.2 ms per sentence on one thread; English partials and finals are restored in `StreamingASRSession`
+    (`restore_text` hook; finals keep `raw_text`); `asr.punctuation` (on), `asr.punct_dir`. Downloaded by
+    `scripts/download_models.py`, never by the backend (missing -> text unchanged, one WARNING).
+  - Mandarin default: `sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20` (Apache-2.0); the undeclared-
+    license `zh-int8-2025-06-30` is `asr.zh_model=large`, downloaded only with
+    `--mandarin-large --accept-mandarin-large-terms` after a notice (configured but absent -> bilingual + one
+    WARNING). fp32 copies in the bilingual archive are deleted after extraction (555 -> 201 MB).
+  - Options page shortcut list = the manifest's commands + the Alt+E page key, and shows the bound keys
+    (`chrome.commands.getAll`).
+  - Dead code: `/config/speed_mode` and `features.speed_mode`, `post_edit_batch_size`, `ollama.fallback_model` /
+    `max_retries`, the cloud/Whisper ASR stubs and their settings (`asr.whisper_*`, `cloud.asr_provider`, Gladia /
+    ElevenLabs keys), the v1 `backend/ollama/Modelfile` and `docs/TRAINING.md`, the `ollama` / `llama_cpp`
+    dependency probes, the no-op 8-byte frame-header branch.
+  - Tests: fast 168 -> 199, node 43 -> 46, slow 18 -> 20 (real punctuation model; Mandarin through the browser
+    harness on the bilingual model). Slow tests can read models from `ST_MODELS_ROOT` (the harness backend gets
+    `SUBTITLE_ASR__MODELS_DIR` / `SUBTITLE_ASR__PUNCT_DIR` from it), so new models were tried without writing to
+    `backend/data/`.
+

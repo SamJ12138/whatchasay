@@ -19,7 +19,12 @@ Language handling
 
 Messages (JSON, sent by the WebSocket endpoint):
     {type:'partial', utterance_id, text, lang, lang_status, confirmed, t0, t1}
-    {type:'final',   utterance_id, text, lang, lang_status, confirmed, t0, t1}
+    {type:'final',   utterance_id, text, lang, lang_status, confirmed, t0, t1[, raw_text]}
+
+Text restoration: with a `restore_text(text, lang, final)` hook (asr/punctuation.py
+for English) partial and final text is cased and punctuated before it is sent, so
+the translator gets "Where did you put the keys" instead of "WHERE DID YOU PUT THE
+KEYS". A final whose text changed also carries the recognizer's raw_text.
     {type:'lid',     lang, source:'auto'|'manual'|'provisional'|'fallback', status, confirmed}
     {type:'reset'}   discard provisional captions (language switched)
 
@@ -53,7 +58,7 @@ logger = logging.getLogger(__name__)
 class SessionConfig:
     source_lang: str = "auto"  # 'auto' | 'en' | 'zh' | 'bn' | ...
     target_langs: List[str] = field(default_factory=lambda: ["en"])
-    engine: str = "auto"  # 'auto' | 'sherpa-zipformer' | 'whisper' | 'cloud'
+    engine: str = "auto"  # 'auto' | 'sherpa-zipformer'
     allowed_langs: List[str] = field(default_factory=lambda: ["en", "zh", "bn"])
     lid_window_s: float = 2.5     # seconds of voiced audio before running LID
     lid_min_rms: float = 0.004    # frames quieter than this do not count as voiced
@@ -67,10 +72,12 @@ class StreamingASRSession:
         config: SessionConfig,
         engines: Dict[str, StreamingASREngine],
         lid_identify: Optional[Callable[[np.ndarray, List[str]], Optional[str]]] = None,
+        restore_text: Optional[Callable[[str, str, bool], str]] = None,
     ):
         self.config = config
         self.engines = engines
         self.lid_identify = lid_identify
+        self.restore_text = restore_text
 
         self.lang: Optional[str] = None
         self.lang_confirmed: bool = False
@@ -119,9 +126,8 @@ class StreamingASRSession:
         wanted = self.config.engine
         if wanted != "auto" and wanted in self.engines and self.engines[wanted].supports(lang):
             return self.engines[wanted]
-        for name in ("sherpa-zipformer", "cloud", "whisper"):
-            eng = self.engines.get(name)
-            if eng is not None and eng.supports(lang):
+        for eng in self.engines.values():
+            if eng.supports(lang):
                 return eng
         raise RuntimeError(f"No ASR engine supports language {lang!r}")
 
@@ -291,11 +297,21 @@ class StreamingASRSession:
             out.append(self._event_msg(ev, capture_ts))
         return out
 
+    def _restore(self, ev: AsrEvent) -> str:
+        if self.restore_text is None or not ev.text:
+            return ev.text
+        try:
+            return self.restore_text(ev.text, ev.lang, ev.kind == "final") or ev.text
+        except Exception as e:  # the hook should not raise; never lose a caption over it
+            obs.log_exc("punctuate", e, api="process", lang=ev.lang, degraded="text kept as is")
+            return ev.text
+
     def _event_msg(self, ev: AsrEvent, capture_ts: Optional[float] = None) -> dict:
-        return {
+        text = self._restore(ev)
+        msg = {
             "type": ev.kind,
             "utterance_id": ev.utterance_id,
-            "text": ev.text,
+            "text": text,
             "lang": ev.lang,
             "lang_status": self.lang_status,
             "confirmed": self.lang_confirmed,
@@ -304,6 +320,9 @@ class StreamingASRSession:
             "capture_ts": capture_ts,
             "server_ts": time.time(),
         }
+        if ev.kind == "final" and text != ev.text:
+            msg["raw_text"] = ev.text
+        return msg
 
     # ------------------------------------------------------------------ close
 

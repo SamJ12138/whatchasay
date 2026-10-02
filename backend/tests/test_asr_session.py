@@ -10,7 +10,7 @@ import pytest
 
 from app.asr.engine import AsrEvent, SAMPLE_RATE
 from app.asr.session import SessionConfig, StreamingASRSession
-from tests.conftest import has_zipformer, zipformer_dir
+from tests.conftest import MODELS_DIR, has_zipformer, zipformer_dir
 
 
 class FakeSession:
@@ -137,7 +137,7 @@ def test_real_zipformer_streams_partials_before_end():
     if audio.ndim > 1:
         audio = audio.mean(axis=1)
     assert sr == 16000
-    eng = SherpaZipformerEngine(Path("data/models/asr"), num_threads=2)
+    eng = SherpaZipformerEngine(MODELS_DIR, num_threads=2)
     sess = eng.start_session("en")
     frame = int(sr * 0.04)
     first_partial_at = None

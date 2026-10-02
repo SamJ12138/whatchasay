@@ -83,12 +83,12 @@ def test_cors_preflight_from_extension_is_allowed_and_not_wildcard(app_env):
 def test_cross_site_requests_are_refused_and_never_reflected(app_env):
     with app_env.client() as c:
         for method, path, kw in (("get", "/health/json", {}), ("post", "/cache/clear", {}),
-                                 ("post", "/config/speed_mode?mode=hybrid", {}),
+                                 ("post", "/config", {"json": {"refiner_enabled": True}}),
                                  ("post", "/translate", {"json": {"text": "hi", "target_languages": ["zh"]}})):
             r = getattr(c, method)(path, headers={"Origin": EVIL}, **kw)
             assert r.status_code == 403, (path, r.status_code)
             assert "access-control-allow-origin" not in {k.lower() for k in r.headers}
-        assert settings.features.speed_mode == "fast"  # the cross-site POST did not run
+        assert settings.refiner.enabled is False  # the cross-site POST did not run
         assert c.get("/health/json", headers={"Origin": ext_origin()}).headers["access-control-allow-origin"] == ext_origin()
         assert c.get("/health/json").status_code == 200  # no Origin (curl, scripts)
         assert c.get("/health/json", headers={"Origin": own_origin()}).status_code == 200  # /debug page
