@@ -80,6 +80,7 @@ class TranslationMemory:
         self.db_path = db_path or settings.cache.tm_database_path
         self._connection: Optional[aiosqlite.Connection] = None
         self._initialized = False
+        self._init_lock: Optional[asyncio.Lock] = None
         self._migration: Optional[Dict[str, Any]] = None
     
     def _prepare_migration(self) -> None:
@@ -108,10 +109,17 @@ class TranslationMemory:
         self._migration = {"from_version": version, "backup": str(backup), "backup_ms": (time.perf_counter() - t0) * 1000}
 
     async def initialize(self) -> None:
-        """Initialize the database and create tables."""
+        """Initialize the database and create tables. Concurrent first users wait for
+        one initialization (two used to race: duplicate column / database locked)."""
         if self._initialized:
             return
-        
+        if self._init_lock is None:
+            self._init_lock = asyncio.Lock()
+        async with self._init_lock:
+            if not self._initialized:
+                await self._initialize()
+
+    async def _initialize(self) -> None:
         # Ensure directory exists
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         await asyncio.get_running_loop().run_in_executor(None, self._prepare_migration)
@@ -215,7 +223,8 @@ class TranslationMemory:
         self,
         source_text: str,
         source_lang: str,
-        target_lang: str
+        target_lang: str,
+        touch: bool = True,
     ) -> Optional[Dict[str, Any]]:
         """
         Get translation from memory.
@@ -224,6 +233,8 @@ class TranslationMemory:
             source_text: Source text
             source_lang: Source language code
             target_lang: Target language code
+            touch: count the use (use_count, updated_at); False = read only,
+                   for sessions that must leave no trace (D3)
             
         Returns:
             Translation entry or None
@@ -240,6 +251,14 @@ class TranslationMemory:
         """, (content_hash,)) as cursor:
             row = await cursor.fetchone()
         
+        if row and not touch:
+            return {
+                'translation': row[0],
+                'lines': json.loads(row[1]),
+                'is_user_corrected': bool(row[2]),
+                'quality_score': row[3],
+                'engine': row[4],
+            }
         if row:
             # Update use count
             await self._connection.execute("""
@@ -432,6 +451,38 @@ class TranslationMemory:
         
         return count
     
+    async def sweep(self, retention_days: int) -> int:
+        """Delete machine translations not used for `retention_days` (updated_at is
+        bumped on every use); user corrections stay. 0 or less = keep everything."""
+        if not self._initialized:
+            await self.initialize()
+        if retention_days <= 0:
+            obs.log("tm_retention", "skip", retention_days=retention_days, error_message="retention disabled (0 = keep)")
+            return 0
+        t0 = time.perf_counter()
+        cur = await self._connection.execute(
+            "DELETE FROM translations WHERE NOT is_user_corrected AND updated_at < datetime('now', ?)",
+            (f"-{int(retention_days)} days",))
+        removed = cur.rowcount or 0
+        await self._connection.commit()
+        obs.log("tm_retention", "success", duration_ms=(time.perf_counter() - t0) * 1000,
+                retention_days=retention_days, removed=removed)
+        return removed
+
+    async def clear(self) -> Dict[str, int]:
+        """Delete everything (translations, corrections, glossary) and rebuild the file
+        so the deleted text is not left in free pages or the WAL."""
+        if not self._initialized:
+            await self.initialize()
+        removed = {}
+        for table in ("translations", "corrections", "glossary"):
+            cur = await self._connection.execute(f"DELETE FROM {table}")
+            removed[table] = cur.rowcount or 0
+        await self._connection.commit()
+        await self._connection.execute("VACUUM")
+        await self._connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        return removed
+
     async def get_stats(self) -> Dict[str, Any]:
         """Get translation memory statistics."""
         if not self._initialized:

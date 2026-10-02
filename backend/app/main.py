@@ -23,6 +23,7 @@ import orjson
 from .config import settings
 from .models import HealthResponse, SubtitleCue
 from .translation import get_pipeline, warmup_pipeline
+from .translation.pipeline import audio_session_policy
 from .cache import get_translation_memory, get_translation_cache
 from .websocket_handler import websocket_endpoint, manager, format_result, apply_cloud_keys
 from . import asr as asr_pkg
@@ -57,6 +58,12 @@ async def lifespan(app: FastAPI):
         logger.error("ASR warmup failed: %s", e)
         obs.log_exc("startup", e, component="asr_warmup", degraded="server starts without ASR warmup")
     logger.info("Warmup complete")
+    try:
+        tm = await get_translation_memory()
+        await tm.sweep(settings.tm.retention_days)  # D3: machine rows unused for retention_days
+    except Exception as e:
+        logger.error("TM retention sweep failed: %s", e)
+        obs.log_exc("tm_retention", e, api="process", degraded="old rows kept until the next start")
     # Read the pipeline without building it: a log line must not retry (or fail) its init.
     from .translation import pipeline as _pipeline_mod
 
@@ -222,6 +229,9 @@ async def ws_asr(websocket: WebSocket):
         obs.log_exc("ws_connection", e, path="/ws/asr", source_lang=source_lang, phase="create_session")
         raise
     pipeline = await get_pipeline()
+    # D3: this session's translations live in its own cache and die with it; the
+    # persistent TM is read (corrections) but not written unless configured
+    memory = audio_session_policy()
     logger.info("ASR WebSocket connected (source=%s targets=%s engine=%s)", source_lang, target_langs, engine)
     obs.log("ws_connection", "start", path="/ws/asr", source_lang=source_lang, target_langs=target_langs, engine=engine,
             session_id_from="client" if q.get("session_id") else "backend")
@@ -262,7 +272,7 @@ async def ws_asr(websocket: WebSocket):
         async def one(target: str) -> None:
             cue = SubtitleCue(text=text, start_time=msg["t0"], end_time=msg["t1"], source_lang=lang)
             try:
-                result = await pipeline.translate_cue(cue, [target], skip_post_edit=True)
+                result = await pipeline.translate_cue(cue, [target], skip_post_edit=True, policy=memory)
             except Exception as e:
                 obs.log_exc("translate", e, path="/ws/asr", utterance_id=msg["utterance_id"], target=target,
                             degraded="error message sent instead of a translation")
@@ -291,7 +301,7 @@ async def ws_asr(websocket: WebSocket):
                 merged = results[0]
                 for r in results[1:]:
                     merged.translations.update(r.translations)
-                changed = await pipeline.refine_batch([merged], targets)
+                changed = await pipeline.refine_batch([merged], targets, policy=memory)
                 for r in changed:
                     p = format_result(r)
                     await send({
@@ -385,6 +395,8 @@ async def ws_asr(websocket: WebSocket):
                     degraded="connection loop ended by exception")
     finally:
         session.close()
+        if memory.cache is not None:
+            memory.cache.clear()
         logger.info("ASR WebSocket closed: %s", session.status())
         recv_summary.flush()
         asr_summary.flush()
@@ -476,7 +488,19 @@ async def health_check_json():
         mt_engines=pipeline.base_translator.status(),
         asr=asr_pkg.asr_status(),
         refiner_enabled=settings.refiner.enabled,
+        privacy=privacy_summary(),
     )
+
+
+def privacy_summary() -> Dict[str, Any]:
+    """What the backend keeps (D3) and what leaves the machine (D4)."""
+    return {
+        "tm": {
+            "persist_audio_sessions": settings.tm.persist_audio_sessions,
+            "persist_captions": settings.tm.persist_captions,
+            "retention_days": settings.tm.retention_days,
+        },
+    }
 
 
 class TranslateRequest(BaseModel):
@@ -604,6 +628,24 @@ async def clear_cache():
     get_translation_cache().clear()
     (await get_pipeline()).clear_context()
     return {"status": "cleared"}
+
+
+@app.post("/tm/clear")
+async def clear_translation_memory():
+    """Delete everything the translation memory holds (D3): machine translations,
+    corrections, glossary; the file is rebuilt so no deleted text stays on disk.
+    Also empties the in-memory cache and the refiner context."""
+    tm = await get_translation_memory()
+    t0 = time.perf_counter()
+    try:
+        removed = await tm.clear()
+    except Exception as e:
+        obs.log_exc("tm_clear", e, api="process")
+        return JSONResponse(status_code=500, content={"status": "error", "error": str(e)})
+    get_translation_cache().clear()
+    (await get_pipeline()).clear_context()
+    obs.log("tm_clear", "success", duration_ms=(time.perf_counter() - t0) * 1000, **removed)
+    return {"status": "cleared", "removed": removed}
 
 
 @app.get("/asr/status")

@@ -43,6 +43,8 @@ def test_tab_audio_reaches_content_script_as_translated_cue():
     summary, proc = run_harness("--path", "audio")
     assert summary["ok"], (summary, proc.stderr[-2000:])
     assert summary["first_translation"]["targets"]
+    # D3: the audio session left no trace in the persistent TM
+    assert summary["tm_rows_after"] == summary["tm_rows_before"], summary
 
 
 def test_page_subtitles_are_translated_over_ws():
@@ -72,3 +74,10 @@ def test_fresh_install_asks_for_no_site_access_and_caption_mode_is_opt_in():
     summary, proc = run_harness("--path", "permissions")
     assert summary["ok"], (summary, proc.stderr[-2000:])
     assert summary["granted"]["origins"] == [] and summary["install_warnings"] == []
+
+
+def test_options_clear_translation_memory_button():
+    """D3 in the options page: the storage sentence; Clear translation memory asks
+    first, does nothing when dismissed and empties the TM when confirmed."""
+    summary, proc = run_harness("--path", "clear-memory")
+    assert summary["ok"], (summary, proc.stderr[-2000:])

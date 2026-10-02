@@ -264,3 +264,14 @@ D4 cloud providers off by default, keys only in backend config.
   path but `permissions` loads a scratch copy granted `http://127.0.0.1/*` + `tabCapture` (automation cannot click
   the action or answer a prompt); new `--path permissions` on the real extension; `--lang=en-US`.
   `docs/architecture-notes.md` §3.
+- Batch 3 (D3, memory privacy): `pipeline.MemoryPolicy`; `/ws/asr` sessions use `audio_session_policy()`: their own
+  `TranslationCache` (cleared when the socket closes), no TM writes, TM reads without touching use_count, nothing in
+  the refiner context; `/ws` and `/translate` use `caption_policy()` (TM writes per `tm.persist_captions`). Config
+  `tm.persist_audio_sessions` false, `tm.persist_captions` true, `tm.retention_days` 30 (startup sweep of machine rows
+  unused that long, logged `tm_retention`; corrections kept). `POST /tm/clear` (translations, corrections, glossary;
+  VACUUM + WAL truncate: the text is gone from the files, tested on the bytes) and an Options button behind a
+  confirmation; Options states what is stored where in one sentence built from `/health/json` `privacy.tm`. Found
+  while testing: concurrent first use of the TM ran `initialize()` twice ("duplicate column name: engine" /
+  "database is locked", and a leaked aiosqlite thread hung the test process at exit): now under a lock. Browser:
+  the audio path asserts the TM row count is unchanged (with `SUBTITLE_TM__PERSIST_AUDIO_SESSIONS=true` it goes
+  0 -> 1 and fails); new `--path clear-memory`. `docs/architecture-notes.md` §4.

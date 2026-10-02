@@ -41,6 +41,34 @@ QUALITY_REFINED = 0.9
 
 
 @dataclass
+class MemoryPolicy:
+    """Where one session's translations may be remembered (D3).
+
+    cache        in-memory cache to use; None = the process-wide one
+    tm_write     store results in the persistent TM
+    tm_touch     a TM hit counts as a use (updates use_count / updated_at)
+    context      texts join the refiner's context window
+    The TM is always read (user corrections and stored caption rows apply)."""
+
+    cache: Optional[TranslationCache] = None
+    tm_write: bool = True
+    tm_touch: bool = True
+    context: bool = True
+
+
+def caption_policy() -> MemoryPolicy:
+    """Page subtitles (/ws) and /translate: kept unless settings.tm.persist_captions is off."""
+    return MemoryPolicy(tm_write=settings.tm.persist_captions)
+
+
+def audio_session_policy() -> MemoryPolicy:
+    """One live-caption (/ws/asr) session: its own cache, gone with the session; the
+    persistent TM is not written or touched unless settings.tm.persist_audio_sessions."""
+    keep = settings.tm.persist_audio_sessions
+    return MemoryPolicy(cache=TranslationCache(), tm_write=keep, tm_touch=keep, context=keep)
+
+
+@dataclass
 class PipelineStats:
     total_requests: int = 0
     cache_hits: int = 0
@@ -96,8 +124,9 @@ class TranslationPipeline:
         cue: SubtitleCue,
         target_languages: Optional[List[str]] = None,
         skip_post_edit: bool = False,
+        policy: Optional[MemoryPolicy] = None,
     ) -> TranslationResult:
-        results = await self.translate_batch([cue], target_languages, skip_post_edit)
+        results = await self.translate_batch([cue], target_languages, skip_post_edit, policy=policy)
         return results[0]
 
     async def translate_batch(
@@ -105,9 +134,11 @@ class TranslationPipeline:
         cues: List[SubtitleCue],
         target_languages: Optional[List[str]] = None,
         skip_post_edit: bool = False,
+        policy: Optional[MemoryPolicy] = None,
     ) -> List[TranslationResult]:
         if not cues:
             return []
+        policy = policy or caption_policy()
         target_languages = list(target_languages or settings.translation.target_languages)
         start = time.time()
         self.stats.total_requests += len(cues)
@@ -115,7 +146,7 @@ class TranslationPipeline:
         failed: Optional[Exception] = None
         async with self._semaphore:
             try:
-                results = await self._process_batch(cues, target_languages, tally)
+                results = await self._process_batch(cues, target_languages, tally, policy)
             except Exception as e:
                 logger.exception("Pipeline error: %s", e)
                 self.stats.errors += len(cues)
@@ -144,14 +175,17 @@ class TranslationPipeline:
     # -------------------------------------------------------------- internals
 
     async def _process_batch(self, cues: List[SubtitleCue], target_languages: List[str],
-                             tally: Optional[Dict[str, int]] = None) -> List[TranslationResult]:
+                             tally: Optional[Dict[str, int]] = None,
+                             policy: Optional[MemoryPolicy] = None) -> List[TranslationResult]:
         """Per target the result carries a status (models.TranslatedLine):
-        ok / fallback are stored in the TM (fallback at a lower quality);
-        untranslated / error are never stored or cached and never pass the
-        source text off as a translation."""
+        ok / fallback are stored in the TM (fallback at a lower quality) when the
+        session's policy allows it; untranslated / error are never stored or
+        cached and never pass the source text off as a translation."""
         results: List[Optional[TranslationResult]] = [None] * len(cues)
         cache_key = tuple(sorted(target_languages))
         tally = tally if tally is not None else {}
+        policy = policy or caption_policy()
+        memory = policy.cache if policy.cache is not None else self._memory_cache
         stores: List[Any] = []
 
         # 1. normalize + language + memory cache
@@ -171,7 +205,7 @@ class TranslationPipeline:
                 with obs.span("lang_detect", text_len=len(text), hint=cue.lang_hint) as sp:
                     source_lang, conf = detect_language(text, cue.lang_hint)
                     sp.set(lang=source_lang, confidence=round(float(conf), 2))
-            cached = self._memory_cache.get(text, source_lang, cache_key)
+            cached = memory.get(text, source_lang, cache_key)
             if cached:
                 self.stats.cache_hits += 1
                 tally["cache_hits"] = tally.get("cache_hits", 0) + 1
@@ -188,7 +222,7 @@ class TranslationPipeline:
                 if tgt == w["lang"]:
                     continue
                 with obs.span("tm_lookup", api="process", src=w["lang"], tgt=tgt, text_len=len(w["text"])) as sp:
-                    tm = await self._translation_memory.get(w["text"], w["lang"], tgt)
+                    tm = await self._translation_memory.get(w["text"], w["lang"], tgt, touch=policy.tm_touch)
                     sp.set(hit=bool(tm))
                     if tm:
                         sp.set(user_corrected=tm.get("is_user_corrected"), quality=tm.get("quality_score"),
@@ -266,7 +300,7 @@ class TranslationPipeline:
                                      "engine": entry.get("engine"), "error_type": entry.get("error_type"),
                                      "error": entry.get("error")}
                 all_ok = all_ok and status == STATUS_OK
-                if status in (STATUS_OK, STATUS_FALLBACK) and not entry.get("from_tm"):
+                if status in (STATUS_OK, STATUS_FALLBACK) and not entry.get("from_tm") and policy.tm_write:
                     quality = QUALITY_BASE if status == STATUS_OK else QUALITY_FALLBACK
                     stores.append(obs.traced("tm_store", self._translation_memory.set(
                         source_text=text, source_lang=src, target_lang=tgt,
@@ -274,11 +308,12 @@ class TranslationPipeline:
                     ), api="process", kind="machine" if status == STATUS_OK else "fallback", src=src, tgt=tgt,
                         quality=quality, engine=entry.get("engine"), equals_source=False))
             if all_ok:
-                self._memory_cache.set(text, src, cache_key, translations)
+                memory.set(text, src, cache_key, translations)
             results[i] = self._create_result(cue.generate_cue_id(), text, src, translations, from_cache=False)
-            self._context_window.append(text)
-            if len(self._context_window) > settings.ollama.context_window_size:
-                self._context_window.pop(0)
+            if policy.context:
+                self._context_window.append(text)
+                if len(self._context_window) > settings.ollama.context_window_size:
+                    self._context_window.pop(0)
 
         await self._await_stores(stores)
         return [r for r in results if r is not None]
@@ -309,14 +344,18 @@ class TranslationPipeline:
         target_languages: List[str],
         deadline_s: Optional[float] = None,
         enabled: Optional[bool] = None,
+        policy: Optional[MemoryPolicy] = None,
     ) -> List[TranslationResult]:
         """
         Improve already-delivered fast translations with an LLM, under a hard
         deadline. Returns only the results that changed, as revision 2.
         `enabled`: the requesting session's preference (None = server default).
+        `policy`: where the refined text may be remembered (D3).
         """
         if not results or not self.refiner_enabled(target_languages, enabled):
             return []
+        policy = policy or caption_policy()
+        memory = policy.cache if policy.cache is not None else self._memory_cache
         from .refiner import get_refiner
 
         refiner = get_refiner()
@@ -372,12 +411,14 @@ class TranslationPipeline:
                 translations[lang] = {"lines": lines, "single_line": single, "translation": single,
                                       "status": STATUS_OK, "engine": engine_name}
                 updated = True
+                if not policy.tm_write:
+                    continue
                 stores.append(obs.traced("tm_store", self._translation_memory.set(
                     source_text=r.source_text, source_lang=r.source_lang, target_lang=lang,
                     translation=single, formatted_lines=lines, quality_score=QUALITY_REFINED, engine=engine_name,
                 ), api="process", kind="refined", src=r.source_lang, tgt=lang, quality=QUALITY_REFINED))
             if updated and all(t.get("status") == STATUS_OK for t in translations.values()):
-                self._memory_cache.set(r.source_text, r.source_lang, cache_key, translations)
+                memory.set(r.source_text, r.source_lang, cache_key, translations)
                 new_r = self._create_result(r.cue_id, r.source_text, r.source_lang, translations, from_cache=False, post_edited=True)
                 new_r.revision = 2
                 changed.append(new_r)

@@ -140,6 +140,8 @@ const elements = {
   resetDefaults: document.getElementById('resetDefaults'),
   exportCorrections: document.getElementById('exportCorrections'),
   clearCache: document.getElementById('clearCache'),
+  clearMemory: document.getElementById('clearMemory'),
+  storageNote: document.getElementById('storageNote'),
   statusBar: document.getElementById('statusBar')
 };
 
@@ -525,6 +527,7 @@ async function checkConnection(host, port) {
 
     if (response.ok) {
       const data = await response.json();
+      showStorageNote(data.privacy && data.privacy.tm);
       if (elements.connectionStatus) {
         const mt = Object.keys(data.mt_engines || {}).join(', ') || 'none';
         const asrLangs = (data.asr && data.asr.languages) ? data.asr.languages.join('/') : 'n/a';
@@ -615,6 +618,51 @@ async function clearCache() {
 }
 
 /**
+ * What is stored where (D3), in one sentence, from the backend's /health/json
+ * `privacy.tm` (the defaults when the backend is not reachable).
+ */
+const DEFAULT_TM_POLICY = { persist_audio_sessions: false, persist_captions: true, retention_days: 30 };
+
+function storageSentence(tm) {
+  const p = Object.assign({}, DEFAULT_TM_POLICY, tm || {});
+  const kept = ['your corrections'];
+  if (p.persist_captions) kept.push('translated page subtitles from caption mode');
+  if (p.persist_audio_sessions) kept.push('live-caption transcripts and their translations');
+  const age = p.retention_days > 0 ? `, machine translations for ${p.retention_days} days after their last use` : '';
+  const live = p.persist_audio_sessions ? '' : ', while live-caption audio and transcripts are only held in memory until the session ends';
+  return 'Everything stays on this computer: Chrome keeps your settings, and the backend\'s translation memory ' +
+    `(backend/data/translation_memory.db) keeps ${kept.join(' and ')}${age}${live}.`;
+}
+
+function showStorageNote(tm) {
+  if (elements.storageNote) elements.storageNote.textContent = storageSentence(tm);
+}
+
+/**
+ * Clear the backend's translation memory (POST /tm/clear), after a confirmation.
+ */
+async function clearMemory() {
+  if (!confirm('Delete everything in the translation memory (translations, your corrections, glossary)? This cannot be undone.')) {
+    return;
+  }
+  const host = elements.serverHost?.value || 'localhost';
+  const port = elements.serverPort?.value || 8765;
+  try {
+    const response = await fetch(`http://${host}:${port}/tm/clear`, { method: 'POST', headers: obs.headers() });
+    if (!response.ok) throw new Error('HTTP ' + response.status);
+    const data = await response.json();
+    const n = (data.removed && data.removed.translations) || 0;
+    const c = (data.removed && data.removed.corrections) || 0;
+    obs.log('ext_http', 'success', { path: '/tm/clear', removed_translations: n, removed_corrections: c });
+    showStatus(`Translation memory cleared (${n} translations, ${c} corrections)`, 'success');
+    checkConnection(host, port);
+  } catch (error) {
+    obs.log('ext_http', 'fail', { path: '/tm/clear', error_type: 'process', error_message: error.message || String(error) });
+    showStatus('Failed to clear the translation memory - is the backend running?', 'error');
+  }
+}
+
+/**
  * Initialize color picker events
  */
 function initColorPickers() {
@@ -654,6 +702,11 @@ function initEventListeners() {
   // Clear cache
   if (elements.clearCache) {
     elements.clearCache.addEventListener('click', clearCache);
+  }
+
+  // Clear the persistent translation memory (D3)
+  if (elements.clearMemory) {
+    elements.clearMemory.addEventListener('click', clearMemory);
   }
 
   // Font size slider
@@ -696,6 +749,7 @@ function initEventListeners() {
 // Initialize on DOM load
 document.addEventListener('DOMContentLoaded', () => {
   console.log('[Options] Initializing...');
+  showStorageNote(null);
   loadSettings();
   initEventListeners();
   initCaptionMode();

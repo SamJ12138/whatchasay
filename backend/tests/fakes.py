@@ -74,10 +74,11 @@ def make_translator(engines: Dict[str, object]):
 
 
 class FakeASRSession:
-    def __init__(self, lang: str, final_every: int, text: str):
+    def __init__(self, lang: str, final_every: int, text: str, numbered: bool = True):
         self.lang = lang
         self.final_every = final_every
         self.text = text
+        self.numbered = numbered
         self.frames = 0
         self.samples = 0
         self.utt = 0
@@ -88,7 +89,8 @@ class FakeASRSession:
         self.samples += len(pcm16) // 2
         t1 = self.samples / SAMPLE_RATE
         if self.frames % self.final_every == 0:
-            ev = AsrEvent("final", f"{self.text} {self.utt}", self.lang, 0.0, t1, utterance_id=self.utt)
+            text = f"{self.text} {self.utt}" if self.numbered else self.text
+            ev = AsrEvent("final", text, self.lang, 0.0, t1, utterance_id=self.utt)
             self.utt += 1
             return [ev]
         return [AsrEvent("partial", f"{self.text} {self.utt} ...", self.lang, 0.0, t1, utterance_id=self.utt)]
@@ -103,17 +105,18 @@ class FakeASRSession:
 class FakeASREngine:
     name = "sherpa-zipformer"
 
-    def __init__(self, langs=("en", "zh", "bn"), final_every: int = 10, text: str = "hello world"):
+    def __init__(self, langs=("en", "zh", "bn"), final_every: int = 10, text: str = "hello world", numbered: bool = True):
         self.langs = set(langs)
         self.final_every = final_every
         self.text = text
+        self.numbered = numbered  # False: every final has the same text
         self.sessions: List[FakeASRSession] = []
 
     def supports(self, lang: str) -> bool:
         return lang in self.langs
 
     def start_session(self, lang: str) -> FakeASRSession:
-        s = FakeASRSession(lang, self.final_every, self.text)
+        s = FakeASRSession(lang, self.final_every, self.text, self.numbered)
         self.sessions.append(s)
         return s
 

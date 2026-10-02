@@ -203,6 +203,8 @@ class HealthResponse(BaseModel):
     mt_engines: Dict[str, Any] = Field(default_factory=dict)
     asr: Dict[str, Any] = Field(default_factory=dict)
     refiner_enabled: bool = Field(default=False)
+    # what is kept where and what leaves the machine (D3, D4); shown by the options page
+    privacy: Dict[str, Any] = Field(default_factory=dict)
 
 
 class TranslationMemoryEntry(BaseModel):

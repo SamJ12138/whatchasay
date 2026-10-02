@@ -275,6 +275,21 @@ class OllamaConfig(BaseSettings):
     context_window_size: int = Field(default=3)
 
 
+class TMConfig(BaseSettings):
+    """What the persistent translation memory keeps (D3). SUBTITLE_TM__*.
+
+    Audio (live-caption) sessions use an in-memory cache that dies with the
+    session; their text reaches the TM only with persist_audio_sessions. Caption
+    cues (page subtitles; they reach the backend only when the user turned caption
+    mode on) persist with persist_captions. User corrections always persist.
+    Machine rows unused for retention_days are deleted at startup (0 = keep).
+    """
+
+    persist_audio_sessions: bool = Field(default=False)
+    persist_captions: bool = Field(default=True)
+    retention_days: int = Field(default=30)
+
+
 class CacheConfig(BaseSettings):
     memory_cache_size: int = Field(default=1000)
     memory_cache_ttl: int = Field(default=3600)
@@ -326,6 +341,7 @@ class Settings(BaseSettings):
     refiner: RefinerConfig = Field(default_factory=RefinerConfig)
     ollama: OllamaConfig = Field(default_factory=OllamaConfig)
     cache: CacheConfig = Field(default_factory=CacheConfig)
+    tm: TMConfig = Field(default_factory=TMConfig)
     server: ServerConfig = Field(default_factory=ServerConfig)
     features: FeatureFlags = Field(default_factory=FeatureFlags)
 

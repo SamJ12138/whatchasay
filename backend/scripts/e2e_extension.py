@@ -15,6 +15,9 @@ end to end, with no human click. Two paths:
                    no site access and no content scripts before opt-in, the
                    install-time permission warnings, the options page explains
                    caption mode, and switching it on requests the caption sites
+  --path clear-memory  D3 in the options page: it says what is stored where; the
+                   "Clear translation memory" button does nothing when its
+                   confirmation is dismissed and empties the TM when accepted
   --path security  E16/E17/W8 in the browser: no /ws connection before the tab is
                    enabled; the page's own scripts cannot open /ws or POST /translate;
                    after enabling, one connection from the extension; a cue posted
@@ -264,6 +267,46 @@ def permissions_checks(ctx, ext_id: str, summary: dict) -> bool:
     summary["after_start_click"] = {"requests": capture_requests,
                                     "status": pop.evaluate("document.getElementById('live-status').textContent")}
     checks["start_requests_tab_capture"] = capture_requests[:1] == [{"permissions": ["tabCapture"]}]
+    return all(checks.values())
+
+
+def tm_rows(port: int) -> int:
+    """Rows in the backend's (scratch) translation memory."""
+    with urllib.request.urlopen(f"http://127.0.0.1:{port}/stats", timeout=5) as r:  # no Origin: allowed
+        return json.loads(r.read())["translation_memory"]["total_translations"]
+
+
+def clear_memory_checks(ctx, sw, ext_id: str, port: int, summary: dict) -> bool:
+    """D3: the options page's storage sentence and its Clear translation memory button."""
+    checks = summary.setdefault("checks", {})
+    body = json.dumps({"text": "Meet me at the old harbour at nine", "source_lang": "en", "target_languages": ["zh"]}).encode()
+    req = urllib.request.Request(f"http://127.0.0.1:{port}/translate", data=body, headers={"Content-Type": "application/json"})
+    urllib.request.urlopen(req, timeout=60).read()  # a caption-style translation: persisted
+    seeded = tm_rows(port)
+    checks["seeded"] = seeded >= 1
+    sw.evaluate("""async (port) => {
+        const cur = (await chrome.storage.local.get('settings')).settings || {};
+        await chrome.storage.local.set({settings: {...cur, serverHost: '127.0.0.1', serverPort: port}});
+    }""", port)
+    opt = ctx.new_page()
+    opt.goto(f"chrome-extension://{ext_id}/options/options.html")
+    opt.wait_for_function("document.getElementById('connectionStatus').textContent.includes('Connected')", timeout=15000)
+    note = opt.evaluate("document.getElementById('storageNote').textContent")
+    summary["storage_note"] = note
+    checks["options_say_what_is_stored_where"] = "translation memory" in note and "live-caption" in note and "30 days" in note
+    dialogs = []
+    opt.once("dialog", lambda d: (dialogs.append(d.message), d.dismiss()))
+    opt.click("#clearMemory")
+    opt.wait_for_timeout(1500)
+    checks["dismissed_confirmation_keeps_the_tm"] = len(dialogs) == 1 and tm_rows(port) == seeded
+    opt.once("dialog", lambda d: (dialogs.append(d.message), d.accept()))
+    opt.click("#clearMemory")
+    end = time.time() + 10
+    while time.time() < end and tm_rows(port):
+        opt.wait_for_timeout(250)
+    checks["confirmed_clear_empties_the_tm"] = len(dialogs) == 2 and tm_rows(port) == 0
+    summary["dialog"] = dialogs[:1]
+    summary["status_bar"] = opt.evaluate("document.getElementById('statusBar').textContent")
     return all(checks.values())
 
 
@@ -611,7 +654,7 @@ def sw_idle_run(args, page_url: str, scratch: Path, summary: dict) -> bool:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--path", choices=("audio", "captions", "security", "sw-idle", "permissions"), default="audio")
+    ap.add_argument("--path", choices=("audio", "captions", "security", "sw-idle", "permissions", "clear-memory"), default="audio")
     ap.add_argument("--idle", type=float, default=40.0, help="sw-idle: seconds of silence per phase (Chrome's idle timeout is 30 s)")
     ap.add_argument("--wav", type=Path, default=DEFAULT_WAV)
     ap.add_argument("--port", type=int, default=8765)
@@ -657,7 +700,7 @@ def main() -> int:
         (site / "frame.html").write_text(FRAME_PAGE, encoding="utf-8")
         srv, http_port = serve_dir(site)
         srv2, http_port2 = serve_dir(site)  # a second origin for the cross-origin iframe
-        page = {"audio": AUDIO_PAGE, "captions": CAPTION_PAGE, "sw-idle": IDLE_PAGE,
+        page = {"audio": AUDIO_PAGE, "captions": CAPTION_PAGE, "sw-idle": IDLE_PAGE, "clear-memory": CAPTION_PAGE,
                 "security": SECURITY_PAGE.replace("{frame_url}", f"http://127.0.0.1:{http_port2}/frame.html")}[args.path]
         (site / "index.html").write_text(page, encoding="utf-8")
         page_url = f"http://127.0.0.1:{http_port}/index.html"
@@ -680,7 +723,7 @@ def main() -> int:
             ctx = launch(pw, scratch / "profile", ext_id, not args.headful, args.extension)
             sw = service_worker(ctx)
             targets = [t for t in args.targets.split(",") if t]
-            caption_mode = args.path != "audio"  # the audio path must work with caption mode off (D2)
+            caption_mode = args.path not in ("audio", "clear-memory")  # the audio path must work with caption mode off (D2)
             sw.evaluate("""async ({url, targets, captionMode}) => {
                 const cur = (await chrome.storage.local.get('settings')).settings || {};
                 await chrome.storage.local.set({settings: {...cur, serverUrl: url, targetLanguages: targets, captionMode}});
@@ -709,7 +752,15 @@ def main() -> int:
             tab_id = sw.evaluate("async (u) => (await chrome.tabs.query({url: u}))[0].id", page_url)
             ctl = ctx.new_page()
             ctl.goto(f"chrome-extension://{ext_id}/popup/popup.html")
+            if args.path == "clear-memory":
+                ok = clear_memory_checks(ctx, sw, ext_id, args.port, summary)
+                ctx.close()
+                srv.shutdown()
+                srv2.shutdown()
+                summary["ok"] = ok
+                return 0 if ok else 1
             if args.path == "audio":
+                summary["tm_rows_before"] = tm_rows(args.port)
                 res = send_from_extension_page(ctl, {"type": "ASR_START", "tabId": tab_id, "sourceLang": args.source})
                 summary["asr_start"] = res
                 if not (res and res.get("ok")):
@@ -745,8 +796,12 @@ def main() -> int:
             summary["ws"] = [{"event": r.get("event"), **{k: (r.get("context") or {}).get(k) for k in ("path", "action", "close_code")}}
                              for r in records if r.get("stage") == "ext_ws"][:6]
             summary["errors"] = [r.get("error_message") for r in records if r.get("event") == "fail"][:5]
+            if args.path == "audio":
+                page.wait_for_timeout(1500)  # let the other target's translation land too
+                summary["tm_rows_after"] = tm_rows(args.port)
             if got:
-                summary["ok"] = True
+                # D3: an audio session leaves no rows in the persistent TM
+                summary["ok"] = args.path != "audio" or summary["tm_rows_after"] == summary["tm_rows_before"]
                 c = got["context"]
                 summary["first_translation"] = {"utterance_id": c.get("utterance_id"), "cue_id": c.get("cue_id"),
                                                 "targets": c.get("targets"), "server_to_glass_ms": c.get("server_to_glass_ms")}

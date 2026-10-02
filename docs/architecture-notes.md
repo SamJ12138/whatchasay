@@ -93,3 +93,21 @@ no content scripts; the explanation; the toggle requests exactly the 14 sites an
 them; Start requests `tabCapture`). The other browser paths load a scratch copy of the extension whose manifest adds
 `http://127.0.0.1/*` and `tabCapture` (automation cannot click the action or answer a permission prompt); the audio
 path runs with caption mode off.
+
+## 4. What is remembered, and where (D3)
+
+| Data | Where | How long |
+|---|---|---|
+| Settings, enabled tabs | Chrome (`storage.local`, `storage.session`) | until changed / the browser session ends |
+| Live-caption (audio) text and translations | an in-memory cache owned by the `/ws/asr` connection (`pipeline.audio_session_policy`) | until the session ends; never in the process-wide cache, the refiner context or the TM |
+| Page-subtitle (caption mode) translations | translation memory (`backend/data/translation_memory.db`) + process-wide memory cache | TM rows deleted at startup when unused for `tm.retention_days` (30) |
+| User corrections | translation memory (`corrections` table + user-corrected rows) | until cleared |
+
+Config (`SUBTITLE_TM__*`): `persist_audio_sessions` (false), `persist_captions` (true; caption cues only reach the
+backend when the user turned caption mode on), `retention_days` (30; 0 keeps everything). An audio session still
+*reads* the TM (a user correction applies to live captions too) but does not count the use (`get(touch=False)`), so
+its reads leave no trace either. `POST /tm/clear` deletes translations, corrections and glossary, then `VACUUM` +
+`wal_checkpoint(TRUNCATE)`, so the deleted text is not left in free pages or the WAL; it also empties the in-memory
+cache and the refiner context. The options page shows the policy as one sentence (from `/health/json` `privacy.tm`)
+and has a *Clear translation memory* button behind a confirmation. Tests: `backend/tests/test_memory_privacy.py`,
+browser paths `audio` (TM row count unchanged) and `clear-memory`.
