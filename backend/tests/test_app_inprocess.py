@@ -15,6 +15,9 @@ def test_health_reports_engines(app_env):
     assert d["status"] == "ok"
     assert d["mt_engines"], "no MT engine loaded"
     assert d["asr"]["available"]
+    from app import obs
+
+    assert d["run_id"] == obs.RUN_ID  # names this process's run log (latency_report.py cites it)
 
 
 @pytest.mark.parametrize("text,src,targets", [

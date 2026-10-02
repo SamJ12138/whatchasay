@@ -205,6 +205,8 @@ class HealthResponse(BaseModel):
     refiner_enabled: bool = Field(default=False)
     # what is kept where and what leaves the machine (D3, D4); shown by the options page
     privacy: Dict[str, Any] = Field(default_factory=dict)
+    # this process's run log: logs/run_<run_id>.jsonl (scripts/failure_report.py)
+    run_id: str = Field(default="")
 
 
 class TranslationMemoryEntry(BaseModel):

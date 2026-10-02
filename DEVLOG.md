@@ -114,7 +114,8 @@ Browser: load `extension/` unpacked → YouTube video without captions → popup
   without permission, options page fetching HTML `/health` as JSON, TM upsert clobbering user corrections, corrections stored with
   `source_lang='auto'`, "♪"-only cues sent to MT, passthrough results ignoring per-request targets, batching tied to speed_mode.
 - Tests rewritten (old suite was 49/94 red): 53 tests incl. fake-engine pipeline, LID-switch logic, real Zipformer streaming, live integration.
-- Docs: README, docs/SETUP.md, launchers (no Ollama, GPU wheel install), this DEVLOG.
+- Docs: README, a setup guide and launchers (no Ollama, GPU wheel install), this DEVLOG (setup guide and launchers
+  replaced by the README in Phase 3).
 - Follow-up: added CPU en→bn route (community OPUS model) so Bengali output does not require the GPU; zh→bn pivots through English on CPU.
 
 ### 2026-10-01 — git baseline + observability (Phase 1: logging only, no behaviour change)
@@ -287,7 +288,7 @@ D4 cloud providers off by default, keys only in backend config.
   pointing at `backend/.env`; key fields and the unimplemented cloud-ASR option removed; no key leaves the
   extension in any message. `cloud_translator.py` coverage 0% -> 91% (mocked httpx transport). Browser path
   `cloud-keys` (cloud off and on). `docs/architecture-notes.md` §5.
-- Batch 5: `docs/README-outline.md`: the README's section list, the product statement, and the quickstart / test
+- Batch 5: `docs/README-outline.md` (removed in Phase 3 once the README existed): the README's section list, the product statement, and the quickstart / test
   commands as they stand now (Python 3.10+, CI 3.12; Node 22), for Phase 3. Noticed on the way: the Options page's
   shortcut list is stale (Alt+] / Alt+[; the manifest has Alt+Period and no decrease-font command).
 
@@ -339,4 +340,24 @@ D4 cloud providers off by default, keys only in backend config.
   - Removed: the launchers (`Start_/Stop_Subtitle_Translator.bat/.command`, which used `wmic`, and
     `docs/LAUNCHER.md`; the README documents the plain commands), `backend/scripts/spike_zipformer.py`, the
     pointer to the v1 backup outside the repo.
+- Two fixes found while writing the README (separate commits): the Options page still offered the never-implemented
+  "Accurate but delayed (Whisper, GPU)" engine (removed; a stored choice shows as Auto); the popup's shortcut list
+  showed an unbound Alt+Comma (now "Larger Font Alt+.", node test covers the popup).
+- Batch C (README): written for someone who has never seen the project (`README.md`): what it does and for whom,
+  requirements with exact model sizes (2.29 GB downloaded; 1.22 GB in `backend/data/models` + 1.24 GB Hugging Face
+  cache), quickstart for PowerShell and bash, usage (languages, targets, caption mode, corrections, memory,
+  shortcuts, troubleshooting), the optional HY-MT / cloud / large-Mandarin extras with their license notes, how it
+  works with a measured latency table, the configuration table (generated from `backend/.env.example`; a test keeps
+  every setting in both), development, limitations. `docs/SETUP.md` (launchers, old sizes) and
+  `docs/README-outline.md` are folded into it. `docs/screenshot.png`: the browser harness's new `--video --record
+  --screenshot --hold --size` options on a public-domain NASA clip (credited in `NOTICE.md`), CPU only.
+  `/health/json` carries `run_id`; `backend/scripts/latency_report.py` streams clips at real-time pace and reports
+  per-clip lags. Run `20261002T110447-172f05` (CPU): partial captions within 0.01 s of their audio, finals
+  0.46-0.63 s after the last word (the 0.6 s endpoint silence), translations 27-142 ms after the final.
+  Found while documenting: corrections (Alt+E) on a live-captions-only tab are dropped silently (`main.js`
+  `handleCorrection` returns when the tab has no caption connection); Korean and Portuguese targets have no OPUS-MT
+  route from English. Both listed as limitations, not changed.
+- Process note: two backends this phase were started without `SUBTITLE_ASR__MODELS_DIR` (direct harness runs) and the
+  runtime auto-download put the new default Mandarin model into `backend/data/models/asr/` (200 MB, nothing else
+  in `backend/data/` touched). Harness runs now get the models directory explicitly.
 

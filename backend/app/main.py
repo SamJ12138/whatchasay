@@ -492,6 +492,7 @@ async def health_check_json():
         asr=asr_pkg.asr_status(),
         refiner_enabled=settings.refiner.enabled,
         privacy=privacy_summary(),
+        run_id=obs.RUN_ID,
     )
 
 

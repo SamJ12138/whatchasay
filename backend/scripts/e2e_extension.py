@@ -91,6 +91,13 @@ AUDIO_PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8"><titl
 <script>const v=document.getElementById('v');v.play().catch(e=>console.log('play failed',e));</script>
 </body></html>"""
 
+# --video: a real video, played (with sound) only once live captions are running, so the
+# recording and the screenshot show the clip from its first word.
+DEMO_PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Demo video</title>
+<style>html,body{margin:0;height:100%;background:#111}body{display:flex;align-items:center;justify-content:center}
+video{width:100%;max-height:100%;background:#000}</style></head>
+<body><video id="v" src="/clip{ext}" playsinline></video></body></html>"""
+
 CAPTION_PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8"><title>caption harness</title></head>
 <body><h1>caption harness</h1>
 <video id="v" src="/clip.wav" autoplay muted loop controls width="640" height="360">
@@ -193,7 +200,8 @@ def start_backend(port: int, scratch: Path, extension_ids=()) -> subprocess.Pope
                             stdout=log, stderr=subprocess.STDOUT)
 
 
-def launch(pw, user_dir: Path, ext_id: str | None, headless: bool, extension: Path = EXTENSION):
+def launch(pw, user_dir: Path, ext_id: str | None, headless: bool, extension: Path = EXTENSION,
+           record_dir: Path | None = None, size: tuple | None = None):
     args = [
         f"--disable-extensions-except={extension}",
         f"--load-extension={extension}",
@@ -204,7 +212,13 @@ def launch(pw, user_dir: Path, ext_id: str | None, headless: bool, extension: Pa
         args.append(f"--allowlisted-extension-id={ext_id}")
     if headless:
         args.append("--headless=new")
-    return pw.chromium.launch_persistent_context(str(user_dir), headless=False, args=args)
+    kw = {}
+    if size:
+        kw["viewport"] = {"width": size[0], "height": size[1]}
+    if record_dir:  # Playwright's own recorder: the tab as rendered, overlay included
+        kw["record_video_dir"] = str(record_dir)
+        kw["record_video_size"] = {"width": size[0], "height": size[1]} if size else {"width": 1280, "height": 720}
+    return pw.chromium.launch_persistent_context(str(user_dir), headless=False, args=args, **kw)
 
 
 def service_worker(ctx):
@@ -715,6 +729,11 @@ def main() -> int:
     ap.add_argument("--path", choices=("audio", "captions", "security", "sw-idle", "permissions", "clear-memory", "cloud-keys"), default="audio")
     ap.add_argument("--idle", type=float, default=40.0, help="sw-idle: seconds of silence per phase (Chrome's idle timeout is 30 s)")
     ap.add_argument("--wav", type=Path, default=DEFAULT_WAV)
+    ap.add_argument("--video", type=Path, help="audio path: play this video file (with sound) instead of the WAV")
+    ap.add_argument("--record", type=Path, help="audio path: record the tab with Playwright into this folder")
+    ap.add_argument("--size", help="viewport and recording size, e.g. 1280x720")
+    ap.add_argument("--screenshot", type=Path, help="audio path: save a screenshot after the first translation")
+    ap.add_argument("--hold", type=float, default=0.0, help="audio path: keep captioning this many seconds after the first translation")
     ap.add_argument("--port", type=int, default=8765)
     ap.add_argument("--start-backend", action="store_true")
     ap.add_argument("--source", default="auto")
@@ -754,12 +773,16 @@ def main() -> int:
         site = scratch / "site"
         site.mkdir()
         shutil.copy(args.wav, site / "clip.wav")
+        if args.video:
+            shutil.copy(args.video, site / ("clip" + args.video.suffix))
         (site / "subs.vtt").write_text(SUBS_VTT, encoding="utf-8")
         (site / "frame.html").write_text(FRAME_PAGE, encoding="utf-8")
         srv, http_port = serve_dir(site)
         srv2, http_port2 = serve_dir(site)  # a second origin for the cross-origin iframe
         page = {"audio": AUDIO_PAGE, "captions": CAPTION_PAGE, "sw-idle": IDLE_PAGE, "clear-memory": CAPTION_PAGE, "cloud-keys": CAPTION_PAGE,
                 "security": SECURITY_PAGE.replace("{frame_url}", f"http://127.0.0.1:{http_port2}/frame.html")}[args.path]
+        if args.video and args.path == "audio":
+            page = DEMO_PAGE.replace("{ext}", args.video.suffix)
         (site / "index.html").write_text(page, encoding="utf-8")
         page_url = f"http://127.0.0.1:{http_port}/index.html"
 
@@ -780,7 +803,9 @@ def main() -> int:
             summary["extension_id_derived_ok"] = ext_id == extension_id_for_path(str(args.extension))
 
             # 2nd launch: allowlist it for tabCapture without a gesture
-            ctx = launch(pw, scratch / "profile", ext_id, not args.headful, args.extension)
+            size = tuple(int(x) for x in args.size.split("x")) if args.size else None
+            ctx = launch(pw, scratch / "profile", ext_id, not args.headful, args.extension,
+                         record_dir=args.record, size=size)
             sw = service_worker(ctx)
             targets = [t for t in args.targets.split(",") if t]
             caption_mode = args.path not in ("audio", "clear-memory", "cloud-keys")  # the audio path must work with caption mode off (D2)
@@ -795,6 +820,7 @@ def main() -> int:
                     time.sleep(0.2)
 
             page = ctx.new_page()
+            page_opened = time.time()  # the recording of this page starts about now
             records = []
 
             def on_console(msg):
@@ -807,7 +833,10 @@ def main() -> int:
 
             page.on("console", on_console)
             page.goto(page_url)
-            page.wait_for_function("document.getElementById('v').currentTime > 0.1", timeout=15000)
+            if args.video and args.path == "audio":  # played after ASR_START
+                page.wait_for_function("document.getElementById('v').readyState >= 3", timeout=15000)
+            else:
+                page.wait_for_function("document.getElementById('v').currentTime > 0.1", timeout=15000)
 
             tab_id = sw.evaluate("async (u) => (await chrome.tabs.query({url: u}))[0].id", page_url)
             ctl = ctx.new_page()
@@ -827,6 +856,9 @@ def main() -> int:
                 if not (res and res.get("ok")):
                     summary["error"] = f"ASR_START failed: {res}"
                     return 1
+                if args.video:  # capture is running: start the clip now
+                    page.evaluate("document.getElementById('v').play()")
+                    summary["play_started_s"] = round(time.time() - page_opened, 2)
             elif args.path == "security":
                 ok = security_checks(page, ctl, tab_id, records, args.port, summary)
                 ctx.close()
@@ -846,6 +878,7 @@ def main() -> int:
                     c = r.get("context") or {}
                     if r.get("stage") == "ext_render" and (c.get("kind") in kinds or c.get("from") in kinds) and c.get("targets"):
                         got = r
+                        got_at = time.time()
                         break
                 if not got:
                     page.wait_for_timeout(250)
@@ -857,6 +890,12 @@ def main() -> int:
             summary["ws"] = [{"event": r.get("event"), **{k: (r.get("context") or {}).get(k) for k in ("path", "action", "close_code")}}
                              for r in records if r.get("stage") == "ext_ws"][:6]
             summary["errors"] = [r.get("error_message") for r in records if r.get("event") == "fail"][:5]
+            if got and args.screenshot:
+                page.wait_for_timeout(1200)  # the source line and the translation both on screen
+                page.screenshot(path=str(args.screenshot))
+                summary["screenshot"] = str(args.screenshot)
+            if got and args.hold:
+                page.wait_for_timeout(int(args.hold * 1000))
             if args.path == "audio":
                 page.wait_for_timeout(1500)  # let the other target's translation land too
                 summary["tm_rows_after"] = tm_rows(args.port)
@@ -871,7 +910,10 @@ def main() -> int:
                                                 "targets": c.get("targets"), "server_to_glass_ms": c.get("server_to_glass_ms")}
             if args.path == "audio":
                 send_from_extension_page(ctl, {"type": "ASR_STOP"})
+            summary["first_translation_s"] = round(got_at - page_opened, 2) if got else None
             ctx.close()
+            if args.record:
+                summary["video"] = page.video.path() if page.video else None
             srv.shutdown()
             srv2.shutdown()
         return 0 if summary["ok"] else 1

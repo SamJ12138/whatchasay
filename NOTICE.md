@@ -101,3 +101,13 @@ pass `--accept-hymt-license`:
   HY” are owned by Tencent or its affiliate."
 
 This project does not redistribute the model.
+
+## Media in this repository
+
+`docs/screenshot.png` (and the demo GIF) show a 30-second excerpt (0:09-0:39) of **"ScienceCasts: The Zero Gravity
+Coffee Cup"** by ScienceAtNASA (NASA, 12 July 2013), from
+[Wikimedia Commons](https://commons.wikimedia.org/wiki/File:ScienceCasts-_The_Zero_Gravity_Coffee_Cup.webm). Public
+domain in the United States: "This file is in the public domain in the United States because it was solely created
+by NASA." NASA's logo, visible in the video's corner, is not covered by that and its use is restricted
+(14 CFR 1221); this project is not endorsed by NASA. The subtitles drawn over it are this project's own output.
+

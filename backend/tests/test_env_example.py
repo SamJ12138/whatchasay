@@ -75,3 +75,21 @@ def test_the_real_env_file_is_ignored_and_the_example_is_not():
     ignored = subprocess.run(["git", "check-ignore", "-q", "backend/.env"], cwd=repo).returncode == 0
     example_ignored = subprocess.run(["git", "check-ignore", "-q", "backend/.env.example"], cwd=repo).returncode == 0
     assert ignored and not example_ignored
+
+
+def test_every_setting_has_its_own_description_line():
+    """The README's configuration table is generated from these comments: one per key."""
+    lines = EXAMPLE.read_text(encoding="utf-8").splitlines()
+    for i, line in enumerate(lines):
+        if LINE.match(line):
+            above = lines[i - 1]
+            assert above.startswith("# ") and not LINE.match(above) and not above.startswith("# ----"), \
+                f"{line.split('=')[0][2:]} has no description line of its own"
+            assert "|" not in above, f"'|' would break the README table: {above}"
+
+
+def test_the_readme_lists_every_setting_with_its_default():
+    readme = (EXAMPLE.parents[1] / "README.md").read_text(encoding="utf-8")
+    for key, value in documented().items():
+        assert f"| `{key}` |" in readme, f"README configuration table lacks {key}"
+
