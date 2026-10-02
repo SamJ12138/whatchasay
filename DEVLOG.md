@@ -102,7 +102,7 @@ Browser: load `extension/` unpacked → YouTube video without captions → popup
 ## 10. Change log
 
 ### 2026-09-11 — v2 redesign for sub-second live captions (en/zh/bn)
-- Research (3 agents) + plan; backup of v1 source at `../backup-2026-09-11-pre-redesign.zip`.
+- Research (3 agents) + plan; the v1 source was backed up outside the repository.
 - Replaced per-chunk Whisper ASR with sherpa-onnx Zipformer streaming engines + LID + session state machine.
 - Replaced HF-transformers OPUS path with CTranslate2 int8 + verified routing table + English pivot; added Bengali everywhere
   (config, detection script range, danda line breaks, extension dropdowns, fonts).
@@ -172,7 +172,7 @@ Browser: load `extension/` unpacked → YouTube video without captions → popup
 - Batch 3 (W8, E16, E17): `app/security.py` — `OriginGuard` middleware refuses HTTP requests and WebSocket handshakes
   (403 before the upgrade) whose `Origin` is not the extension or the backend's own loopback origin; requests without an
   Origin (curl, scripts) pass. The unpacked extension's id is derived from `../extension`'s path exactly as Chrome does
-  (verified: `<extension-id>` on this machine); more ids via `SUBTITLE_SERVER__EXTENSION_IDS`. CORS
+  (verified against the id Chromium assigned); more ids via `SUBTITLE_SERVER__EXTENSION_IDS`. CORS
   echoes only allowed origins, no credentials. `run.py` refuses a non-loopback `--host`. Extension: the caption path's
   `/ws` socket moved into the service worker (`lib/websocket-client.js` + `lib/tab-connections.js`; content scripts use
   `content-scripts/backend-port.js` over a runtime Port), because a socket opened by a content script carries the web
@@ -315,4 +315,28 @@ D4 cloud providers off by default, keys only in backend config.
     harness on the bilingual model). Slow tests can read models from `ST_MODELS_ROOT` (the harness backend gets
     `SUBTITLE_ASR__MODELS_DIR` / `SUBTITLE_ASR__PUNCT_DIR` from it), so new models were tried without writing to
     `backend/data/`.
+- Batch B (repo hygiene):
+  - Personal-data sweep (tracked files + `git log -p --all`, messages and author/committer): the author's name and
+    school address on every commit; the Windows home path in three commit bodies (pasted test output) and in one
+    test (`test_security.py`, the path whose extension id was checked against Chromium); a made-up Linux home path in the same
+    test; no gmail, phone numbers or other addresses. Subtitle text: the 91 strings in the local translation memory
+    were matched against the tree and the history; the 5 found are the repo's own sample sentences (sample-WAV
+    transcripts and probe sentences that early test runs wrote into the real TM), nothing from watched videos.
+    Fixed in the tree (synthetic paths; the extension-id derivation is now checked against Chrome by every slow
+    browser run, `extension_id_derived_ok`); the history is rewritten after this commit with git filter-repo
+    (author/committer `Tianyi Jia <186099051+SamJ12138@users.noreply.github.com>`, home paths and the
+    home-derived extension id replaced in messages and file contents).
+  - `backend/tests/test_repo_hygiene.py`: no local username, school domain, gmail, home paths (Windows, MSYS,
+    Linux, macOS), phone numbers or e-mail addresses other than no-reply ones in tracked files; with a local TM,
+    no TM text outside the sample files.
+  - `LICENSE` (MIT, 2026 Tianyi Jia) for the code; `NOTICE.md` stays for models and libraries.
+  - `backend/.env.example`: every setting with its default and one line (the backend reads `backend/.env`;
+    `test_env_example.py` checks completeness, that the uncommented file loads to the defaults, and no secrets).
+    Writing it found seven settings nothing reads (`translation.max_reading_speed_vi`, `mt.hymt_file`,
+    `ollama.temperature`, `cache.fuzzy_match_threshold`, `server.batch_timeout`, `features.enable_corrections`,
+    `corrections_file`): removed. `backend/data/` stays wholly ignored (no `.gitkeep`: the backend creates it, and
+    nothing may be written there).
+  - Removed: the launchers (`Start_/Stop_Subtitle_Translator.bat/.command`, which used `wmic`, and
+    `docs/LAUNCHER.md`; the README documents the plain commands), `backend/scripts/spike_zipformer.py`, the
+    pointer to the v1 backup outside the repo.
 

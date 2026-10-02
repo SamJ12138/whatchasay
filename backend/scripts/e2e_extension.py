@@ -776,6 +776,8 @@ def main() -> int:
             ext_id = service_worker(ctx).url.split("/")[2]
             ctx.close()
             summary["extension_id"] = ext_id
+            # the backend allow-lists the id derived from the path; it must be Chrome's
+            summary["extension_id_derived_ok"] = ext_id == extension_id_for_path(str(args.extension))
 
             # 2nd launch: allowlist it for tabCapture without a gesture
             ctx = launch(pw, scratch / "profile", ext_id, not args.headful, args.extension)

@@ -44,6 +44,7 @@ def run_harness(*args, env=None):
 def test_tab_audio_reaches_content_script_as_translated_cue():
     summary, proc = run_harness("--path", "audio")
     assert summary["ok"], (summary, proc.stderr[-2000:])
+    assert summary["extension_id_derived_ok"], summary  # app.security's derivation = Chrome's id
     assert summary["first_translation"]["targets"]
     # D3: the audio session left no trace in the persistent TM
     assert summary["tm_rows_after"] == summary["tm_rows_before"], summary

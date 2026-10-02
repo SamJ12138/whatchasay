@@ -24,9 +24,13 @@ def test_speed_mode_endpoint_is_gone(app_env):
     ("ollama", "fallback_model"), ("ollama", "max_retries"),
     ("asr", "whisper_model"), ("asr", "whisper_bn_model"),
     ("cloud", "asr_provider"), ("cloud", "gladia_api_key"), ("cloud", "elevenlabs_api_key"),
+    # Batch B: never read by the code (found while documenting every key in backend/.env.example)
+    ("translation", "max_reading_speed_vi"), ("mt", "hymt_file"), ("ollama", "temperature"),
+    ("cache", "fuzzy_match_threshold"), ("server", "batch_timeout"), ("features", "enable_corrections"),
+    (None, "corrections_file"),
 ])
 def test_unused_settings_are_gone(section, field):
-    assert not hasattr(getattr(settings, section), field)
+    assert not hasattr(getattr(settings, section) if section else settings, field)
 
 
 def test_no_references_to_asr_engines_that_do_not_exist():

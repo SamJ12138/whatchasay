@@ -69,7 +69,7 @@ ran without the server's real engines except `test_pipeline`.
 
 ## Fixtures (`backend/tests/conftest.py`, `backend/tests/fakes.py`)
 
-- The whole session runs with `SUBTITLE_DATA_DIR`, `SUBTITLE_CORRECTIONS_FILE` and `SUBTITLE_CACHE__TM_DATABASE_PATH`
+- The whole session runs with `SUBTITLE_DATA_DIR` and `SUBTITLE_CACHE__TM_DATABASE_PATH`
   pointing at a scratch dir, so no code path can open `backend/data/translation_memory.db`.
 - `fake_mt` → `FakeMTEngine(name, mode='ok'|'fail'|'timeout'|'source'|'empty', pairs=None, delay_s=0)`: deterministic
   output with a target-script marker, records every call.
@@ -111,3 +111,8 @@ ran without the server's real engines except `test_pipeline`.
 | `test_dead_code` (13) | `/config/speed_mode` is gone (404/405); nine unused settings are gone; no reference to the never-implemented cloud / Whisper ASR engines; the v1 Modelfile and TRAINING.md are gone; startup no longer probes `ollama` / `llama_cpp` | fast |
 | `test_e2e_extension` :: `test_mandarin_tab_audio_with_the_licensed_model` | `--path audio` with a Mandarin WAV, source zh, target en: translated cue in the page, served by the bilingual model (`/health/json` models), TM unchanged | **slow** |
 | `extension/tests/options-shortcuts.test.js` (3) | the Options page lists every manifest command with its suggested key, nothing else but the Alt+E page key (handled in `main.js`), no Alt+[ / Alt+]; it reads the bound keys with `chrome.commands.getAll()` | node |
+| `test_repo_hygiene` (3) | the patterns catch what they should and pass no-reply addresses, decorators, placeholders; no tracked file holds a local username, school domain, gmail, home path, phone number or non-no-reply e-mail; with a local TM (copied), no TM text outside the sample files (skipped in CI) | fast |
+| `test_env_example` (4) | every setting documented once in `backend/.env.example` and nothing else; the fully uncommented file loads to the defaults; key fields empty, cloud off; `backend/.env` ignored, the example not | fast |
+| `test_security` :: `test_harness_derives_extension_ids_like_the_backend` | the harness's copy of the extension-id derivation equals `app.security`'s | fast |
+| `test_dead_code` (+7) | seven settings nothing read are gone | fast |
+

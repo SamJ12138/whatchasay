@@ -36,15 +36,31 @@ def ext_origin():
 def test_unpacked_extension_id_is_derived_like_chrome():
     from app.security import extension_id_for_path
 
-    # Chrome derives an unpacked extension's id from its absolute path
-    # (SHA-256 of the path bytes, first 128 bits, 0-f -> a-p). This pair was
-    # observed in Chromium (Playwright) on the owner's machine.
-    path = r"<repo>\extension"
-    assert extension_id_for_path(path, windows=True) == "<extension-id>"
+    # Chrome derives an unpacked extension's id from its absolute path (SHA-256 of
+    # the path bytes, first 128 bits, 0-f -> a-p). Checked against real Chromium
+    # by every slow browser test: the harness's extension_id_derived_ok compares
+    # this derivation with the id Chrome assigned (and a wrong id would be a 403).
+    # Pinned here for two paths so a change to the derivation shows up fast.
+    path = r"D:\src\subtitle-translator\extension"
+    assert extension_id_for_path(path, windows=True) == "iglicabbnhhjoamplcnllfdbcfdgiohj"
     # the drive letter is case-normalised by Chrome
-    assert extension_id_for_path("c" + path[1:], windows=True) == "<extension-id>"
-    eid = extension_id_for_path("/srv/subtitle-translator/extension", windows=False)
-    assert len(eid) == 32 and set(eid) <= set("abcdefghijklmnop")
+    assert extension_id_for_path("d" + path[1:], windows=True) == "iglicabbnhhjoamplcnllfdbcfdgiohj"
+    assert extension_id_for_path("/srv/subtitle-translator/extension", windows=False) == "dgnfemjbfbnnjcjcndkgafngkianjpej"
+
+
+def test_harness_derives_extension_ids_like_the_backend():
+    """scripts/e2e_extension.py keeps its own copy (it must not import the backend's settings)."""
+    import importlib.util
+    import os
+    from pathlib import Path
+
+    from app.security import extension_id_for_path
+
+    spec = importlib.util.spec_from_file_location("e2e_ext", Path(__file__).parents[1] / "scripts" / "e2e_extension.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    for p in (r"D:\src\subtitle-translator\extension", "/srv/x/extension", r"c:\a b\ext"):
+        assert mod.extension_id_for_path(p) == extension_id_for_path(p, windows=os.name == "nt"), p
 
 
 def test_allowed_origins_are_the_extension_and_own_loopback_only(monkeypatch):

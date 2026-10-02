@@ -90,7 +90,6 @@ class TranslationConfig(BaseSettings):
 
     max_reading_speed_en: float = Field(default=25.0)
     max_reading_speed_zh: float = Field(default=15.0)
-    max_reading_speed_vi: float = Field(default=22.0)
 
     # Device for neural models: "cuda" if an NVIDIA GPU is visible, else "cpu".
     device: str = Field(default_factory=lambda: "cuda" if _detect_cuda() else "cpu")
@@ -200,9 +199,9 @@ class MTConfig(BaseSettings):
             self.engine_order = [self.engine] + (["opus"] if self.engine != "opus" else [])
         return self
 
+    # Q4_K_M: 25-40% faster Bengali output than Q8_0 with equivalent quality
     hymt_gguf: Path = Field(default=Path("data/models/mt/HY-MT1.5-1.8B-Q4_K_M.gguf"))
     hymt_repo: str = Field(default="tencent/HY-MT1.5-1.8B-GGUF")
-    hymt_file: str = Field(default="HY-MT1.5-1.8B-Q4_K_M.gguf", description="Q4_K_M: 25-40% faster Bengali output than Q8_0 with equivalent quality")
     hymt_gpu_layers: int = Field(default=-1, description="-1 = all layers on GPU")
     hymt_ctx: int = Field(default=1024)
     hymt_max_tokens: int = Field(default=96)
@@ -280,7 +279,6 @@ class OllamaConfig(BaseSettings):
     base_url: str = Field(default="http://localhost:11434")
     model: str = Field(default="qwen3:4b")
     timeout: float = Field(default=30.0)
-    temperature: float = Field(default=0.3)
     context_window_size: int = Field(default=3)
 
 
@@ -303,7 +301,6 @@ class CacheConfig(BaseSettings):
     memory_cache_size: int = Field(default=1000)
     memory_cache_ttl: int = Field(default=3600)
     tm_database_path: Path = Field(default=Path("data/translation_memory.db"))
-    fuzzy_match_threshold: float = Field(default=0.95)
 
 
 class ServerConfig(BaseSettings):
@@ -319,7 +316,6 @@ class ServerConfig(BaseSettings):
     ws_ping_interval: float = Field(default=30.0)
     ws_ping_timeout: float = Field(default=10.0)
     max_concurrent_translations: int = Field(default=5)
-    batch_timeout: float = Field(default=0.1)
 
 
 class FeatureFlags(BaseSettings):
@@ -328,7 +324,6 @@ class FeatureFlags(BaseSettings):
     use_post_editor: bool = Field(default=False)
     fast_mode: bool = Field(default=True)
     strict_meaning_lock: bool = Field(default=True)
-    enable_corrections: bool = Field(default=True)
     warmup_on_start: bool = Field(default=True)
 
     # Micro-batching: collect cues for this many ms before one model call.
@@ -350,7 +345,6 @@ class Settings(BaseSettings):
     features: FeatureFlags = Field(default_factory=FeatureFlags)
 
     data_dir: Path = Field(default=Path("data"))
-    corrections_file: Path = Field(default=Path("data/corrections.jsonl"))
 
     class Config:
         env_prefix = "SUBTITLE_"

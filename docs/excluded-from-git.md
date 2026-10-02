@@ -1,6 +1,6 @@
 # What is not in git, and how to get it
 
-The repository holds source, docs and launchers only (69 files, about 0.5 MB at the baseline commit). Everything below
+The repository holds source and docs only (69 files, about 0.5 MB at the baseline commit). Everything below
 lives in the working folder but is excluded by `.gitignore`. `scripts/check_large_files.py` (run from the repo root,
 `--dry-run` before a first commit) lists every file git would track and fails on anything over 10 MB or with a blocked
 extension (`.db`, `.zip`, `.gguf`, `.onnx`, `.bin`, `.safetensors`, `.exe`, `.dll`, `.wav`, `.jsonl`, `.pyc`).
@@ -22,7 +22,6 @@ extension (`.db`, `.zip`, `.gguf`, `.onnx`, `.bin`, `.safetensors`, `.exe`, `.dl
 | `backend/data/models/mt/HY-MT1.5-1.8B-Q8_0.gguf` | 1.8 GB | unused alternative quant | optional; same repo. Not used by the code (see PROJECT_REPORT §10 #7) |
 | `backend/bin/llama/` | 567 MB | llama.cpp b10909 Windows CUDA 12.4 build (`llama-server.exe` + DLLs) | only for HY-MT: `scripts/download_models.py --hymt --accept-hymt-license` fetches `https://github.com/ggml-org/llama.cpp/releases/download/b10909/llama-b10909-bin-win-cuda-12.4-x64.zip` on Windows. Other OSes: install `llama-server` into `backend/bin/llama/` manually |
 | `backend/logs/` (incl. `logs/pytest/`) | grows per run | observability run logs `run_<run_id>.jsonl` | generated at runtime by `app/obs.py` |
-| `../backup-2026-09-11-pre-redesign.zip` | 259 KB | v1 source backup; outside the repo folder; contains `.pyc` with home-folder paths | not distributed |
 | `*.wav` | inside the model folders | upstream sample audio used by `scripts/e2e_ws_asr.py` | come with the ASR model archives above (`test_wavs/`) |
 | `.env`, `*.pem`, `*.key` | none exist | secrets | user-provided: cloud API keys go in `backend/.env` (`SUBTITLE_CLOUD__*`, `SUBTITLE_REFINER__*`; Phase 2b D4), never in the extension |
 
