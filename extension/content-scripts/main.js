@@ -211,7 +211,6 @@
       max_chars_by_lang: maxCharsByLang(langs),
       // language to assume for short / ambiguous cues (backend settings.lang_detect)
       source_lang_hint: pageLanguage() || undefined,
-      cloud_keys: settings.cloudKeys || undefined,
     };
   }
 

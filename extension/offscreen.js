@@ -4,7 +4,7 @@
  * service worker may be suspended meanwhile; this page is not).
  *
  * Messages from the service worker (all have target: 'offscreen'):
- *   ASR_START  {streamId, tabId, sourceLang, targetLangs, serverUrl, engine, cloudKeys, translationEngine}
+ *   ASR_START  {streamId, tabId, sourceLang, targetLangs, serverUrl, engine, translationEngine}
  *   ASR_STOP   {tabId}
  *   ASR_CONFIG {tabId, sourceLang?, targetLangs?}
  *   ASR_STATUS {}
@@ -122,7 +122,7 @@ async function startCaptureSteps(msg, setStep) {
 
   // 4. backend
   setStep('connectWs');
-  await connectWs(msg.cloudKeys);
+  await connectWs();
   state.capturing = true;
   emit({ type: 'status', capturing: true, connected: true, sourceLang: state.sourceLang, targetLangs: state.targetLangs });
   log('capture started for tab', state.tabId);
@@ -189,7 +189,7 @@ async function stopCapture() {
 // Backend WebSocket
 // ---------------------------------------------------------------------------
 
-function connectWs(cloudKeys) {
+function connectWs() {
   return new Promise((resolve, reject) => {
     const sid = obs.getSession();
     const url = `${state.serverUrl}?source_lang=${encodeURIComponent(state.sourceLang)}&target_langs=${encodeURIComponent(state.targetLangs.join(','))}` +
@@ -203,9 +203,6 @@ function connectWs(cloudKeys) {
       opened = true;
       settled = true;
       obs.log('ext_ws', 'success', { duration_ms: performance.now() - t0, path: '/ws/asr' });
-      if (cloudKeys && Object.keys(cloudKeys).length) {
-        ws.send(JSON.stringify({ type: 'config', cloud_keys: cloudKeys }));
-      }
       resolve();
     };
     ws.onerror = (err) => {
@@ -224,7 +221,7 @@ function connectWs(cloudKeys) {
         emit({ type: 'status', connected: false, warning: 'disconnected', message: `Backend disconnected (${ev.code}).` });
         // retry once after a short delay
         obs.log('ext_ws', 'start', { action: 'reconnect', path: '/ws/asr', delay_ms: 1500, after_close_code: ev.code });
-        setTimeout(() => { if (state.capturing) connectWs(cloudKeys).catch(() => {}); }, 1500);  // connect failure logged above
+        setTimeout(() => { if (state.capturing) connectWs().catch(() => {}); }, 1500);  // connect failure logged above
       }
     };
     ws.onmessage = (ev) => handleServerMessage(ev.data);
@@ -383,7 +380,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           if (msg.sourceLang) state.sourceLang = msg.sourceLang;
           if (msg.translationEngine) state.translationEngine = msg.translationEngine;
           if (state.ws && state.ws.readyState === WebSocket.OPEN) {
-            state.ws.send(JSON.stringify({ type: 'config', source_lang: msg.sourceLang, target_langs: msg.targetLangs, cloud_keys: msg.cloudKeys }));
+            state.ws.send(JSON.stringify({ type: 'config', source_lang: msg.sourceLang, target_langs: msg.targetLangs }));
           }
           sendResponse({ ok: true });
           break;

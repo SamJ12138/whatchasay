@@ -188,7 +188,7 @@ class ConfigUpdate(BaseModel):
     max_chars_by_lang: Optional[Dict[str, int]] = None  # Generic per-language limits
     refiner_enabled: Optional[bool] = None
     source_lang_hint: Optional[str] = None  # language of this tab's page/track; see settings.lang_detect
-    cloud_keys: Optional[Dict[str, str]] = None  # {google_api_key, azure_translator_key, azure_translator_region, gladia_api_key, elevenlabs_api_key, groq_api_key, gemini_api_key}
+    # no cloud_keys (D4): keys live in the backend config only; a message carrying them is logged and ignored
 
 
 class HealthResponse(BaseModel):

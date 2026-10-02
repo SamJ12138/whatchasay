@@ -275,3 +275,13 @@ D4 cloud providers off by default, keys only in backend config.
   "database is locked", and a leaked aiosqlite thread hung the test process at exit): now under a lock. Browser:
   the audio path asserts the TM row count is unchanged (with `SUBTITLE_TM__PERSIST_AUDIO_SESSIONS=true` it goes
   0 -> 1 and fails); new `--path clear-memory`. `docs/architecture-notes.md` §4.
+- Batch 4 (D4, cloud providers): `cloud.enabled` (false) gates cloud MT and the Groq/Gemini refiners; enabling it
+  appends `cloud` to the router order. Keys only from backend config / `backend/.env` (`SUBTITLE_ENV_FILE`); the
+  `cloud_keys` paths on `/ws`, `/ws/asr` and `POST /config` are gone (ignored + logged by name). Google and Gemini
+  keys moved from the URL (`?key=`) into headers: before, a 403 produced "Client error '403 Forbidden' for url
+  '...translate/v2?key=<key>'", which reached logs and the client's error text. `CloudMTError` messages carry the
+  provider and status only. Startup logs which provider receives text; `/health/json` `privacy.cloud`; Options shows
+  the same line. Extension: settings schema 4 deletes stored keys (`lib/settings-migration.js`) with a notice
+  pointing at `backend/.env`; key fields and the unimplemented cloud-ASR option removed; no key leaves the
+  extension in any message. `cloud_translator.py` coverage 0% -> 91% (mocked httpx transport). Browser path
+  `cloud-keys` (cloud off and on). `docs/architecture-notes.md` §5.

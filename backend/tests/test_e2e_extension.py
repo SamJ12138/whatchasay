@@ -29,11 +29,11 @@ pytestmark = [
 ]
 
 
-def run_harness(*args):
+def run_harness(*args, env=None):
     port = os.environ.get("ST_HARNESS_PORT", "8799")
     proc = subprocess.run(
         [PW_PYTHON, str(ROOT / "scripts" / "e2e_extension.py"), "--start-backend", "--port", port, *args],
-        capture_output=True, text=True, timeout=300,
+        capture_output=True, text=True, timeout=300, env={**os.environ, **(env or {})},
     )
     summary = json.loads(proc.stdout.strip().splitlines()[-1])
     return summary, proc
@@ -81,3 +81,14 @@ def test_options_clear_translation_memory_button():
     first, does nothing when dismissed and empties the TM when confirmed."""
     summary, proc = run_harness("--path", "clear-memory")
     assert summary["ok"], (summary, proc.stderr[-2000:])
+
+
+@pytest.mark.parametrize("cloud", ["off", "on"])
+def test_options_page_holds_no_keys_and_names_the_cloud_receivers(cloud):
+    """D4: keys stored by an older version are deleted with a notice; no key fields;
+    the cloud line matches what the backend reports (on = a dummy Google key; nothing
+    is translated in this path, so no request leaves the machine)."""
+    env = {"SUBTITLE_CLOUD__ENABLED": "true", "SUBTITLE_CLOUD__GOOGLE_API_KEY": "dummy-not-a-real-key"} if cloud == "on" else {}
+    summary, proc = run_harness("--path", "cloud-keys", env=env)
+    assert summary["ok"], (summary, proc.stderr[-2000:])
+    assert bool(summary["receivers"]) == (cloud == "on")

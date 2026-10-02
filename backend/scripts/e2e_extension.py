@@ -18,6 +18,10 @@ end to end, with no human click. Two paths:
   --path clear-memory  D3 in the options page: it says what is stored where; the
                    "Clear translation memory" button does nothing when its
                    confirmation is dismissed and empties the TM when accepted
+  --path cloud-keys  D4 in the options page: keys an older version stored are
+                   deleted with a notice saying where they go now; no key fields;
+                   the cloud line names the providers the backend reports (run it
+                   with SUBTITLE_CLOUD__ENABLED=true + a dummy key for the "on" case)
   --path security  E16/E17/W8 in the browser: no /ws connection before the tab is
                    enabled; the page's own scripts cannot open /ws or POST /translate;
                    after enabling, one connection from the extension; a cue posted
@@ -270,6 +274,17 @@ def permissions_checks(ctx, ext_id: str, summary: dict) -> bool:
     return all(checks.values())
 
 
+def wait_until(page, expr: str, timeout_s: float) -> None:
+    """Poll a JS expression with evaluate (CDP). Not wait_for_function: it builds the
+    predicate with new Function, which an extension page's CSP blocks."""
+    end = time.time() + timeout_s
+    while time.time() < end:
+        if page.evaluate(expr):
+            return
+        page.wait_for_timeout(200)
+    raise TimeoutError(f"not true after {timeout_s}s: {expr}")
+
+
 def tm_rows(port: int) -> int:
     """Rows in the backend's (scratch) translation memory."""
     with urllib.request.urlopen(f"http://127.0.0.1:{port}/stats", timeout=5) as r:  # no Origin: allowed
@@ -290,7 +305,7 @@ def clear_memory_checks(ctx, sw, ext_id: str, port: int, summary: dict) -> bool:
     }""", port)
     opt = ctx.new_page()
     opt.goto(f"chrome-extension://{ext_id}/options/options.html")
-    opt.wait_for_function("document.getElementById('connectionStatus').textContent.includes('Connected')", timeout=15000)
+    wait_until(opt, "document.getElementById('connectionStatus').textContent.includes('Connected')", 15)
     note = opt.evaluate("document.getElementById('storageNote').textContent")
     summary["storage_note"] = note
     checks["options_say_what_is_stored_where"] = "translation memory" in note and "live-caption" in note and "30 days" in note
@@ -307,6 +322,41 @@ def clear_memory_checks(ctx, sw, ext_id: str, port: int, summary: dict) -> bool:
     checks["confirmed_clear_empties_the_tm"] = len(dialogs) == 2 and tm_rows(port) == 0
     summary["dialog"] = dialogs[:1]
     summary["status_bar"] = opt.evaluate("document.getElementById('statusBar').textContent")
+    return all(checks.values())
+
+
+LEGACY_KEYS = {"google_api_key": "legacy-secret-4242", "groq_api_key": "legacy-secret-4243",
+               "azure_translator_key": "", "refiner_provider": "groq"}
+
+
+def cloud_keys_checks(ctx, sw, ext_id: str, port: int, summary: dict) -> bool:
+    """D4: stored keys are migrated away; the options page never shows a key field
+    and says which provider (if any) receives subtitle text."""
+    checks = summary.setdefault("checks", {})
+    sw.evaluate("""async ({port, keys}) => {
+        const cur = (await chrome.storage.local.get('settings')).settings || {};
+        await chrome.storage.local.set({settings: {...cur, serverHost: '127.0.0.1', serverPort: port, schemaVersion: 3, cloudKeys: keys}});
+    }""", {"port": port, "keys": LEGACY_KEYS})
+    opt = ctx.new_page()
+    opt.goto(f"chrome-extension://{ext_id}/options/options.html")
+    wait_until(opt, "document.getElementById('connectionStatus').textContent.includes('Connected')", 15)
+    stored = opt.evaluate("chrome.storage.local.get('settings').then(r => r.settings || {})")
+    checks["keys_deleted_from_storage"] = "cloudKeys" not in stored and "legacy-secret" not in json.dumps(stored)
+    notice = opt.evaluate("(() => { const n = document.getElementById('keyNotice'); return {hidden: n.hidden, text: n.textContent}; })()")
+    summary["notice"] = " ".join(notice["text"].split())
+    checks["notice_says_where_keys_go"] = not notice["hidden"] and "2 cloud API key(s)" in notice["text"] and "backend/.env" in notice["text"]
+    checks["no_key_fields_in_options"] = opt.evaluate("document.querySelectorAll('input[type=password]').length") == 0 \
+        and "legacy-secret" not in opt.content()
+    with urllib.request.urlopen(f"http://127.0.0.1:{port}/health/json", timeout=5) as r:
+        receivers = json.loads(r.read())["privacy"]["cloud"]["receivers"]
+    line = opt.evaluate("document.getElementById('cloudStatus').textContent")
+    summary["cloud_status"], summary["receivers"] = line, receivers
+    checks["options_show_who_receives_text"] = all(x["provider"] in line and x["host"] in line for x in receivers) \
+        if receivers else "no subtitle text leaves this computer" in line
+    opt.click("#dismissCloudNotice")
+    opt.wait_for_timeout(500)
+    stored = opt.evaluate("chrome.storage.local.get('settings').then(r => r.settings || {})")
+    checks["notice_dismissed"] = opt.evaluate("document.getElementById('keyNotice').hidden") and "keysRemovedNotice" not in stored
     return all(checks.values())
 
 
@@ -654,7 +704,7 @@ def sw_idle_run(args, page_url: str, scratch: Path, summary: dict) -> bool:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--path", choices=("audio", "captions", "security", "sw-idle", "permissions", "clear-memory"), default="audio")
+    ap.add_argument("--path", choices=("audio", "captions", "security", "sw-idle", "permissions", "clear-memory", "cloud-keys"), default="audio")
     ap.add_argument("--idle", type=float, default=40.0, help="sw-idle: seconds of silence per phase (Chrome's idle timeout is 30 s)")
     ap.add_argument("--wav", type=Path, default=DEFAULT_WAV)
     ap.add_argument("--port", type=int, default=8765)
@@ -700,7 +750,7 @@ def main() -> int:
         (site / "frame.html").write_text(FRAME_PAGE, encoding="utf-8")
         srv, http_port = serve_dir(site)
         srv2, http_port2 = serve_dir(site)  # a second origin for the cross-origin iframe
-        page = {"audio": AUDIO_PAGE, "captions": CAPTION_PAGE, "sw-idle": IDLE_PAGE, "clear-memory": CAPTION_PAGE,
+        page = {"audio": AUDIO_PAGE, "captions": CAPTION_PAGE, "sw-idle": IDLE_PAGE, "clear-memory": CAPTION_PAGE, "cloud-keys": CAPTION_PAGE,
                 "security": SECURITY_PAGE.replace("{frame_url}", f"http://127.0.0.1:{http_port2}/frame.html")}[args.path]
         (site / "index.html").write_text(page, encoding="utf-8")
         page_url = f"http://127.0.0.1:{http_port}/index.html"
@@ -723,7 +773,7 @@ def main() -> int:
             ctx = launch(pw, scratch / "profile", ext_id, not args.headful, args.extension)
             sw = service_worker(ctx)
             targets = [t for t in args.targets.split(",") if t]
-            caption_mode = args.path not in ("audio", "clear-memory")  # the audio path must work with caption mode off (D2)
+            caption_mode = args.path not in ("audio", "clear-memory", "cloud-keys")  # the audio path must work with caption mode off (D2)
             sw.evaluate("""async ({url, targets, captionMode}) => {
                 const cur = (await chrome.storage.local.get('settings')).settings || {};
                 await chrome.storage.local.set({settings: {...cur, serverUrl: url, targetLanguages: targets, captionMode}});
@@ -752,8 +802,9 @@ def main() -> int:
             tab_id = sw.evaluate("async (u) => (await chrome.tabs.query({url: u}))[0].id", page_url)
             ctl = ctx.new_page()
             ctl.goto(f"chrome-extension://{ext_id}/popup/popup.html")
-            if args.path == "clear-memory":
-                ok = clear_memory_checks(ctx, sw, ext_id, args.port, summary)
+            if args.path in ("clear-memory", "cloud-keys"):
+                checks_for = clear_memory_checks if args.path == "clear-memory" else cloud_keys_checks
+                ok = checks_for(ctx, sw, ext_id, args.port, summary)
                 ctx.close()
                 srv.shutdown()
                 srv2.shutdown()

@@ -409,8 +409,8 @@
         <label>Refiner provider</label>
         <select id="refinerProvider">
           <option value="ollama">Local Ollama (needs Ollama + a small model, e.g. qwen3:4b)</option>
-          <option value="groq">Groq API (fast, key below)</option>
-          <option value="gemini">Gemini 2.5 Flash-Lite (key below)</option>
+          <option value="groq">Groq API (cloud: key and switch in the backend config)</option>
+          <option value="gemini">Gemini 2.5 Flash-Lite (cloud: key and switch in the backend config)</option>
         </select>
       </div>
       <div class="toggle-group">
@@ -444,9 +444,8 @@
       <div class="form-group">
         <label>Recognition engine</label>
         <select id="asrEngine">
-          <option value="auto">Auto (local streaming, cloud if configured)</option>
+          <option value="auto">Auto (local streaming)</option>
           <option value="sherpa-zipformer">Local streaming (Zipformer, CPU)</option>
-          <option value="cloud">Cloud streaming (Gladia / ElevenLabs key below)</option>
           <option value="whisper">Accurate but delayed (Whisper, GPU)</option>
         </select>
       </div>
@@ -486,19 +485,22 @@
       </div>
     </div>
 
-    <!-- Cloud keys -->
+    <!-- Cloud providers (D4) -->
     <div class="section">
-      <h2 class="section-title">Optional Cloud APIs</h2>
+      <h2 class="section-title">Cloud Providers</h2>
+      <div id="keyNotice" hidden style="padding: 10px; border-radius: 6px; background: rgba(255, 204, 0, 0.15); color: #ffcc00; margin-bottom: 12px;">
+        <span id="keyNoticeText"></span>
+        <button class="btn-secondary" id="dismissCloudNotice" style="margin-left: 8px;">OK</button>
+      </div>
       <p style="font-size: 12px; color: #999; margin-bottom: 12px;">
-        Keys are stored locally and sent only to your local backend, which calls the provider directly. Leave empty to stay fully local.
+        Cloud translation and refinement are off unless you turn them on in the backend: keys live in
+        <code>backend/.env</code> (for example <code>SUBTITLE_CLOUD__ENABLED=true</code> and
+        <code>SUBTITLE_CLOUD__GOOGLE_API_KEY=...</code>), never in this extension.
       </p>
-      <div class="form-group"><label>Gladia API key (streaming speech, en/zh/bn)</label><input type="password" id="gladiaKey" placeholder="gladia key"></div>
-      <div class="form-group"><label>ElevenLabs API key (streaming speech)</label><input type="password" id="elevenlabsKey" placeholder="elevenlabs key"></div>
-      <div class="form-group"><label>Google Cloud Translation API key</label><input type="password" id="googleKey" placeholder="google translate key"></div>
-      <div class="form-group"><label>Azure Translator key</label><input type="password" id="azureKey" placeholder="azure key"></div>
-      <div class="form-group"><label>Azure Translator region</label><input type="text" id="azureRegion" placeholder="e.g. eastus"></div>
-      <div class="form-group"><label>Groq API key (refiner)</label><input type="password" id="groqKey" placeholder="groq key"></div>
-      <div class="form-group"><label>Gemini API key (refiner)</label><input type="password" id="geminiKey" placeholder="gemini key"></div>
+      <div class="form-group">
+        <label>Where subtitle text goes</label>
+        <div id="cloudStatus" style="padding: 10px; border-radius: 6px; background: rgba(255, 255, 255, 0.05);">Backend not reachable</div>
+      </div>
     </div>
 
     <!-- Display Settings -->
@@ -706,6 +708,7 @@
   
   <script src="../obs.js"></script>
   <script src="../lib/caption-mode.js"></script>
+  <script src="../lib/settings-migration.js"></script>
   <script src="options.js"></script>
 </body>
 </html>

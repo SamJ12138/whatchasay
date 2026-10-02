@@ -111,3 +111,19 @@ its reads leave no trace either. `POST /tm/clear` deletes translations, correcti
 cache and the refiner context. The options page shows the policy as one sentence (from `/health/json` `privacy.tm`)
 and has a *Clear translation memory* button behind a confirmation. Tests: `backend/tests/test_memory_privacy.py`,
 browser paths `audio` (TM row count unchanged) and `clear-memory`.
+
+## 5. Cloud providers and keys (D4)
+
+Off by default: `settings.cloud.enabled` is the switch for every cloud provider (translation and the Groq / Gemini
+refiners). Keys are read only from the backend's config: environment variables or `backend/.env`
+(`SUBTITLE_ENV_FILE` overrides the path; the tests point it at a file that does not exist). Nothing over ws or HTTP
+can set a key any more: a `cloud_keys` field on `/ws` or `/ws/asr` config or `POST /config` is ignored and logged
+(`config` skip, `ignored: cloud_keys`, field names only). Keys travel in request headers (Google `X-Goog-Api-Key`,
+Gemini `x-goog-api-key`, Azure `Ocp-Apim-Subscription-Key`, Groq `Authorization`), never in a URL, because httpx
+copies the URL into its error messages and those reached logs and the client's error text. Cloud MT failures are
+`CloudMTError("<provider>: HTTP <status>" | "<provider>: <exception class>")`: no URL, no body, no key.
+`cloud_translator.cloud_receivers()` lists who will receive subtitle text; the backend logs it once at startup
+(`startup` / `component: cloud`) and `/health/json` `privacy.cloud` carries it to the options page. The extension:
+settings schema 4 deletes `cloudKeys` (`lib/settings-migration.js`) and leaves a notice that says where keys go now;
+no key fields remain. Tests: `backend/tests/test_cloud.py` (mocked httpx transport), `extension/tests/cloud-keys.test.js`,
+browser path `cloud-keys` (cloud off and on).

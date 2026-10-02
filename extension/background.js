@@ -13,6 +13,7 @@ import './content-scripts/ws-protocol.js';
 import './lib/websocket-client.js';
 import './lib/tab-connections.js';
 import './lib/caption-mode.js';
+import './lib/settings-migration.js';
 
 const obs = globalThis.STObs;
 obs.init({ context: 'background' });
@@ -43,7 +44,7 @@ function logRelayFail(stage, err, extra) {
   }
 }
 
-const SETTINGS_SCHEMA_VERSION = 3;
+const SETTINGS_SCHEMA_VERSION = 4; // 4: cloud keys removed from the extension (D4)
 
 const DEFAULT_SETTINGS = {
   enabled: true,
@@ -76,8 +77,7 @@ const DEFAULT_SETTINGS = {
   // Caption mode (D2): translate subtitles a page already shows. Off by default;
   // turning it on (Options) requests the caption sites as optional host permissions.
   captionMode: false,
-  // Optional cloud keys (stored locally only, sent to the local backend)
-  cloudKeys: {},
+  // No cloud keys here (D4): they live in the backend's config (backend/.env).
   schemaVersion: SETTINGS_SCHEMA_VERSION,
 };
 
@@ -102,6 +102,13 @@ function migrateSettings(settings) {
   }
   let migrated = { ...settings };
   let needsSave = false;
+
+  // v4 (D4): keys an older version stored are deleted; the options page says where they go now
+  const stripped = globalThis.STSettingsMigration.stripCloudKeys(migrated);
+  if (stripped.settings !== migrated) {
+    migrated = stripped.settings;
+    needsSave = true;
+  }
 
   if ('strictMeaning' in migrated && !('strictMeaningLock' in migrated)) {
     migrated.strictMeaningLock = migrated.strictMeaning;
@@ -314,7 +321,6 @@ async function startAsr(tabId, overrides = {}) {
       engine: settings.asrEngine || 'auto',
       translationEngine: settings.translationEngine || 'auto',
       serverUrl: asrUrlFrom(settings.serverUrl),
-      cloudKeys: settings.cloudKeys || {},
       sessionId,
     });
     if (!res || !res.ok) {
@@ -415,7 +421,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         broadcastToTabs({ type: 'SETTINGS_UPDATED', settings: merged });
         obs.setEndpointFromWs(merged.serverUrl);
         if (asrState.capturing) {
-          sendToOffscreen({ type: 'ASR_CONFIG', targetLangs: merged.targetLanguages, sourceLang: merged.asrSourceLang, translationEngine: merged.translationEngine, cloudKeys: merged.cloudKeys })
+          sendToOffscreen({ type: 'ASR_CONFIG', targetLangs: merged.targetLanguages, sourceLang: merged.asrSourceLang, translationEngine: merged.translationEngine })
             .catch((e) => obs.log('ext_relay', 'fail', { session_id: asrState.sessionId, error_type: 'process', error_message: e.message || String(e), msg_type: 'ASR_CONFIG' }));
         }
         sendResponse({ success: true, settings: merged });

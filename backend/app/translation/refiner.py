@@ -92,8 +92,9 @@ class OllamaRefiner:
 
 
 class GroqRefiner:
-    def __init__(self, api_key: str, model: str):
-        self.client = httpx.AsyncClient(base_url="https://api.groq.com/openai/v1", timeout=5.0, headers={"Authorization": f"Bearer {api_key}"})
+    def __init__(self, api_key: str, model: str, transport: Optional[httpx.AsyncBaseTransport] = None):
+        self.client = httpx.AsyncClient(base_url="https://api.groq.com/openai/v1", timeout=5.0, transport=transport,
+                                        headers={"Authorization": f"Bearer {api_key}"})
         self.model = model
 
     async def refine(self, items, langs, prev_cues=None):
@@ -111,9 +112,10 @@ class GroqRefiner:
 
 
 class GeminiRefiner:
-    def __init__(self, api_key: str, model: str):
-        self.client = httpx.AsyncClient(timeout=5.0)
-        self.url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+    def __init__(self, api_key: str, model: str, transport: Optional[httpx.AsyncBaseTransport] = None):
+        # key in a header, never in the URL (D4): httpx puts the URL into its error messages
+        self.client = httpx.AsyncClient(timeout=5.0, transport=transport, headers={"x-goog-api-key": api_key})
+        self.url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 
     async def refine(self, items, langs, prev_cues=None):
         resp = await self.client.post(
@@ -133,14 +135,20 @@ _refiner_key = None
 
 
 def get_refiner():
-    """Build (or rebuild, if settings changed) the configured refiner."""
+    """Build (or rebuild, if settings changed) the configured refiner. Groq and
+    Gemini are cloud providers: only with settings.cloud.enabled (D4)."""
     global _refiner, _refiner_key
     r = settings.refiner
-    key = (r.provider, r.groq_api_key, r.gemini_api_key, settings.ollama.model)
+    cloud = settings.cloud.enabled
+    key = (r.provider, r.groq_api_key, r.gemini_api_key, settings.ollama.model, cloud)
     if _refiner is not None and _refiner_key == key:
         return _refiner
     _refiner_key = key
-    if r.provider == "groq" and r.groq_api_key:
+    if r.provider in ("groq", "gemini") and not cloud:
+        obs.log("refine", "skip", error_type="input_invalid", provider=r.provider,
+                error_message=f"{r.provider} is a cloud provider and cloud is off (SUBTITLE_CLOUD__ENABLED)")
+        _refiner = None
+    elif r.provider == "groq" and r.groq_api_key:
         _refiner = GroqRefiner(r.groq_api_key, r.groq_model)
     elif r.provider == "gemini" and r.gemini_api_key:
         _refiner = GeminiRefiner(r.gemini_api_key, r.gemini_model)

@@ -19,6 +19,8 @@ _SCRATCH = Path(tempfile.mkdtemp(prefix="st-tests-"))
 os.environ.setdefault("SUBTITLE_DATA_DIR", str(_SCRATCH))
 os.environ.setdefault("SUBTITLE_CORRECTIONS_FILE", str(_SCRATCH / "corrections.jsonl"))
 os.environ.setdefault("SUBTITLE_CACHE__TM_DATABASE_PATH", str(_SCRATCH / "translation_memory.db"))
+# A developer's backend/.env (cloud keys, D4) must not leak into the tests.
+os.environ.setdefault("SUBTITLE_ENV_FILE", str(_SCRATCH / "no-such.env"))
 
 MODELS_DIR = ROOT / "data" / "models" / "asr"
 

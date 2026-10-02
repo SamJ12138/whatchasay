@@ -238,8 +238,12 @@ class ASRConfig(BaseSettings):
 
 
 class CloudConfig(BaseSettings):
-    """Optional cloud tier. Keys come from env or the extension config message."""
+    """Optional cloud tier (D4): off by default. Keys live only in the backend's
+    config: environment variables or backend/.env (SUBTITLE_CLOUD__ENABLED=true,
+    SUBTITLE_CLOUD__GOOGLE_API_KEY=...). The extension never stores or sends them;
+    they travel to the provider in request headers, never in a URL."""
 
+    enabled: bool = Field(default=False, description="master switch for every cloud provider (MT and refiner)")
     asr_provider: str = Field(default="gladia", description="gladia | elevenlabs")
     gladia_api_key: str = Field(default="")
     elevenlabs_api_key: str = Field(default="")
@@ -351,6 +355,16 @@ class Settings(BaseSettings):
     class Config:
         env_prefix = "SUBTITLE_"
         env_nested_delimiter = "__"
+        # cloud keys and other secrets (D4); relative to the working directory (backend/ for run.py)
+        env_file = os.environ.get("SUBTITLE_ENV_FILE", ".env")
+        env_file_encoding = "utf-8"
+
+    @model_validator(mode="after")
+    def _cloud_in_router(self):
+        """Cloud on (D4): the cloud engine joins the router order, last, unless placed already."""
+        if self.cloud.enabled and "cloud" not in self.mt.engine_order:
+            self.mt.engine_order.append("cloud")
+        return self
 
 
 settings = Settings()

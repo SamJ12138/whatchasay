@@ -80,12 +80,22 @@ Check `http://127.0.0.1:8765/health/json`: `mt_engines` lists `opus` (the defaul
 
 ## 5. Optional cloud providers
 
-Paste keys in the Options page (stored locally, sent only to the local backend):
+Off by default. Keys live only in the backend's config: create `backend/.env` (git-ignored) and restart the backend:
+
+```
+SUBTITLE_CLOUD__ENABLED=true
+SUBTITLE_CLOUD__GOOGLE_API_KEY=...          # or SUBTITLE_CLOUD__MT_PROVIDER=azure + SUBTITLE_CLOUD__AZURE_TRANSLATOR_KEY / _REGION
+SUBTITLE_REFINER__PROVIDER=groq             # optional refinement: groq or gemini
+SUBTITLE_REFINER__GROQ_API_KEY=...
+```
+
+The extension never stores or sends keys (an older version's keys are deleted from its storage, with a notice). The
+backend sends them in request headers, never in a URL, and logs at startup which provider will receive text; the
+Options page shows the same line.
 
 | Purpose | Provider | Notes |
 |---|---|---|
-| Streaming speech | Gladia (`gladia_api_key`) or ElevenLabs Scribe v2 (`elevenlabs_api_key`) | both support Bengali in real time |
-| Translation | Google Cloud Translation v2 key or Azure Translator key + region | ~100–300 ms, all pairs |
+| Translation | Google Cloud Translation v2 key or Azure Translator key + region | ~100–300 ms, all pairs; joins the router after OPUS-MT (`SUBTITLE_MT__ENGINE=cloud` puts it first) |
 | Refinement | Groq or Gemini key, then enable "Refine with AI" | async second pass, ≤0.8 s deadline; skipped for Bengali locally |
 | Local refinement | Ollama with a small model (`ollama pull qwen3:4b`) | optional; slower than the cloud options |
 

@@ -25,7 +25,8 @@ from .models import HealthResponse, SubtitleCue
 from .translation import get_pipeline, warmup_pipeline
 from .translation.pipeline import audio_session_policy
 from .cache import get_translation_memory, get_translation_cache
-from .websocket_handler import websocket_endpoint, manager, format_result, apply_cloud_keys
+from .websocket_handler import websocket_endpoint, manager, format_result, ignore_cloud_keys
+from .translation.cloud_translator import cloud_receivers
 from . import asr as asr_pkg
 from . import obs
 from .security import OriginGuard, allowed_origins, origin_allowed
@@ -45,6 +46,7 @@ async def lifespan(app: FastAPI):
     _start_time = time.time()
     logger.info("Starting subtitle translator backend (device=%s)...", settings.translation.device)
     obs.log("startup", "start", component="backend", device=settings.translation.device, log_file=str(obs.log_path()))
+    _log_cloud_receivers()
     _log_optional_deps()
     t0 = time.perf_counter()
     try:
@@ -75,6 +77,17 @@ async def lifespan(app: FastAPI):
     obs.log("shutdown", "start", component="backend", uptime_s=round(time.time() - _start_time, 1))
     tm = await get_translation_memory()
     await tm.close()
+
+
+def _log_cloud_receivers() -> None:
+    """Once per start (D4): which provider, if any, will receive subtitle text."""
+    receivers = cloud_receivers()
+    if receivers:
+        logger.warning("Cloud is ON: subtitle text will be sent to %s",
+                       "; ".join(f"{r['provider']} ({r['host']}) for {r['use']}" for r in receivers))
+    else:
+        logger.info("Cloud is off: no subtitle text leaves this machine")
+    obs.log("startup", "success", component="cloud", enabled=settings.cloud.enabled, receivers=receivers)
 
 
 # Not needed by the app any more (S1, S4): the v1 post-editor (ollama) and the
@@ -194,7 +207,7 @@ async def ws_asr(websocket: WebSocket):
                       little-endian float64 capture timestamp (seconds, from the
                       extension's audio clock) when the frame length is odd*2+8;
                       the simple form is raw PCM only.
-      text (JSON)   : {type:'config', source_lang, target_langs, engine, cloud_keys}
+      text (JSON)   : {type:'config', source_lang, target_langs, engine}   (cloud_keys: ignored, D4)
                       {type:'stop'}   -> flush pending audio, keep connection
                       {type:'ping'}
     Server -> client (JSON):
@@ -375,8 +388,8 @@ async def ws_asr(websocket: WebSocket):
                 if mtype == "config":
                     if "target_langs" in msg and msg["target_langs"]:
                         session.config.target_langs = list(msg["target_langs"])
-                    if "cloud_keys" in msg and msg["cloud_keys"]:
-                        apply_cloud_keys(msg["cloud_keys"])
+                    if "cloud_keys" in msg:
+                        ignore_cloud_keys(msg, path="/ws/asr")
                     if "source_lang" in msg and msg["source_lang"]:
                         for m in session.set_language(msg["source_lang"]):
                             _handle_events([m])
@@ -500,6 +513,7 @@ def privacy_summary() -> Dict[str, Any]:
             "persist_captions": settings.tm.persist_captions,
             "retention_days": settings.tm.retention_days,
         },
+        "cloud": {"enabled": settings.cloud.enabled, "receivers": cloud_receivers()},
     }
 
 
@@ -608,7 +622,7 @@ async def update_config(updates: Dict[str, Any]):
     if "batch_window_ms" in updates:
         settings.features.batch_window_ms = int(updates["batch_window_ms"])
     if "cloud_keys" in updates:
-        apply_cloud_keys(updates["cloud_keys"])
+        ignore_cloud_keys(updates, path="/config")
     return await get_config()
 
 

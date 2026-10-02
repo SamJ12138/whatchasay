@@ -9,8 +9,8 @@ A Chrome extension plus a local Python backend that puts translated subtitles on
 First-class languages: **English, Mandarin Chinese, Bengali** (speech and text, every direction).
 Translation-only support for Vietnamese, Japanese, Korean, Spanish, French, German, Russian, Portuguese, Italian.
 
-Everything runs on your machine by default. Cloud providers (Gladia/ElevenLabs speech, Google/Azure translation,
-Groq/Gemini refinement) are optional and only used if you paste an API key.
+Everything runs on your machine by default. Cloud providers (Google/Azure translation, Groq/Gemini refinement) are
+off unless enabled in the backend's config with a key (`backend/.env`, see docs/SETUP.md §5).
 
 ## What runs where
 
@@ -66,7 +66,7 @@ Measured on this machine: the source-language caption appears at ~0.4 s, the tra
 ## Configuration
 
 Extension **Options** page: target languages (incl. Bengali), live-caption language and engine, translation engine
-(auto / local backend / Chrome on-device), partial captions on/off, AI refinement, cloud API keys.
+(auto / local backend / Chrome on-device), partial captions on/off, AI refinement, caption mode, clear translation memory.
 
 Backend: `backend/app/config.py` or environment variables with prefix `SUBTITLE_` (nested with `__`), e.g.
 
@@ -74,7 +74,7 @@ Backend: `backend/app/config.py` or environment variables with prefix `SUBTITLE_
 SUBTITLE_ASR__LANGUAGES='["en","zh","bn"]'
 SUBTITLE_MT__ENGINE=hymt                              # optional GPU engine (default: opus); scripts/download_models.py --hymt
 SUBTITLE_REFINER__ENABLED=true SUBTITLE_REFINER__PROVIDER=groq SUBTITLE_REFINER__GROQ_API_KEY=...
-SUBTITLE_CLOUD__GOOGLE_API_KEY=...                    # cloud translation tier
+SUBTITLE_CLOUD__ENABLED=true SUBTITLE_CLOUD__GOOGLE_API_KEY=...   # cloud translation tier (backend/.env)
 ```
 
 Useful URLs while the backend runs: `/health`, `/health/json`, `/debug` (test translation and a microphone live-caption
@@ -113,8 +113,9 @@ venv\Scripts\python scripts\e2e_ws_asr.py data\models\asr\sherpa-onnx-streaming-
 
 ## Privacy
 
-Audio and text stay on your machine unless you add a cloud API key. Keys are stored in the extension's local storage and
-sent only to the local backend. Corrections you make are stored in `backend/data/translation_memory.db`.
+Audio and text stay on your machine unless you enable a cloud provider in the backend's config; keys never enter the
+extension. Live-caption text is kept in memory for the session only; corrections and caption-mode translations are
+stored in `backend/data/translation_memory.db` (machine rows expire after 30 days unused; Options can clear it).
 
 ## Acknowledgments
 

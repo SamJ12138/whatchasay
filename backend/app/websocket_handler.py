@@ -464,7 +464,9 @@ class WebSocketHandler:
         """Per-connection config (W7): nothing here changes the server-wide
         defaults except cloud keys (engines are shared; product scope)."""
         try:
-            update = ConfigUpdate(**payload)
+            if "cloud_keys" in payload:
+                ignore_cloud_keys(payload, path="/ws")
+            update = ConfigUpdate(**{k: v for k, v in payload.items() if k != "cloud_keys"})
             info = manager.connection_info.get(self.conn_id)
             if info is None:
                 raise HandlerError("connection is gone", "process")
@@ -493,8 +495,6 @@ class WebSocketHandler:
                 chars.update(update.max_chars_by_lang)
             if chars:
                 own["max_chars_by_lang"] = chars
-            if update.cloud_keys:
-                apply_cloud_keys(update.cloud_keys)
 
             after = session_config(self.conn_id)
             changed = sorted(k for k in after if after[k] != before[k])
@@ -541,37 +541,13 @@ class WebSocketHandler:
                                                       {"error": error, "error_type": error_type}))
 
 
-def apply_cloud_keys(keys: Dict[str, str]) -> None:
-    """Apply API keys sent by the extension; rebuild engines that depend on them."""
-    c, r = settings.cloud, settings.refiner
-    changed_mt = False
-    for k, v in (keys or {}).items():
-        v = (v or "").strip()
-        if k in ("google_api_key", "azure_translator_key", "azure_translator_region", "gladia_api_key", "elevenlabs_api_key") and getattr(c, k, None) != v:
-            setattr(c, k, v)
-            changed_mt = changed_mt or k in ("google_api_key", "azure_translator_key", "azure_translator_region")
-        elif k in ("groq_api_key", "gemini_api_key"):
-            setattr(r, k, v)
-        elif k == "refiner_provider" and v:
-            r.provider = v
-        elif k == "mt_provider" and v:
-            c.mt_provider = v
-            changed_mt = True
-        elif k == "asr_provider" and v:
-            c.asr_provider = v
-    if keys:
-        # names only; values never reach the log
-        obs.log("config", "success", scope="global", key="cloud_keys", names=sorted(keys.keys()), rebuild_cloud_mt=changed_mt)
-    if changed_mt:
-        from .translation.base_translator import get_base_translator
-        from .translation.cloud_translator import make_cloud_engine
-
-        translator = get_base_translator()
-        eng = make_cloud_engine()
-        if eng is not None:
-            translator.add_engine("cloud", eng)
-        else:
-            translator.engines.pop("cloud", None)
+def ignore_cloud_keys(message: Dict[str, Any], path: str) -> None:
+    """Keys are never accepted over ws or HTTP (D4): they live in the backend config.
+    An older extension may still send them; log that (field names only, never values)."""
+    keys = message.get("cloud_keys") or {}
+    obs.log("config", "skip", path=path, ignored="cloud_keys",
+            names=sorted(keys.keys()) if isinstance(keys, dict) else None, error_type="input_invalid",
+            error_message="cloud keys are not accepted from the extension; set them in backend/.env")
 
 
 async def websocket_endpoint(websocket: WebSocket) -> None:

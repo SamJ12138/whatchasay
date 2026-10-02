@@ -11,7 +11,7 @@ const obs = window.STObs;
 obs.init({ context: 'options', sessionId: obs.newSessionId('opt') });
 
 // Schema version for migration
-const SETTINGS_SCHEMA_VERSION = 3;
+const SETTINGS_SCHEMA_VERSION = 4; // 4: cloud keys removed from the extension (D4)
 
 // Language display names for UI
 const LANGUAGE_NAMES = {
@@ -83,7 +83,6 @@ const DEFAULT_SETTINGS = {
   translationEngine: 'auto',
   showPartials: true,
   captionMode: false,         // D2: opt-in; turning it on requests the caption sites
-  cloudKeys: {},
   // Subtitle limits
   maxLines: 2,
   maxCharsLatin: 42,
@@ -112,13 +111,10 @@ const elements = {
   captionMode: document.getElementById('captionMode'),
   captionModeExplanation: document.getElementById('captionModeExplanation'),
   captionModeSites: document.getElementById('captionModeSites'),
-  gladiaKey: document.getElementById('gladiaKey'),
-  elevenlabsKey: document.getElementById('elevenlabsKey'),
-  googleKey: document.getElementById('googleKey'),
-  azureKey: document.getElementById('azureKey'),
-  azureRegion: document.getElementById('azureRegion'),
-  groqKey: document.getElementById('groqKey'),
-  geminiKey: document.getElementById('geminiKey'),
+  cloudStatus: document.getElementById('cloudStatus'),
+  keyNotice: document.getElementById('keyNotice'),
+  keyNoticeText: document.getElementById('keyNoticeText'),
+  dismissCloudNotice: document.getElementById('dismissCloudNotice'),
   strictMeaningLock: document.getElementById('strictMeaning'), // DOM ID is strictMeaning but we save as strictMeaningLock
   fontSize: document.getElementById('fontSize'),
   fontSizeValue: document.getElementById('fontSizeValue'),
@@ -167,6 +163,13 @@ function showStatus(message, type = 'success') {
 function migrateSettings(settings) {
   let migrated = { ...settings };
   let needsSave = false;
+
+  // v4 (D4): keys an older version stored are deleted (the notice below says where they go now)
+  const stripped = window.STSettingsMigration.stripCloudKeys(migrated);
+  if (stripped.settings !== migrated) {
+    migrated = stripped.settings;
+    needsSave = true;
+  }
 
   // Migration: strictMeaning -> strictMeaningLock
   if ('strictMeaning' in migrated && !('strictMeaningLock' in migrated)) {
@@ -244,14 +247,7 @@ async function loadSettings() {
     if (elements.translationEngine) elements.translationEngine.value = settings.translationEngine || 'auto';
     if (elements.showPartials) elements.showPartials.checked = settings.showPartials !== false;
     if (elements.captionMode) elements.captionMode.checked = settings.captionMode === true;
-    const keys = settings.cloudKeys || {};
-    if (elements.gladiaKey) elements.gladiaKey.value = keys.gladia_api_key || '';
-    if (elements.elevenlabsKey) elements.elevenlabsKey.value = keys.elevenlabs_api_key || '';
-    if (elements.googleKey) elements.googleKey.value = keys.google_api_key || '';
-    if (elements.azureKey) elements.azureKey.value = keys.azure_translator_key || '';
-    if (elements.azureRegion) elements.azureRegion.value = keys.azure_translator_region || '';
-    if (elements.groqKey) elements.groqKey.value = keys.groq_api_key || '';
-    if (elements.geminiKey) elements.geminiKey.value = keys.gemini_api_key || '';
+    showKeyNotice(settings.keysRemovedNotice);
     if (elements.strictMeaningLock) elements.strictMeaningLock.checked = settings.strictMeaningLock !== false;
     if (elements.fontSize) {
       elements.fontSize.value = settings.fontSize || 20;
@@ -334,17 +330,6 @@ async function saveSettings() {
       asrEngine: elements.asrEngine?.value || 'auto',
       translationEngine: elements.translationEngine?.value || 'auto',
       showPartials: elements.showPartials?.checked !== false,
-      cloudKeys: {
-        gladia_api_key: elements.gladiaKey?.value?.trim() || '',
-        elevenlabs_api_key: elements.elevenlabsKey?.value?.trim() || '',
-        google_api_key: elements.googleKey?.value?.trim() || '',
-        azure_translator_key: elements.azureKey?.value?.trim() || '',
-        azure_translator_region: elements.azureRegion?.value?.trim() || '',
-        groq_api_key: elements.groqKey?.value?.trim() || '',
-        gemini_api_key: elements.geminiKey?.value?.trim() || '',
-        refiner_provider: elements.refinerProvider?.value || 'ollama',
-        asr_provider: elements.gladiaKey?.value?.trim() ? 'gladia' : (elements.elevenlabsKey?.value?.trim() ? 'elevenlabs' : ''),
-      },
       // Subtitle limits
       maxLines: parseInt(elements.maxLines?.value) || 2,
       maxCharsLatin: parseInt(elements.maxCharsLatin?.value) || 42,
@@ -528,6 +513,7 @@ async function checkConnection(host, port) {
     if (response.ok) {
       const data = await response.json();
       showStorageNote(data.privacy && data.privacy.tm);
+      showCloudStatus(data.privacy && data.privacy.cloud);
       if (elements.connectionStatus) {
         const mt = Object.keys(data.mt_engines || {}).join(', ') || 'none';
         const asrLangs = (data.asr && data.asr.languages) ? data.asr.languages.join('/') : 'n/a';
@@ -639,6 +625,36 @@ function showStorageNote(tm) {
 }
 
 /**
+ * Cloud providers (D4): which provider, if any, receives subtitle text, as the
+ * backend reports it in /health/json `privacy.cloud` (the same list its startup log line names).
+ */
+function showCloudStatus(cloud) {
+  if (!elements.cloudStatus) return;
+  const receivers = (cloud && cloud.receivers) || [];
+  elements.cloudStatus.textContent = receivers.length
+    ? 'Subtitle text is sent to: ' + receivers.map((r) => `${r.provider} (${r.host}) for ${r.use}`).join('; ')
+    : 'Cloud is off: no subtitle text leaves this computer.';
+}
+
+/** Older versions kept API keys here; the migration deleted them and left this notice. */
+function showKeyNotice(removed) {
+  if (!elements.keyNotice) return;
+  elements.keyNotice.hidden = !(removed && removed.count);
+  if (removed && removed.count && elements.keyNoticeText) {
+    elements.keyNoticeText.textContent = `${removed.count} cloud API key(s) were removed from the extension. ` +
+      window.STSettingsMigration.WHERE;
+  }
+}
+
+async function dismissCloudNotice() {
+  const result = await chrome.storage.local.get('settings');
+  const settings = { ...(result.settings || {}) };
+  delete settings.keysRemovedNotice;
+  await chrome.storage.local.set({ settings });
+  showKeyNotice(null);
+}
+
+/**
  * Clear the backend's translation memory (POST /tm/clear), after a confirmation.
  */
 async function clearMemory() {
@@ -702,6 +718,10 @@ function initEventListeners() {
   // Clear cache
   if (elements.clearCache) {
     elements.clearCache.addEventListener('click', clearCache);
+  }
+
+  if (elements.dismissCloudNotice) {
+    elements.dismissCloudNotice.addEventListener('click', dismissCloudNotice);
   }
 
   // Clear the persistent translation memory (D3)

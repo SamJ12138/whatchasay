@@ -22,7 +22,7 @@ extension (`.db`, `.zip`, `.gguf`, `.onnx`, `.bin`, `.safetensors`, `.exe`, `.dl
 | `backend/logs/` (incl. `logs/pytest/`) | grows per run | observability run logs `run_<run_id>.jsonl` | generated at runtime by `app/obs.py` |
 | `../backup-2026-09-11-pre-redesign.zip` | 259 KB | v1 source backup; outside the repo folder; contains `.pyc` with home-folder paths | not distributed |
 | `*.wav` | inside the model folders | upstream sample audio used by `scripts/e2e_ws_asr.py` | come with the ASR model archives above (`test_wavs/`) |
-| `.env`, `*.pem`, `*.key` | none exist | secrets | user-provided; API keys are entered in the extension Options page instead |
+| `.env`, `*.pem`, `*.key` | none exist | secrets | user-provided: cloud API keys go in `backend/.env` (`SUBTITLE_CLOUD__*`, `SUBTITLE_REFINER__*`; Phase 2b D4), never in the extension |
 
 The empty directory literally named `extension/{content-scripts,popup,options,icons}` is not tracked (git ignores
 empty directories).
