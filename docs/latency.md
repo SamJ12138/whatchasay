@@ -208,3 +208,61 @@ measured without it; the before / after table below uses it on both sides.
 English speech is not confirmed earlier (3.9-4.2 s as before): its text is on screen from 0.3-0.5 s, dimmed, and
 undimmed in place.
 
+## Before and after (2026-10-02)
+
+Three browser runs per clip on each side, the same harness and settings on both: `line_latency_table.py`, spoken
+language Auto-detect, one target (English; Chinese for English speech), translation on the CPU, the tab's audio
+output already running when the clip starts (`--prime-audio`). **Before** is the code of commit `0d5e875` (the
+measurement, nothing else changed), run from an export of that commit with `--backend-dir` / `--extension`.
+**After** is the code of the commit that adds this table. Each cell is the range over the three runs; a run's own
+numbers are in its run log (`backend/logs/run_<run_id>.jsonl`, `failure_report.py` section 6).
+
+| Clip | | run_ids | Lines | First display p50 / max (s) | First translated text p50 / max (s) | Final translation p50 / max (s) | First confirmed subtitle (s) | Segments, run 1 (s) | Translate calls per s | Translate p50 / p95 (ms) | Non-append revisions per line |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| English sample | before | `20261002T170809-9e62b1`, `20261002T170843-cd7a43`, `20261002T170917-027089` | 1 | 0.47-0.48 / 0.47-0.48 | 6.60-6.62 / 6.60-6.62 | 0.88-0.94 / 0.88-0.94 | 3.90-4.02 | 6.4 | 0.15 | 61-65 / 61-65 | 0 (one translation per line) |
+| English sample | after | `20261002T171744-200726`, `20261002T171818-4a7764`, `20261002T171853-faffb7` | 1 | 0.46-0.48 / 0.46-0.48 | 2.63-2.65 / 2.63-2.65 | 0.88-0.89 / 0.88-0.89 | 3.25-3.28 | 6.4 | 0.60 | 34-38 / 58-62 | 3.00 |
+| Mandarin sample | before | `20261002T170952-c56411`, `20261002T171028-feb87f`, `20261002T171104-564457` | 4 | 0.30 / 5.17-5.28 | 1.64 / 5.25-5.37 | 0.79-0.80 / 1.54-1.65 | 6.04-6.15 | 5.88, 1.6, 2.24, 1.6 | 0.40 | 18-20 / 42-48 | 0 (one translation per line) |
+| Mandarin sample | after | `20261002T171929-bc8de6`, `20261002T172000-a16b08`, `20261002T172034-42665c` | 5 | 0.42 / 1.66-1.76 | 1.40-1.72 / 1.90-2.29 | 0.84 / 0.88-0.92 | 2.52-2.63 | 2.24, 0.96, 1.6, 2.24, 1.6 | 0.70-0.90 | 15-17 / 28-33 | 0.00-0.20 |
+| Bengali sample | before | `20261002T171140-3e837c`, `20261002T171216-37630f`, `20261002T171251-10dffc` | 1 | 3.85-3.92 / 3.85-3.92 | 7.85-7.87 / 7.85-7.87 | 1.09-1.10 / 1.09-1.10 | 4.10-4.18 | 8.48 | 0.14 | 69-78 / 69-78 | 0 (one translation per line) |
+| Bengali sample | after | `20261002T172108-b7cf8d`, `20261002T172142-44fe59`, `20261002T172216-126b88` | 2 | 0.62 / 2.12-2.64 | 2.72-3.29 / 3.84-3.86 | 1.06-1.08 / 2.95-2.96 | 2.35-2.88 | 4.44, 3.84 | 0.72 | 24-27 / 49-51 | 1.00 |
+| Live clip (Bengali film scene) | before | `20261002T171325-0c2002`, `20261002T171414-a14a6b`, `20261002T171504-b67c48` | 2-3 | 0.62-0.75 / 5.62-5.75 | 10.34-10.44 / 10.44-10.45 | 0.26-0.89 / 0.44-1.29 | 5.26-5.36 | 10.4, 1.28, 10.24 | 0.10-0.15 | 91-103 / 100-114 | 0 (one translation per line) |
+| Live clip (Bengali film scene) | after | `20261002T172251-c2cd00`, `20261002T172334-5a744f`, `20261002T172417-59775b` | 6 | 0.70-0.75 / 2.51-2.56 | 1.99-2.04 / 2.54-2.58 | 1.29-1.33 / 1.35-1.38 | 2.13-2.17 | 2.08, 2.8, 5.04, 2.12, 2.84, 4.6 | 0.80 | 23-28 / 51-67 | 1.50 |
+
+Read with the definitions at the top: "first display" and "first translated text" count from the audio of the
+line's first word, "final translation" from the audio of its last word, "first confirmed subtitle" from the start
+of playback.
+
+**What moved.**
+
+- **First translated text**: 6.6 -> 2.6 s (English sample), 7.9 -> 2.7-3.3 s (Bengali sample), 10.3-10.4 -> 2.0 s
+  (live clip), and on the Mandarin sample the slowest line 5.3 -> 1.9-2.3 s. This is the draft translation of the
+  line's stable prefix (Batch 2) on lines that are no longer than 6 s (Batch 1). It is a draft: on the live clip it
+  is rewritten 1.5 times per line on average before the final translation stands (budget: under 2); on the one
+  long English sentence 3 times.
+- **First confirmed-language subtitle** (Auto-detect): 5.3 -> 2.1-2.2 s on the live clip, 6.0-6.2 -> 2.5-2.6 s
+  (Mandarin sample), 4.1-4.2 -> 2.4-2.9 s (Bengali sample), and 3.9-4.0 -> 3.3 s for English, which is still
+  confirmed on the full window only (the faster call and the model loaded at startup are the gain there).
+- **Lines**: the live clip's 2-3 run-on lines (10.4 s and 10.2 s) are 6 lines of 2.1-5.0 s; the Bengali sample's
+  8.5 s sentence is 2 lines.
+- **First display** of the source text did not change where it was already at the recognizer's chunk lag
+  (0.3-0.75 s). The "max" column was the first line waiting for language ID (3.9-5.7 s on Mandarin and Bengali
+  speech); it is 1.7-2.6 s now.
+- **Final translation after the last word** is unchanged on the samples (0.8-1.1 s) and 1.3 s on the live clip,
+  whose "before" lines were closed by the 10 s cut, not by a pause. One line of the Bengali sample gets its final
+  3.0 s after its last word: it is the first half of a sentence cut by the 6 s limit, and that cut is only made
+  once the sentence has run past 6 s.
+- **Translation calls** rose from 0.10-0.40 to 0.60-0.90 per second of clip. Translate latency on the CPU with
+  drafts running: p50 15-38 ms, p95 28-67 ms (bound: 150 ms; the highest p95 in the tuning runs was 130 ms).
+
+**Where quality dropped.** Shorter lines are easier on the translator in dialogue (live clip, "এর চেয়ে বড় করতে গেলে
+অনেক দাম পড়ে যায়" -> "It's too expensive to raise it." in every run, where "before" it sat inside a 10 s run-on that
+came out as "It doesn't matter if you want to raise a lot of prices for what has been read day by day, but the next
+time I have ten thousand."). Two things got worse, both Bengali to English:
+
+| | Before | After |
+|---|---|---|
+| A sentence longer than 6 s is cut at its widest pause and the halves are translated separately (Bengali sample, `20261002T171140-3e837c` / `20261002T172108-b7cf8d`) | "Meanwhile, Mr. Tugkol Orbin Kejriwal and his team are tweeting in an hour-to-hour for credit." | "Meanwhile, Mr. Tugkol Orbin Kejriwal and his team" / "Tweeting at your hour for credit": the second half has lost its subject |
+| A short misrecognised line now stands alone, and OPUS-MT invents a sentence for it (live clip, first line, `20261002T172251-c2cd00`; recognised as "কাজ বুক দেখান্ত"; it is line 1 of the live test, "Show me a rajbhog.") | part of the 10 s run-on: "Today the book doesn't have to be larger than it is today, …" | "We were married in July 1955." (2 of 3 runs; "I'll see you today." in the third) |
+
+English to Chinese and Mandarin to English: the final translations of the sample lines are the same before and
+after (English sample: identical; Mandarin sample: the first line is no longer run together with the next word).

@@ -134,3 +134,26 @@ def test_using_it_states_the_correction_limitation_in_one_line_and_the_case_stay
     for real in ("রাজভোগ", "রাজবুক", "A Royal Book Shower", "Show me a rajbhog.", "was not fixed"):
         assert real in doc, real
 
+
+
+def test_how_it_works_describes_the_streaming_design_with_the_latency_table():
+    """Latency Batch 4: one paragraph on how a line reaches the screen while it is still being
+    spoken, and the per-line latency table, before and after, with the details in docs/latency.md."""
+    how = README[README.index("## How it works"):README.index("## Configuration")]
+    flat = " ".join(how.split())
+    for part in ("partial", "stable", "draft", "in progress", "docs/latency.md", "First translated text",
+                 "First confirmed-language subtitle", "non-append"):
+        assert part in flat, part
+    live = [line for line in how.splitlines() if line.startswith("| Live clip")]
+    assert len(live) == 1 and live[0].count("->") >= 2, live     # before -> after, per column
+    assert "20261002T110447-172f05" not in README                # the pre-streaming table is gone
+    assert "sentence end after 0.6 s of silence" not in README
+
+
+def test_latency_doc_has_the_baseline_the_before_after_tables_and_the_flicker_numbers():
+    doc = (REPO / "docs" / "latency.md").read_text(encoding="utf-8")
+    for part in ("first_display_ms", "final_ms", "## Baseline", "## Before and after", "Non-append revisions per line",
+                 "Translate calls", "Where quality dropped", "--prime-audio"):
+        assert part in doc, part
+    after = doc[doc.index("## Before and after"):]
+    assert len(set(re.findall(r"`(\d{8}T\d{6}-[0-9a-f]{6})`", after))) >= 24      # 4 clips x 3 runs x before / after

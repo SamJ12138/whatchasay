@@ -13,17 +13,19 @@ you decide it should.
 
 ![Demo: Bengali dialogue in a film scene on YouTube is captioned live and translated into English over the video](docs/demo-youtube.gif)
 
-*9 seconds of "10,000 রাজভোগের Order | Ora Char Jon | Movie Scene | Prosenjit | Abhishek Chatterjee | Debashree"
-from the YouTube channel Bengali Movies with English Subtitle
-(<https://www.youtube.com/watch?v=-tpVpbIxFmI>), run on CPU: Bengali speech detected and captioned live, each
-sentence translated into English above it. Recorded by the browser harness during a live test
-(`docs/live-test-youtube.md`), not by hand; the translations are as they came out, mistakes included.*
+*The first 9.5 seconds of "10,000 রাজভোগের Order | Ora Char Jon | Movie Scene | Prosenjit | Abhishek Chatterjee |
+Debashree" from the YouTube channel Bengali Movies with English Subtitle
+(<https://www.youtube.com/watch?v=-tpVpbIxFmI>), run on CPU: Bengali is detected 1.6 seconds in, the words appear
+as they are spoken (the grey line ending in …), and each line is translated into English above them. Recorded by
+the browser harness during a live test (`docs/live-test-youtube.md`, run `20261002T172649-3fac9e`), not by hand;
+the translations are as they came out, mistakes included.*
 
 It is for videos and live streams that have no subtitles, lectures, and meetings held in a browser tab in a language
 you do not speak. A Chrome extension captures the tab's sound, a local Python program turns English, Mandarin or
-Bengali speech into text and translates it, and the extension draws both lines over the video, usually under a
-second after each sentence ends. The extension only talks to the backend on 127.0.0.1, and nothing is sent to a
-cloud service unless you turn a cloud provider on yourself (it is off by default).
+Bengali speech into text and translates it, and the extension draws both over the video: the words while they are
+being spoken, a first translation about two seconds into a sentence, the final one about a second after it ends.
+The extension only talks to the backend on 127.0.0.1, and nothing is sent to a cloud service unless you turn a
+cloud provider on yourself (it is off by default).
 
 ## Requirements
 
@@ -110,11 +112,13 @@ The extension asks for no site access when it is installed.
    change all your data on all websites"); click **Allow**. The extension captures this tab's audio only, and you
    keep hearing it.
 
-What you will see: the words in italics on a grey band while a sentence is being spoken, then the finished sentence with
-casing and punctuation, with its translation above it in yellow. The default target languages are English and
-Chinese; a language equal to the spoken one is skipped. With *Auto-detect*, what is recognised before the language
-is known is a guess: it is drawn dimmed above a small *Detecting language…* label, and the first line at full
-brightness is in the detected language.
+What you will see: the words in italics on a grey band, ending in "…", while a sentence is being spoken; after a
+second or two a draft translation in italics above them, which may be rewritten as the sentence grows; then the
+finished sentence with casing and punctuation, with its final translation above it. A line ends when the speaker
+pauses, and after 6 seconds at the latest. The default target languages are English and Chinese; a language equal
+to the spoken one is skipped. With *Auto-detect*, what is recognised before the language is known is a guess: it is
+drawn dimmed above a small *Detecting language…* label, and the first line at full brightness is in the detected
+language.
 
 ![Live captions on a NASA ScienceCasts video: the translation into Chinese above the English sentence, the next sentence in progress below](docs/screenshot.png)
 
@@ -217,12 +221,13 @@ CPU of a laptop (Intel i9-13900H), no GPU and no cloud. Recorded by the browser 
                                                     │ Zipformer streaming ASR (sherpa-onnx, CPU)     │
                                                     │   en / zh / bn, spoken-language ID (whisper-   │
                                                     │   tiny), partial words as you hear them        │
-                                                    │ sentence end after 0.6 s of silence            │
+                                                    │ a line ends at a pause, at 6 s at the latest   │
                                                     │ English: casing + punctuation (CNN-BiLSTM)     │
                                                     │ OPUS-MT (CTranslate2 int8, CPU) per target,    │
-                                                    │   via English when there is no direct model    │
+                                                    │   via English when there is no direct model:   │
+                                                    │   drafts of the open line, then the final      │
                                                     └────────────────────────┬───────────────────────┘
- overlay on the video  <── content script <── service worker <──partial / final / translation──┘
+ overlay on the video  <── content script <── service worker <──partial / draft / final / translation──┘
 ```
 
 Page subtitles (caption mode) take the other way in: the content script reads the cue, the service worker sends it
@@ -230,21 +235,36 @@ to the backend's `/ws`, and the translation comes back the same way. Details, an
 break (service-worker lifetime, site access, what is stored, cloud keys): `docs/architecture-notes.md`. Every stage
 and its failure modes: `docs/pipeline-stages.md`.
 
-**Measured latency** (run `20261002T110447-172f05`, Windows 11, i9-13900H, everything on CPU; clips streamed at
-real-time pace by `backend/scripts/latency_report.py`):
+**Streaming.** Nothing waits for the end of a sentence except the final translation. The recognizer decodes in
+chunks (0.32 s for English and Mandarin, 0.64 s for Bengali) and every partial result goes to the overlay, which
+draws the growing line as a line in progress. A line ends when the recognizer hears 0.6 s of silence, at a pause
+it missed (a gap of 0.5 s between two words, seen once the next word arrives), or after 6 seconds (then at its
+widest pause), so a translation never has to wait for a ten-second run of dialogue. While a line is open, the words that were the
+same in three partial results in a row count as stable; that stable part is translated (at most once every 1.5 s)
+and shown as a draft, and the final translation replaces it when the line ends. With *Auto-detect*, language ID
+first runs after one second of speech and switches the recognizer as soon as two attempts in a row agree on
+Mandarin or Bengali; the audio heard until then is replayed into the new recognizer.
 
-| Clip | Speech | Sentences | Partial caption after its audio | Final after the last word | Translation after the final |
+**Measured latency**, per subtitle line, before and after the streaming work (Windows 11, i9-13900H, everything on
+the CPU; three runs per clip in Chromium with the real extension, Auto-detect, one target language; "before" is
+the same measurement on the earlier code). Definitions, every run with its `run_id`, the tuning and what got
+worse: `docs/latency.md`.
+
+| Clip | First source text after the line's first word | First translated text after the line's first word | Final translation after the line's last word | First confirmed-language subtitle after the start | Draft rewrites (non-append revisions) per line |
 |---|---|---|---|---|---|
-| NASA clip (this README's screenshot) | English, 32 s | 5 | under 0.01 s | 0.63 s | zh 44 ms, bn 100 ms |
-| LibriSpeech sample (en model `test_wavs/1.wav`) | English, 18 s | 2 | under 0.01 s | 0.46 s | zh 51 ms, bn 121 ms |
-| Mandarin sample (zh model `test_wavs/1.wav`) | Mandarin, 7 s | 2 | under 0.01 s | 0.63 s | en 27 ms, bn 82 ms |
-| Code-switched sample (bilingual model `test_wavs/3.wav`) | Mandarin + English, 10 s | 1 | under 0.01 s | 0.62 s | en 35 ms, bn 85 ms |
-| Bengali sample (bn model `test_wavs/1.wav`) | Bengali, 9 s | 1 | under 0.01 s | 0.62 s | en 51 ms, zh 142 ms |
+| English sample (6.6 s, one sentence) | 0.5 s | 6.6 -> 2.6 s | 0.9 s | 3.9-4.0 -> 3.3 s | 3 |
+| Mandarin sample (10 s, slow, mixed with English) | 0.3 -> 0.4 s | 1.6 -> 1.4-1.7 s (slowest line 5.3 -> 1.9-2.3 s) | 0.8 s | 6.0-6.2 -> 2.5-2.6 s | 0-0.2 |
+| Bengali sample (7 s, one sentence) | 3.9 -> 0.6 s | 7.9 -> 2.7-3.3 s | 1.1 s | 4.1-4.2 -> 2.4-2.9 s | 1 |
+| Live clip (20 s of Bengali film dialogue) | 0.6-0.75 -> 0.7-0.75 s | 10.3-10.4 -> 2.0 s | 0.3-0.9 -> 1.3 s | 5.3-5.4 -> 2.1-2.2 s | 1.5 |
 
-"Final after the last word" is mostly the 0.6 s of silence the recognizer waits for before it closes a sentence.
-Words also reach a partial caption with the recognizer's fixed look-ahead of a few hundred milliseconds, which this
-table does not measure. The backend's run log for that run (`backend/logs/run_<run_id>.jsonl`, per-stage timings)
-gives: speech recognition 2.5 ms per 40 ms frame, English punctuation 4.6 ms, translation 45 ms (p50).
+Read it with these in mind. The source text was never late: partial results reached the overlay before this work
+too; what waited for the whole sentence was the translation. The first translated text is now a draft, and a draft
+is usually rewritten, not extended, when the next one arrives (the translation of a longer prefix is a different
+sentence, most of all from verb-final Bengali): the last column counts those rewrites, the final translation
+included, and the settings keep it under two per line on the live clip. The live clip's lines used to be closed by
+a 10-second cut, which is why its final translation looks slower now: it waits for a real pause. Translation calls
+rose from 0.1-0.4 to 0.6-0.9 per second of speech; one call takes 15-38 ms (p50) and 28-67 ms (p95) on the CPU.
+Speech recognition takes about 2 ms per 40 ms frame and one language-ID attempt 15-45 ms.
 
 Two findings from building it:
 
@@ -440,6 +460,8 @@ driven over raw CDP because Playwright keeps workers alive), `permissions`, `cle
 `--start-backend` to start a backend with scratch data. `--video FILE --record DIR --screenshot FILE` produce the
 demo and the screenshot in this README. `--url URL --targets auto --lines 5` live-captions a real page's video
 (`docs/live-test-youtube.md`); it stops with exit code 2 on a consent wall or bot check instead of getting past it.
+`--prime-audio` starts the tab's audio output before the clip plays, as over a video that is already playing
+(without it Chrome drops the clip's first few hundred milliseconds from the capture).
 `--correct --correct-text TEXT` corrects the first translated line with Alt+E and reports whether the page's video
 was disturbed by the typing; `--tm FILE` keeps the scratch translation memory between two runs (never a file under
 `backend/data`).
@@ -448,11 +470,14 @@ was disturbed by the typing; `--tm FILE` keeps the scratch translation memory be
 `backend/logs/run_<run_id>.jsonl` (stage, event, duration, error type; the extension's events arrive through
 `POST /obs`; subtitle text is never logged, only lengths). `/health/json` names the current `run_id`.
 `venv\Scripts\python scripts\failure_report.py logs\run_<run_id>.jsonl` summarises a run: failures by stage and
-error type, per-stage p50/p95, per-session totals. The stage names are in `docs/pipeline-stages.md`; known swallowed
-and degraded paths are in `docs/observations.md`.
+error type, per-stage p50/p95, per-session totals, and per subtitle line the latency the viewer felt and how often
+its draft translation was rewritten (`docs/latency.md`). The stage names are in `docs/pipeline-stages.md`; known
+swallowed and degraded paths are in `docs/observations.md`.
 
 **Other scripts:** `backend/scripts/make_demo_gif.py` (the demo GIF and screenshot above, from a recorded live
-run), `backend/scripts/latency_report.py` (the latency table above), `backend/scripts/opus_quality.py`
+run), `backend/scripts/line_latency_table.py` (the latency table above: N browser runs per clip;
+`--backend-dir` / `--extension` measure another checkout's code the same way), `backend/scripts/latency_report.py`
+(lags of a clip streamed straight to the backend, no browser), `backend/scripts/opus_quality.py`
 (OPUS-MT output and speed over the six en/zh/bn directions), `backend/scripts/asr_input_quality.py`
 (`docs/asr-input-quality.md`), `backend/scripts/clean_install_check.py` (fresh venv from the requirements files, then
 the fast suite), `scripts/check_large_files.py` (nothing large or binary gets committed).
@@ -485,6 +510,12 @@ Windows (`.github/workflows/ci.yml`). `DEVLOG.md` is the project history; every 
   spoken language under *Live Captions* in the popup instead of *Auto-detect*.
 - There is no glossary: a word the recognizer gets wrong (a name, a dish) stays wrong, and an Alt+E correction
   covers only the exact sentence it was made on.
+- A draft translation is the translation of the part of a sentence heard so far, and it is usually rewritten when
+  the next one arrives (1.5 times per line on the live clip, 3 times on a long English sentence), so the line above
+  the words can change under your eyes until the sentence ends. `SUBTITLE_ASR__DRAFT_STABLE_PARTIALS=0` turns drafts
+  off.
+- A very short line that was misrecognised can get an invented translation: OPUS-MT turned three misheard Bengali
+  words into "We were married in July 1955." (`docs/latency.md`).
 - Fast dialogue with pauses under half a second still runs two sentences into one line (up to the 6-second cut;
   `docs/observations.md`, A9, and `docs/latency.md`).
 - Korean and Portuguese targets stay untranslated with OPUS-MT (no model from English).

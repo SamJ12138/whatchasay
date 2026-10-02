@@ -632,4 +632,22 @@ D4 cloud providers off by default, keys only in backend config.
   an older commit's code the same way. Without priming the after number is 3.62-3.69 s (the language is confirmed
   at about 2.3 s, but there is no captured speech to show before the second sentence). Tallies: fast 327, slow 35,
   node 92.
+- Batch 4 (verify and document). `docs/latency.md`, "Before and after": the table rerun on the final code and, for a
+  like-for-like "before", on an export of commit `0d5e875` run with the same harness (`--backend-dir`,
+  `--extension`, `--prime-audio`), 3 browser runs per clip on each side, 24 run_ids. First translated text after a
+  line's first word: 6.6 -> 2.6 s (English sample), 7.9 -> 2.7-3.3 s (Bengali sample), 10.3-10.4 -> 2.0 s (live
+  clip); first confirmed-language subtitle 5.3 -> 2.1-2.2 s (live clip), 6.0-6.2 -> 2.5-2.6 s (Mandarin sample),
+  3.9-4.0 -> 3.3 s (English); first display of the source text unchanged at the recognizer's chunk lag; final
+  translation after the last word unchanged on the samples (0.8-1.1 s), 1.3 s on the live clip (its lines used to
+  be closed by the 10 s cut); non-append revisions per line 1.5 (live clip), 3 (the one long English sentence);
+  translate calls 0.1-0.4 -> 0.6-0.9 per second, p95 28-67 ms on the CPU. Quality drops shown there, both Bengali
+  to English: a sentence over 6 s is cut and its second half loses its subject; a short misrecognised line that now
+  stands alone got an invented translation ("We were married in July 1955."). README: "How it works" has the
+  streaming paragraph and the before / after table (the old WebSocket-level table is gone; `latency_report.py`
+  stays as a script), Quickstart says what a draft is, limitations gained the draft rewrites and the invented
+  translation. `docs/demo-youtube.gif` regenerated from a post-change live run on the YouTube page
+  (`run_20261002T172649-3fac9e`, recorded by the harness with `--prime-audio`, no consent wall or ad): 9.5 s,
+  640 px, 6 fps, 2,967,933 bytes, from 0.1 s before the video starts: Bengali confirmed at 1.6 s, first translation
+  at 1.9 s after play (first live test: 5.4-10.7 s); 13 lines in 45 s, 1.2 non-append revisions per line
+  (`docs/live-test-youtube.md`, last section). Tallies: fast 329, slow 35, node 92.
 

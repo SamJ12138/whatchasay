@@ -130,3 +130,29 @@ Two offline checks on what a fix has to deal with (scratch scripts, not in the r
   score 1.5; at 2.5 and 4.0 the first sentence disappeared; রাজভোগ never came out.
 - OPUS-MT bn→en on line 1 with the word replaced: রাজভোগ (spelled right) → "See you in a bar."; `rajbhog` put into
   the Bengali sentence → "I've met a rajbug". Line 4 the same way: "ten thousand kings", "ten thousand rajbeg".
+
+## After the latency batches (2026-10-02, `docs/latency.md`)
+
+One more live run on the same page after the streaming work (bounded lines, draft translations, earlier language
+ID), the run `docs/demo-youtube.gif` is cut from. Same command, plus `--prime-audio` (the tab's audio output is
+already running when the video starts, as over a video that is already playing; without it the first sentence does
+not reach the capture, observations A11), 40 s of captions kept running after the first translation.
+
+| | Before (runs A-C above) | After (`run_20261002T172649-3fac9e`) |
+|---|---|---|
+| Detected language | Bengali, confirmed at 5.3-5.5 s (attempt 1) | Bengali, confirmed at 1.6 s (two early attempts agreeing; constrained bn 0.99) |
+| First subtitle in the confirmed language | 5.3-5.5 s after play | 1.6 s after play |
+| First translation on screen | 5.4-10.7 s after play | 1.9 s after play |
+| Lines in the first 45 s | 8-10 translated cues in 90 s, one of them 9.6 s long | 13 lines, the longest 6.2 s from the end of the line before it |
+| First translated text after a line's first word (p50 / slowest) | not measured (a line's translation came after its last word) | 2.0 s / 2.6 s |
+| Final translation after a line's last word (p50 / slowest) | not measured | 1.1 s / 1.5 s |
+| Draft rewrites per line (non-append revisions) | none (no drafts) | 1.2 (16 over 13 lines) |
+| Translate calls, p50 / p95 | 8-10, 34.7-43.6 ms / 114.5-148.1 ms | 31, 25.9 ms / 56.2 ms |
+| Translation memory rows written | 0 | 0 |
+
+The first sentence came out as "একটা রাজবুক দেখেন তো" -> "Look at a royal book." 1.9 s after the video started, and
+the 9.6 s run-on of the first test as three lines ("এর থেকে বড় সাইজের হয় না …" -> "It doesn't have to be any older
+than this.", "কী মশায় আপনার এত বড় দোকান …" -> "What the mosquito wants you to buy is bigger than that",
+"দিনকাল যা পড়েছে বোঝে নিত" -> "I know what they've read."). The mistakes are the recognizer's and the translator's,
+as before: রাজভোগ is still heard as রাজবুক, and মশায় ("sir") is still a mosquito.
+
