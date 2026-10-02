@@ -377,6 +377,17 @@ class SubtitleWebSocket {
       if (globalThis.STObs) globalThis.STObs.log('ext_ws_receive', 'fail', { error_type: 'parse', error_message: parsed.error, path: '/ws' });
       return;
     }
+    if (parsed.kind === 'error' && parsed.correlationId == null) {
+      // an error nobody is waiting for (e.g. a frame the server could not parse): surface it
+      console.warn('[WS] Server error:', parsed.error);
+      if (globalThis.STObs) globalThis.STObs.log('ext_ws_receive', 'fail', { error_type: parsed.errorType || 'unknown', error_message: 'server error: ' + parsed.error, path: '/ws' });
+      if (this.onErrorCallback) {
+        const err = new Error(parsed.error);
+        err.errorType = parsed.errorType;
+        this.onErrorCallback(err);
+      }
+      return;
+    }
     if (parsed.kind === 'reply' || parsed.kind === 'error') {
       const pending = this.pendingRequests.get(parsed.correlationId);
       this.pendingRequests.delete(parsed.correlationId);

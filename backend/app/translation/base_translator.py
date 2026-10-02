@@ -24,6 +24,7 @@ import logging
 import os
 import threading
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Protocol, Tuple
 
@@ -42,6 +43,28 @@ try:
 except ImportError:  # pragma: no cover
     ctranslate2 = None
     CT2_AVAILABLE = False
+
+
+STATUS_OK, STATUS_FALLBACK, STATUS_UNTRANSLATED, STATUS_ERROR = "ok", "fallback", "untranslated", "error"
+
+
+@dataclass
+class MTItem:
+    """Outcome of translating one text (see BaseTranslator.translate_batch_detailed)."""
+
+    text: str
+    status: str
+    engine: Optional[str]
+    error_type: Optional[str] = None
+    error: Optional[str] = None
+
+
+def _judge(source: str, output: str, engine_name: str, status: str) -> MTItem:
+    """An engine that hands back its input (letters included) did not translate it."""
+    out = output.strip()
+    if out == source.strip() and any(ch.isalpha() for ch in out):
+        return MTItem(source, STATUS_UNTRANSLATED, engine_name, None, f"{engine_name} returned the source text")
+    return MTItem(out, status, engine_name)
 
 
 class MTEngine(Protocol):
@@ -254,18 +277,48 @@ class BaseTranslator:
         fast: bool = True,
         prefer: Optional[str] = None,
     ) -> List[str]:
+        """Text-only view of translate_batch_detailed (error items are "")."""
+        return [it.text for it in await self.translate_batch_detailed(texts, source_lang, target_lang, prefer)]
+
+    def _fallback_for(self, engine, source_lang: str, target_lang: str):
+        for name in settings.mt.engine_order:
+            cand = self.engines.get(name)
+            if cand is not None and cand is not engine and cand.supports(source_lang, target_lang):
+                return cand
+        return None
+
+    async def translate_batch_detailed(
+        self,
+        texts: List[str],
+        source_lang: str,
+        target_lang: str,
+        prefer: Optional[str] = None,
+    ) -> List["MTItem"]:
+        """
+        Translate with an explicit outcome per text (never the source text
+        disguised as a translation):
+
+            ok            the preferred engine answered
+            fallback      it failed (exception or empty output) and the next
+                          engine in engine_order answered
+            untranslated  no engine supports the pair, or the engine echoed the
+                          source; .text is the source as a placeholder
+            error         every engine tried failed; .text is "" and
+                          .error_type is the obs error type
+        """
         if not texts:
             return []
         if source_lang == target_lang:
-            return list(texts)
+            return [MTItem(t, STATUS_OK, "identity") for t in texts]
         ctx = dict(src=source_lang, tgt=target_lang, n=len(texts), chars=sum(len(t) for t in texts))
         engine = self.pick(source_lang, target_lang, prefer)
         if engine is None:
             logger.warning("No translation engine for %s->%s", source_lang, target_lang)
             obs.log("mt_call", "skip", error_type="input_invalid", engine=None,
                     error_message=f"no engine supports {source_lang}->{target_lang}",
-                    degraded="input text returned as the translation", **ctx)
-            return list(texts)
+                    degraded="returned as untranslated (source text as a placeholder)", **ctx)
+            msg = f"no engine supports {source_lang}->{target_lang}"
+            return [MTItem(t, STATUS_UNTRANSLATED, None, "input_invalid", msg) for t in texts]
 
         lock = self._engine_locks.setdefault(engine.name, self._make_gate(engine))
 
@@ -281,34 +334,68 @@ class BaseTranslator:
                     same = sum(1 for i, o in zip(texts, out) if (o or "").strip() == i.strip())
                     sp.set(empty_out=empty, equals_source=same)
                     if empty:
-                        sp.fail("parse", f"{empty} empty translation(s) returned by {engine.name}; passed on as-is")
+                        sp.fail("parse", f"{empty} empty translation(s) returned by {engine.name}; treated as failed")
                 logger.debug("MT %s %s->%s x%d in %.0f ms", engine.name, source_lang, target_lang, len(texts), (time.time() - t0) * 1000)
                 return out
 
         loop = asyncio.get_running_loop()
+        items: List[Optional[MTItem]] = [None] * len(texts)
+        primary_error: Optional[BaseException] = None
         try:
-            return await loop.run_in_executor(None, obs.run_in_context(_run))
+            outs = await loop.run_in_executor(None, obs.run_in_context(_run))
         except Exception as e:
             logger.error("MT engine %s failed for %s->%s: %s", engine.name, source_lang, target_lang, e)
-            # Try the next engine once before giving up
-            fallback = None
-            for name in settings.mt.engine_order:
-                cand = self.engines.get(name)
-                if cand is not None and cand is not engine and cand.supports(source_lang, target_lang):
-                    fallback = cand
-                    break
-            if fallback is None:
-                obs.log("mt_call", "skip", error_type=obs.classify(e, _ENGINE_API.get(engine.name, "unknown")),
-                        engine=None, failed_engine=engine.name, error_message=f"{engine.name} failed and no fallback engine",
-                        degraded="input text returned as the translation", **ctx)
-                return list(texts)
+            primary_error, outs = e, None
 
-            def _fallback():
-                with obs.span("mt_call", api=_ENGINE_API.get(fallback.name, "unknown"), engine=fallback.name,
-                              fallback_for=engine.name, **ctx):
-                    return fallback.translate_batch_sync(list(texts), source_lang, target_lang)
+        retry: List[int] = []
+        if outs is None:
+            retry = list(range(len(texts)))
+        else:
+            for i, (t, o) in enumerate(zip(texts, outs)):
+                if (o or "").strip():
+                    items[i] = _judge(t, o, engine.name, STATUS_OK)
+                else:
+                    retry.append(i)
+        if not retry:
+            return items  # type: ignore[return-value]
 
-            return await loop.run_in_executor(None, obs.run_in_context(_fallback))
+        if primary_error is not None:
+            err_type = obs.classify(primary_error, _ENGINE_API.get(engine.name, "unknown"))
+            err_msg = f"{engine.name}: {str(primary_error) or type(primary_error).__name__}"
+        else:
+            err_type, err_msg = "parse", f"{engine.name} returned an empty translation"
+
+        fallback = self._fallback_for(engine, source_lang, target_lang)
+        if fallback is None:
+            obs.log("mt_call", "skip", error_type=err_type, engine=None, failed_engine=engine.name,
+                    error_message=f"{engine.name} failed and no fallback engine",
+                    degraded="returned as an error (no text)", **ctx)
+            for i in retry:
+                items[i] = MTItem("", STATUS_ERROR, None, err_type, err_msg)
+            return items  # type: ignore[return-value]
+
+        sub = [texts[i] for i in retry]
+
+        def _fallback():
+            with obs.span("mt_call", api=_ENGINE_API.get(fallback.name, "unknown"), engine=fallback.name,
+                          fallback_for=engine.name, **{**ctx, "n": len(sub)}):
+                return fallback.translate_batch_sync(list(sub), source_lang, target_lang)
+
+        try:
+            fouts = await loop.run_in_executor(None, obs.run_in_context(_fallback))
+        except Exception as e2:
+            logger.error("Fallback MT engine %s failed for %s->%s: %s", fallback.name, source_lang, target_lang, e2)
+            et2 = obs.classify(e2, _ENGINE_API.get(fallback.name, "unknown"))
+            for i in retry:
+                items[i] = MTItem("", STATUS_ERROR, None, et2, f"{err_msg}; fallback {fallback.name}: {e2}")
+            return items  # type: ignore[return-value]
+        for i, o in zip(retry, fouts):
+            if (o or "").strip():
+                items[i] = _judge(texts[i], o, fallback.name, STATUS_FALLBACK)
+            else:
+                items[i] = MTItem("", STATUS_ERROR, None, "parse",
+                                  f"{err_msg}; fallback {fallback.name} returned an empty translation")
+        return items  # type: ignore[return-value]
 
     def status(self) -> dict:
         return {name: eng.status() for name, eng in self.engines.items()}

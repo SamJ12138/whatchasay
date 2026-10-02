@@ -460,6 +460,7 @@ async def health_check_json():
 class TranslateRequest(BaseModel):
     text: str
     source_lang: Optional[str] = None
+    lang_hint: Optional[str] = None  # language to assume for short/ambiguous text (settings.lang_detect)
     target_languages: Optional[List[str]] = None
     skip_post_edit: bool = True
 
@@ -467,20 +468,27 @@ class TranslateRequest(BaseModel):
 class TranslateResponse(BaseModel):
     source_text: str
     source_lang: str
+    # per target: lines, single_line, status (ok | fallback | untranslated | error), engine, error_type, error
     translations: Dict[str, Dict[str, Any]]
     processing_time_ms: float
+    notes: Optional[Dict[str, Any]] = None
+    degraded: bool = False  # true when any target is not status "ok"
 
 
 @app.post("/translate", response_model=TranslateResponse)
 async def translate_http(request: TranslateRequest):
     pipeline = await get_pipeline()
-    cue = SubtitleCue(text=request.text, start_time=0.0, end_time=5.0, source_lang=request.source_lang)
+    cue = SubtitleCue(text=request.text, start_time=0.0, end_time=5.0, source_lang=request.source_lang,
+                      lang_hint=request.lang_hint)
     result = await pipeline.translate_cue(cue, target_languages=request.target_languages, skip_post_edit=request.skip_post_edit)
+    payload = format_result(result)
     return TranslateResponse(
         source_text=result.source_text,
         source_lang=result.source_lang,
-        translations={lang: {"lines": t.lines, "single_line": t.single_line} for lang, t in result.translations.items()},
+        translations={lang: {k: v for k, v in t.items() if k != "display_text"} for lang, t in payload["translations"].items()},
         processing_time_ms=result.processing_time_ms,
+        notes=result.notes,
+        degraded=payload["degraded"],
     )
 
 

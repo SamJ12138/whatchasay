@@ -49,6 +49,12 @@
   obs.init({ context: IS_TOP ? 'content' : 'content-frame', relay: true });
   if (IS_TOP) obs.setSession(obs.newSessionId('cs'));
 
+  function statusesOf(translations) {
+    const out = {};
+    for (const [lang, t] of Object.entries(translations || {})) out[lang] = (t && t.status) || 'ok';
+    return out;
+  }
+
   function reqErrorType(error) {
     const m = (error && error.message) || '';
     if (/timeout/i.test(m)) return 'timeout';
@@ -171,6 +177,13 @@
     return out;
   }
 
+  function pageLanguage() {
+    const track = detector && detector.videoElement && Array.from(detector.videoElement.textTracks || [])
+      .find(t => t.mode !== 'disabled' && t.language);
+    const raw = (track && track.language) || document.documentElement.lang || '';
+    return raw.toLowerCase().split(/[-_]/)[0] || null;
+  }
+
   function backendConfig() {
     const langs = targetLanguages();
     return {
@@ -181,6 +194,8 @@
       strict_meaning_lock: settings.strictMeaningLock !== false,
       max_lines: settings.maxLines || 2,
       max_chars_by_lang: maxCharsByLang(langs),
+      // language to assume for short / ambiguous cues (backend settings.lang_detect)
+      source_lang_hint: pageLanguage() || undefined,
       cloud_keys: settings.cloudKeys || undefined,
     };
   }
@@ -270,15 +285,19 @@
       obs.log('ext_cue_request', 'success', { duration_ms: performance.now() - reqT0, cue_id: cue.cueId, server_cue_id: result.cue_id,
         server_ms: result.processing_time_ms, from_cache: result.from_cache, server_error: result.notes && result.notes.error ? String(result.notes.error).slice(0, 200) : undefined });
       if (result.cue_id && result.cue_id !== cue.cueId) cueTextById.set(result.cue_id, cue.text);
-      translationCache.set(cue.text, result.translations);
-      if (translationCache.size > 500) translationCache.delete(translationCache.keys().next().value);
+      // cache only complete, primary-engine answers; fallback / untranslated / error are asked again next time
+      if (globalThis.STWsProtocol.allTargetsOk(result.translations)) {
+        translationCache.set(cue.text, result.translations);
+        if (translationCache.size > 500) translationCache.delete(translationCache.keys().next().value);
+      }
       overlay.showTranslation(cue.cueId, cue.text, result.translations, { sourceLang: result.source_lang });
       if (result.cue_id && result.cue_id !== cue.cueId) {
         // server generated its own id; keep both keys pointing at the same entry for revisions
         overlay.currentCues.set(result.cue_id, overlay.currentCues.get(cue.cueId));
       }
       recordLatency(performance.now() - sentAt);
-      obs.log('ext_render', 'success', { duration_ms: performance.now() - reqT0, cue_id: cue.cueId, from: 'backend', targets: Object.keys(result.translations || {}) });
+      obs.log('ext_render', 'success', { duration_ms: performance.now() - reqT0, cue_id: cue.cueId, from: 'backend', targets: Object.keys(result.translations || {}),
+        statuses: statusesOf(result.translations), degraded: !!result.degraded });
     } catch (error) {
       console.error('[SubTrans] Translation failed:', error);
       obs.log('ext_cue_request', 'fail', { duration_ms: performance.now() - reqT0, cue_id: cue.cueId, error_type: reqErrorType(error), error_message: error.message || String(error), degraded: 'source text shown untranslated' });
@@ -376,7 +395,7 @@
         overlay.showTranslation(cueId, existing ? existing.original : ev.source_text, merged, { revised: ev.revision > 1 || !!existing, sourceLang: ev.source_lang });
         if (ev.mt_ms !== undefined && !(ev.targets_pending > 0)) recordLatency(ev.mt_ms, 'mt');
         obs.log('ext_render', 'success', { kind: ev.type, utterance_id: ev.utterance_id, revision: ev.revision, engine: ev.engine || 'backend',
-          targets: Object.keys(ev.translations || {}), mt_ms: ev.mt_ms, session_id: live.sessionId || undefined,
+          targets: Object.keys(ev.translations || {}), statuses: statusesOf(ev.translations), mt_ms: ev.mt_ms, session_id: live.sessionId || undefined,
           server_to_glass_ms: ev.server_ts ? Math.round(Date.now() - ev.server_ts * 1000) : null, cue_on_screen: !!existing });
         scheduleLiveHide(cueId, 8000);
         break;

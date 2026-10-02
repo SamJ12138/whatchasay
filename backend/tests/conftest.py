@@ -131,6 +131,17 @@ class AppEnv:
             headers.setdefault("X-Session-Id", session_id)
         return TestClient(app, headers=headers, **kw)
 
+    def close(self) -> None:
+        """Close the scratch TM. aiosqlite's worker thread is not a daemon: an
+        unclosed connection keeps the test process alive after the last test."""
+        import asyncio
+
+        if self.tm._connection is not None:
+            try:
+                asyncio.run(self.tm.close())
+            except RuntimeError:  # a loop is still running in this thread
+                self.tm._connection.stop() if hasattr(self.tm._connection, "stop") else None
+
     @staticmethod
     def ws_url(path: str, session_id: str = "test-session", **query) -> str:
         from urllib.parse import urlencode
@@ -143,7 +154,9 @@ class AppEnv:
 
 @pytest.fixture
 def app_env(monkeypatch, tmp_path, clear_memory_cache):
-    return AppEnv(monkeypatch, tmp_path)
+    env = AppEnv(monkeypatch, tmp_path)
+    yield env
+    env.close()
 
 
 @pytest.fixture
@@ -173,3 +186,19 @@ def fake_llama(tmp_path):
     yield make
     for eng in made:
         eng.shutdown()
+
+
+@pytest.fixture
+def obs_records(monkeypatch):
+    """Every obs record written during the test (the run-log file is still written)."""
+    from app import obs
+
+    records = []
+    real_write = obs._write
+
+    def capture(rec):
+        records.append(rec)
+        real_write(rec)
+
+    monkeypatch.setattr(obs, "_write", capture)
+    return records

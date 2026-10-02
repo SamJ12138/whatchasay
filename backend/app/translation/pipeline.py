@@ -22,7 +22,10 @@ from ..config import settings
 from ..models import SubtitleCue, TranslationResult, TranslatedLine
 from .text_normalizer import TextNormalizer, NormalizedText
 from .language_detection import detect_language
-from .base_translator import BaseTranslator, get_base_translator, warmup_models
+from .base_translator import (
+    BaseTranslator, MTItem, get_base_translator, warmup_models,
+    STATUS_OK, STATUS_FALLBACK, STATUS_UNTRANSLATED, STATUS_ERROR,
+)
 from .line_breaker import format_subtitle_lines
 from ..cache.memory_cache import get_translation_cache, TranslationCache
 from ..cache.translation_memory import get_translation_memory, TranslationMemory
@@ -30,6 +33,9 @@ from .. import obs
 
 logger = logging.getLogger(__name__)
 
+# TM quality by origin: a fallback engine's row is replaced by a later primary
+# result and never overwrites one (translation_memory.set keeps the better row).
+QUALITY_FALLBACK = 0.6
 QUALITY_BASE = 0.8
 QUALITY_REFINED = 0.9
 
@@ -114,7 +120,7 @@ class TranslationPipeline:
                 logger.exception("Pipeline error: %s", e)
                 self.stats.errors += len(cues)
                 failed = e
-                results = [self._create_error_result(c, str(e), target_languages) for c in cues]
+                results = [self._create_error_result(c, e, target_languages) for c in cues]
         elapsed = (time.time() - start) * 1000
         per = elapsed / max(len(results), 1)
         for r in results:
@@ -130,7 +136,7 @@ class TranslationPipeline:
         )
         if failed is not None:
             obs.log_exc("translate", failed, api="process", duration_ms=elapsed,
-                        degraded="source text returned as the translation for every target", **ctx)
+                        degraded="every target returned as an error (no text, nothing stored)", **ctx)
         else:
             obs.log("translate", "success", duration_ms=elapsed, **ctx)
         return results
@@ -139,9 +145,14 @@ class TranslationPipeline:
 
     async def _process_batch(self, cues: List[SubtitleCue], target_languages: List[str],
                              tally: Optional[Dict[str, int]] = None) -> List[TranslationResult]:
+        """Per target the result carries a status (models.TranslatedLine):
+        ok / fallback are stored in the TM (fallback at a lower quality);
+        untranslated / error are never stored or cached and never pass the
+        source text off as a translation."""
         results: List[Optional[TranslationResult]] = [None] * len(cues)
         cache_key = tuple(sorted(target_languages))
         tally = tally if tally is not None else {}
+        stores: List[Any] = []
 
         # 1. normalize + language + memory cache
         work: List[Dict[str, Any]] = []
@@ -157,8 +168,8 @@ class TranslationPipeline:
             if cue.source_lang:
                 source_lang = cue.source_lang
             else:
-                with obs.span("lang_detect", text_len=len(text)) as sp:
-                    source_lang, conf = detect_language(text)
+                with obs.span("lang_detect", text_len=len(text), hint=cue.lang_hint) as sp:
+                    source_lang, conf = detect_language(text, cue.lang_hint)
                     sp.set(lang=source_lang, confidence=round(float(conf), 2))
             cached = self._memory_cache.get(text, source_lang, cache_key)
             if cached:
@@ -166,7 +177,7 @@ class TranslationPipeline:
                 tally["cache_hits"] = tally.get("cache_hits", 0) + 1
                 results[i] = self._create_result(cue.generate_cue_id(), text, source_lang, cached, from_cache=True)
                 continue
-            work.append({"i": i, "cue": cue, "text": text, "lang": source_lang, "trans": {}})
+            work.append({"i": i, "cue": cue, "text": text, "lang": source_lang, "trans": {}, "tm_fallback": {}})
 
         if not work:
             return [r for r in results if r is not None]
@@ -181,11 +192,25 @@ class TranslationPipeline:
                     sp.set(hit=bool(tm))
                     if tm:
                         sp.set(user_corrected=tm.get("is_user_corrected"), quality=tm.get("quality_score"),
-                               equals_source=tm["translation"].strip() == w["text"].strip())
-                if tm:
-                    self.stats.tm_hits += 1
-                    tally["tm_hits"] = tally.get("tm_hits", 0) + 1
-                    w["trans"][tgt] = {"translation": tm["translation"], "lines": tm.get("lines") or tm.get("formatted_lines") or [], "from_tm": True}
+                               engine=tm.get("engine"), equals_source=tm["translation"].strip() == w["text"].strip())
+                if not tm:
+                    continue
+                corrected = bool(tm.get("is_user_corrected"))
+                if not corrected and tm["translation"].strip() == w["text"].strip():
+                    continue  # T6 legacy row: the source stored as its own translation; never served
+                entry = {"translation": tm["translation"], "lines": tm.get("lines") or tm.get("formatted_lines") or [],
+                         "from_tm": True, "status": STATUS_OK, "engine": tm.get("engine") or ("user" if corrected else "tm")}
+                if not corrected and (tm.get("quality_score") or 0.0) < QUALITY_BASE:
+                    entry["status"] = STATUS_FALLBACK
+                    primary = self.base_translator.pick(w["lang"], tgt)
+                    if primary is not None and primary.name != tm.get("engine"):
+                        # a fallback row while the primary engine is available: ask it again and
+                        # keep this row as the best available answer if it fails
+                        w["tm_fallback"][tgt] = entry
+                        continue
+                self.stats.tm_hits += 1
+                tally["tm_hits"] = tally.get("tm_hits", 0) + 1
+                w["trans"][tgt] = entry
 
         # 3. group remaining by (src, tgt) and batch-translate
         groups: Dict[tuple, List[Dict[str, Any]]] = {}
@@ -199,47 +224,75 @@ class TranslationPipeline:
             self.stats.translations += len(texts)
             tally["mt_items"] = tally.get("mt_items", 0) + len(texts)
             try:
-                outs = await self.base_translator.translate_batch(texts, src, tgt, fast=True)
+                outs = await self.base_translator.translate_batch_detailed(texts, src, tgt)
             except Exception as e:
                 logger.error("MT failed %s->%s: %s", src, tgt, e)
                 obs.log_exc("translate", e, src=src, tgt=tgt, n=len(texts), phase="mt_group",
-                            degraded="source text used as the translation and stored in the TM")
-                outs = texts
+                            degraded="returned as an error (no text, nothing stored)")
+                et = obs.classify(e, "process")
+                outs = [MTItem("", STATUS_ERROR, None, et, str(e) or type(e).__name__) for _ in texts]
             for it, out in zip(items, outs):
-                it["trans"][tgt] = {"translation": out, "lines": None, "from_tm": False}
+                if out.status in (STATUS_ERROR, STATUS_UNTRANSLATED) and tgt in it["tm_fallback"]:
+                    it["trans"][tgt] = it["tm_fallback"][tgt]  # best available: the stored fallback row
+                    self.stats.tm_hits += 1
+                    tally["tm_hits"] = tally.get("tm_hits", 0) + 1
+                    continue
+                it["trans"][tgt] = {"translation": out.text, "lines": None, "from_tm": False, "status": out.status,
+                                    "engine": out.engine, "error_type": out.error_type, "error": out.error}
 
         await asyncio.gather(*(_run_group(s, t, items) for (s, t), items in groups.items()))
 
-        # 4. format, cache, store
+        # 4. format, cache (only when every target is ok), store (ok / fallback only)
         for w in work:
             i, cue, text, src = w["i"], w["cue"], w["text"], w["lang"]
             translations: Dict[str, Dict[str, Any]] = {}
+            all_ok = True
             for tgt in target_languages:
                 if tgt == src:
                     lines, single = format_subtitle_lines(text, tgt)
-                    translations[tgt] = {"lines": lines, "single_line": single, "translation": text}
+                    translations[tgt] = {"lines": lines, "single_line": single, "translation": text,
+                                         "status": STATUS_OK, "engine": "identity"}
                     continue
-                entry = w["trans"].get(tgt)
-                trans_text = entry["translation"] if entry else text
-                if entry and entry.get("lines"):
-                    lines, single = entry["lines"], trans_text
+                entry = w["trans"].get(tgt) or {"translation": "", "status": STATUS_ERROR, "engine": None,
+                                                "error_type": "unknown", "error": "no translation produced"}
+                status = entry["status"]
+                if status == STATUS_ERROR:
+                    lines, single = [], ""
+                elif entry.get("lines"):
+                    lines, single = entry["lines"], entry["translation"]
                 else:
-                    lines, single = format_subtitle_lines(trans_text, tgt)
-                translations[tgt] = {"lines": lines, "single_line": single, "translation": trans_text}
-                if entry and not entry.get("from_tm"):
-                    equals_source = trans_text.strip() == text.strip()
-                    asyncio.create_task(obs.traced("tm_store", self._translation_memory.set(
+                    lines, single = format_subtitle_lines(entry["translation"], tgt)
+                translations[tgt] = {"lines": lines, "single_line": single, "translation": single, "status": status,
+                                     "engine": entry.get("engine"), "error_type": entry.get("error_type"),
+                                     "error": entry.get("error")}
+                all_ok = all_ok and status == STATUS_OK
+                if status in (STATUS_OK, STATUS_FALLBACK) and not entry.get("from_tm"):
+                    quality = QUALITY_BASE if status == STATUS_OK else QUALITY_FALLBACK
+                    stores.append(obs.traced("tm_store", self._translation_memory.set(
                         source_text=text, source_lang=src, target_lang=tgt,
-                        translation=trans_text, formatted_lines=lines, quality_score=QUALITY_BASE,
-                    ), api="process", kind="machine", src=src, tgt=tgt, quality=QUALITY_BASE, equals_source=equals_source,
-                        **({"degraded": "untranslated source stored as a translation"} if equals_source else {})))
-            self._memory_cache.set(text, src, cache_key, translations)
+                        translation=single, formatted_lines=lines, quality_score=quality, engine=entry.get("engine"),
+                    ), api="process", kind="machine" if status == STATUS_OK else "fallback", src=src, tgt=tgt,
+                        quality=quality, engine=entry.get("engine"), equals_source=False))
+            if all_ok:
+                self._memory_cache.set(text, src, cache_key, translations)
             results[i] = self._create_result(cue.generate_cue_id(), text, src, translations, from_cache=False)
             self._context_window.append(text)
             if len(self._context_window) > settings.ollama.context_window_size:
                 self._context_window.pop(0)
 
+        await self._await_stores(stores)
         return [r for r in results if r is not None]
+
+    async def _await_stores(self, stores: List[Any]) -> None:
+        """TM writes are awaited before the result is returned (T7): a failure is
+        logged by obs.traced (stage tm_store, event fail, error_type) and here;
+        it never fails the translation and never becomes an unretrieved task."""
+        if not stores:
+            return
+        outcomes = await asyncio.gather(*stores, return_exceptions=True)
+        failed = [o for o in outcomes if isinstance(o, BaseException)]
+        if failed:
+            logger.warning("TM store failed for %d of %d write(s): %s", len(failed), len(outcomes), failed[0])
 
     # ---------------------------------------------------------------- refiner
 
@@ -268,16 +321,16 @@ class TranslationPipeline:
                     error_message="refiner enabled but no provider could be built (missing key?)")
             return []
         langs = [t for t in target_languages if t not in settings.refiner.skip_languages]
-        items = [
-            {
-                "source_text": r.source_text,
-                "source_lang": r.source_lang,
-                "base_translations": {l: r.translations[l].single_line for l in langs if l in r.translations and l != r.source_lang},
-            }
-            for r in results
-            if not r.notes or not r.notes.get("error")
-        ]
-        items = [it for it in items if it["base_translations"]]
+        pairs = []
+        for r in results:
+            if r.notes and r.notes.get("error"):
+                continue
+            base = {l: r.translations[l].single_line for l in langs
+                    if l in r.translations and l != r.source_lang
+                    and r.translations[l].status in (STATUS_OK, STATUS_FALLBACK)}
+            if base:
+                pairs.append((r, {"source_text": r.source_text, "source_lang": r.source_lang, "base_translations": base}))
+        items = [it for _, it in pairs]
         if not items:
             return []
         r0 = time.time()
@@ -299,26 +352,32 @@ class TranslationPipeline:
 
         changed: List[TranslationResult] = []
         cache_key = tuple(sorted(target_languages))
-        for r, new_texts in zip([r for r in results if not r.notes or not r.notes.get("error")], refined):
+        engine_name = f"refiner:{settings.refiner.provider}"
+        stores: List[Any] = []
+        for (r, item), new_texts in zip(pairs, refined):
             if not new_texts:
                 continue
             updated = False
-            translations = {l: {"lines": tl.lines, "single_line": tl.single_line, "translation": tl.single_line} for l, tl in r.translations.items()}
+            translations = {l: {"lines": tl.lines, "single_line": tl.single_line, "translation": tl.single_line,
+                                "status": tl.status, "engine": tl.engine, "error_type": tl.error_type, "error": tl.error}
+                            for l, tl in r.translations.items()}
             for lang, text in new_texts.items():
-                if not text or lang not in translations or text.strip() == translations[lang]["single_line"].strip():
+                if not text or lang not in item["base_translations"] or text.strip() == translations[lang]["single_line"].strip():
                     continue
                 lines, single = format_subtitle_lines(text, lang)
-                translations[lang] = {"lines": lines, "single_line": single, "translation": single}
+                translations[lang] = {"lines": lines, "single_line": single, "translation": single,
+                                      "status": STATUS_OK, "engine": engine_name}
                 updated = True
-                asyncio.create_task(obs.traced("tm_store", self._translation_memory.set(
+                stores.append(obs.traced("tm_store", self._translation_memory.set(
                     source_text=r.source_text, source_lang=r.source_lang, target_lang=lang,
-                    translation=single, formatted_lines=lines, quality_score=QUALITY_REFINED,
+                    translation=single, formatted_lines=lines, quality_score=QUALITY_REFINED, engine=engine_name,
                 ), api="process", kind="refined", src=r.source_lang, tgt=lang, quality=QUALITY_REFINED))
-            if updated:
+            if updated and all(t.get("status") == STATUS_OK for t in translations.values()):
                 self._memory_cache.set(r.source_text, r.source_lang, cache_key, translations)
                 new_r = self._create_result(r.cue_id, r.source_text, r.source_lang, translations, from_cache=False, post_edited=True)
                 new_r.revision = 2
                 changed.append(new_r)
+        await self._await_stores(stores)
         self.stats.refinements += len(changed)
         obs.log("refine", "success", duration_ms=(time.time() - r0) * 1000, changed=len(changed), **rctx)
         return changed
@@ -336,27 +395,42 @@ class TranslationPipeline:
     ) -> TranslationResult:
         trans_lines = {}
         for lang, data in translations.items():
-            if data:
-                single = data.get("single_line") or data.get("translation", "")
-                trans_lines[lang] = TranslatedLine(lines=data.get("lines") or [single], single_line=single, language=lang)
+            if not data:
+                continue
+            status = data.get("status") or STATUS_OK
+            single = data.get("single_line")
+            if single is None:
+                single = data.get("translation", "")
+            lines = list(data.get("lines") or []) if status == STATUS_ERROR else (data.get("lines") or [single])
+            trans_lines[lang] = TranslatedLine(
+                lines=lines, single_line=single, language=lang, status=status, engine=data.get("engine"),
+                error_type=data.get("error_type"), error=data.get("error"),
+            )
         return TranslationResult(
             cue_id=cue_id, source_text=source_text, source_lang=source_lang,
             translations=trans_lines, from_cache=from_cache, post_edited=post_edited,
         )
 
     def _create_passthrough_result(self, cue_id: str, text: str, normalized: NormalizedText, target_languages: List[str]) -> TranslationResult:
-        trans_lines = {lang: TranslatedLine(lines=[text], single_line=text, language=lang) for lang in target_languages}
+        reason = "not translatable (music / sound effect)"
+        trans_lines = {lang: TranslatedLine(lines=[text], single_line=text, language=lang, status=STATUS_UNTRANSLATED,
+                                            error=reason) for lang in target_languages}
         return TranslationResult(
             cue_id=cue_id, source_text=text, source_lang="unknown", translations=trans_lines,
             from_cache=False, post_edited=False,
             notes={"is_music": normalized.is_music, "is_sound_effect": normalized.is_sound_effect},
         )
 
-    def _create_error_result(self, cue: SubtitleCue, error: str, target_languages: List[str]) -> TranslationResult:
-        trans_lines = {lang: TranslatedLine(lines=[cue.text], single_line=cue.text, language=lang) for lang in target_languages}
+    def _create_error_result(self, cue: SubtitleCue, error: BaseException, target_languages: List[str]) -> TranslationResult:
+        """Whole-batch failure (T5): every target is an error with no text."""
+        error_type = obs.classify(error, "process")
+        message = str(error) or type(error).__name__
+        trans_lines = {lang: TranslatedLine(lines=[], single_line="", language=lang, status=STATUS_ERROR,
+                                            error_type=error_type, error=message) for lang in target_languages}
         return TranslationResult(
             cue_id=cue.generate_cue_id(), source_text=cue.text, source_lang=cue.source_lang or "unknown",
-            translations=trans_lines, from_cache=False, post_edited=False, notes={"error": error},
+            translations=trans_lines, from_cache=False, post_edited=False,
+            notes={"error": message, "error_type": error_type},
         )
 
     def clear_context(self) -> None:

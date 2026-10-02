@@ -485,8 +485,12 @@ class SubtitleOverlay {
     const primary = this.primaryOnTop ? this.primaryLang : this.secondaryLang;
     const secondary = this.primaryOnTop ? this.secondaryLang : this.primaryLang;
 
+    // Only ok / fallback targets are translations; untranslated (source placeholder)
+    // and error targets are not drawn as a language line.
+    const usable = (lang) => globalThis.STWsProtocol ? globalThis.STWsProtocol.usableTranslation(translations[lang]) : !!translations[lang];
+
     // Add primary translation
-    if (translations[primary]) {
+    if (usable(primary)) {
       const line = this._createSubtitleLine(
         translations[primary].display_text || translations[primary].single_line,
         'primary',
@@ -498,7 +502,7 @@ class SubtitleOverlay {
     }
 
     // Add secondary translation (if configured and different from primary)
-    if (secondary && secondary !== 'none' && translations[secondary]) {
+    if (secondary && secondary !== 'none' && usable(secondary)) {
       const line = this._createSubtitleLine(
         translations[secondary].display_text || translations[secondary].single_line,
         'secondary',
@@ -510,7 +514,7 @@ class SubtitleOverlay {
     }
 
     // Add original if enabled (always for live captions that have no translation yet)
-    const hasTranslation = Object.keys(translations || {}).length > 0;
+    const hasTranslation = Object.keys(translations || {}).some(usable);
     if ((this.showOriginal || !hasTranslation) && original) {
       const line = this._createSubtitleLine(original, 'original', cueId, null, revised);
       this.subtitleStack.appendChild(line);

@@ -41,6 +41,10 @@ def format_result(result: TranslationResult) -> Dict[str, Any]:
             "lines": trans.lines,
             "single_line": trans.single_line,
             "display_text": trans.display_text,
+            "status": trans.status,
+            "engine": trans.engine,
+            "error_type": trans.error_type,
+            "error": trans.error,
         }
     return {
         "cue_id": result.cue_id,
@@ -52,7 +56,16 @@ def format_result(result: TranslationResult) -> Dict[str, Any]:
         "revision": result.revision,
         "processing_time_ms": result.processing_time_ms,
         "notes": result.notes,
+        "degraded": any(t.status != "ok" for t in result.translations.values()),
     }
+
+
+class HandlerError(Exception):
+    """A /ws handler failed; _process_message turns it into an error envelope (W6)."""
+
+    def __init__(self, message: str, error_type: str = "unknown"):
+        super().__init__(message)
+        self.error_type = error_type
 
 
 def _envelope(msg_type: MessageType, correlation_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -85,6 +98,7 @@ class ConnectionManager:
             "last_activity": datetime.utcnow(),
             # per-connection preferences (never mutate global settings for these)
             "target_languages": None,
+            "source_lang_hint": None,
             "session_id": session_id,
         }
         logger.info("Client connected: %s", conn_id)
@@ -243,7 +257,8 @@ class MicroBatcher:
             logger.error("Batch processing error: %s", e)
             obs.log_exc("micro_batch", e, duration_ms=(time.time() - start) * 1000, degraded="error envelope sent to every cue", **ctx)
             for p in batch:
-                await manager.send_message(p.conn_id, _envelope(MessageType.ERROR, p.correlation_id, {"error": str(e)}))
+                await manager.send_message(p.conn_id, _envelope(MessageType.ERROR, p.correlation_id,
+                                                                {"error": str(e), "error_type": obs.classify(e, "process")}))
         finally:
             if token is not None:
                 obs.session_id_var.reset(token)
@@ -323,7 +338,7 @@ class WebSocketHandler:
             handler = self.handlers.get(msg_type)
             if handler is None:
                 obs.log("ws_receive", "fail", error_type="input_invalid", error_message=f"no handler for {msg_type}", **ctx)
-                await self._send_error(conn_id, correlation_id, f"Unknown message type: {msg_type}")
+                await self._send_error(conn_id, correlation_id, f"Unknown message type: {msg_type}", "input_invalid")
                 return
             result = await handler(payload)
             obs.log("ws_receive", "success", duration_ms=(time.perf_counter() - t0) * 1000, **ctx)
@@ -331,17 +346,26 @@ class WebSocketHandler:
 
         except orjson.JSONDecodeError as e:
             obs.log_exc("ws_receive", e, error_type="parse", **ctx)
-            await self._send_error(conn_id, correlation_id, f"Invalid JSON: {e}")
+            await self._send_error(conn_id, correlation_id, f"Invalid JSON: {e}", "parse")
         except ValidationError as e:
             obs.log_exc("ws_receive", e, error_type="input_invalid", **ctx)
-            await self._send_error(conn_id, correlation_id, f"Validation error: {e}")
+            await self._send_error(conn_id, correlation_id, f"Validation error: {e}", "input_invalid")
+        except HandlerError as e:
+            obs.log("ws_receive", "fail", error_type=e.error_type, error_message=str(e), **ctx)
+            await self._send_error(conn_id, correlation_id, str(e), e.error_type)
         except Exception as e:
             logger.exception("Processing error: %s", e)
             obs.log_exc("ws_receive", e, **ctx)
-            await self._send_error(conn_id, correlation_id, f"Error: {e}")
+            await self._send_error(conn_id, correlation_id, f"Error: {e}", obs.classify(e, "process"))
+
+    def _conn_hint(self) -> Optional[str]:
+        info = manager.connection_info.get(self.conn_id) or {}
+        return info.get("source_lang_hint")
 
     async def _handle_cue(self, conn_id: str, correlation_id: str, payload: Dict) -> None:
         cue = SubtitleCue(**payload.get("cue", payload))
+        if not cue.lang_hint:
+            cue.lang_hint = payload.get("lang_hint") or self._conn_hint()
         target_languages = self._conn_targets(payload)
         skip_post_edit = bool(payload.get("skip_post_edit", False))
 
@@ -358,6 +382,8 @@ class WebSocketHandler:
 
     async def _handle_batch(self, payload: Dict) -> Dict:
         cues = [SubtitleCue(**c) for c in payload.get("cues", [])]
+        for c in cues:
+            c.lang_hint = c.lang_hint or payload.get("lang_hint") or self._conn_hint()
         target_languages = self._conn_targets(payload)
         results = await self.pipeline.translate_batch(cues, target_languages, skip_post_edit=True)
         return {"results": [format_result(r) for r in results], "count": len(results)}
@@ -370,7 +396,7 @@ class WebSocketHandler:
             if not source_lang or source_lang in ("auto", "unknown"):
                 from .translation.language_detection import detect_language
 
-                source_lang = detect_language(correction.source_text)[0]
+                source_lang = detect_language(correction.source_text, self._conn_hint())[0]
             cache = self.pipeline._memory_cache
             for lang, corrected_text in correction.corrected_translation.items():
                 original_text = correction.original_translation.get(lang, "")
@@ -385,16 +411,20 @@ class WebSocketHandler:
             obs.log("tm_store", "success", kind="correction", cue_id=correction.cue_id, source_lang=source_lang,
                     targets=list(correction.corrected_translation.keys()))
             return {"status": "saved", "cue_id": correction.cue_id, "source_lang": source_lang}
+        except ValidationError:
+            raise
         except Exception as e:
             logger.error("Correction error: %s", e)
-            obs.log_exc("tm_store", e, api="process", kind="correction", degraded="error returned to client in a result envelope")
-            return {"status": "error", "error": str(e)}
+            obs.log_exc("tm_store", e, api="process", kind="correction", degraded="error envelope sent to the client")
+            raise HandlerError(f"correction not saved: {e}", obs.classify(e, "process")) from e
 
     async def _handle_config(self, payload: Dict) -> Dict:
         try:
             update = ConfigUpdate(**payload)
             info = manager.connection_info.get(self.conn_id)
 
+            if update.source_lang_hint is not None and info is not None:
+                info["source_lang_hint"] = update.source_lang_hint or None
             if update.target_languages is not None:
                 # per-connection, plus keep the global default for HTTP/debug callers
                 if info is not None:
@@ -443,8 +473,10 @@ class WebSocketHandler:
             }
         except Exception as e:
             logger.error("Config update error: %s", e)
-            obs.log_exc("config", e, path="/ws", degraded="error returned to client in a result envelope")
-            return {"status": "error", "error": str(e)}
+            obs.log_exc("config", e, path="/ws", degraded="error envelope sent to the client")
+            if isinstance(e, ValidationError):
+                raise
+            raise HandlerError(f"config not applied: {e}", obs.classify(e, "process")) from e
 
     async def _handle_ping(self, payload: Dict) -> Dict:
         return {
@@ -462,8 +494,9 @@ class WebSocketHandler:
             },
         }
 
-    async def _send_error(self, conn_id: str, correlation_id: str, error: str) -> None:
-        await manager.send_message(conn_id, _envelope(MessageType.ERROR, correlation_id, {"error": error}))
+    async def _send_error(self, conn_id: str, correlation_id: str, error: str, error_type: str = "unknown") -> None:
+        await manager.send_message(conn_id, _envelope(MessageType.ERROR, correlation_id,
+                                                      {"error": error, "error_type": error_type}))
 
 
 def apply_cloud_keys(keys: Dict[str, str]) -> None:

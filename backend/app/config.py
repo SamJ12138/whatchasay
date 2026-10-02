@@ -136,6 +136,26 @@ class TranslationConfig(BaseSettings):
     ct2_dir: Path = Field(default=Path("data/models/ct2"))
 
 
+class LangDetectConfig(BaseSettings):
+    """Text language detection for cues without a declared language (T12).
+
+    A distinctive script decides first (CJK, kana, Hangul, Bengali, Devanagari,
+    Arabic, ...). Latin-script text shorter than `min_chars` is not guessed by
+    langdetect at all: it takes the session hint. Longer text takes langdetect's
+    answer only if its probability is >= `confidence_floor` and the language is
+    in `candidate_languages`; otherwise the session hint. The session hint comes
+    from the cue (`lang_hint`), the /ws connection's `source_lang_hint`, or
+    `default_hint`.
+    """
+
+    min_chars: int = Field(default=24, description="shorter Latin-script text uses the session hint")
+    confidence_floor: float = Field(default=0.90)
+    candidate_languages: List[str] = Field(
+        default=["en", "zh", "bn", "vi", "ja", "ko", "es", "fr", "de", "ru", "pt", "it", "ar", "hi", "nl", "pl", "tr", "id"]
+    )
+    default_hint: str = Field(default="en")
+
+
 class MTConfig(BaseSettings):
     """Engine selection for the translation hot path."""
 
@@ -251,6 +271,7 @@ class FeatureFlags(BaseSettings):
 
 class Settings(BaseSettings):
     translation: TranslationConfig = Field(default_factory=TranslationConfig)
+    lang_detect: LangDetectConfig = Field(default_factory=LangDetectConfig)
     mt: MTConfig = Field(default_factory=MTConfig)
     asr: ASRConfig = Field(default_factory=ASRConfig)
     cloud: CloudConfig = Field(default_factory=CloudConfig)

@@ -29,7 +29,8 @@ class SubtitleCue(BaseModel):
     start_time: float = Field(..., description="Start time in seconds")
     end_time: float = Field(..., description="End time in seconds")
     cue_id: Optional[str] = Field(None, description="Unique cue identifier")
-    source_lang: Optional[str] = Field(None, description="Detected source language")
+    source_lang: Optional[str] = Field(None, description="Declared source language (skips detection)")
+    lang_hint: Optional[str] = Field(None, description="Session language hint used by detection (T12)")
     
     # Context for coherence
     prev_cues: Optional[List[str]] = Field(
@@ -61,12 +62,26 @@ class SubtitleCue(BaseModel):
         return self.end_time - self.start_time
 
 
+TARGET_STATUSES = ("ok", "fallback", "untranslated", "error")
+
+
 class TranslatedLine(BaseModel):
-    """A single translated line with formatting."""
-    
-    lines: List[str] = Field(..., description="Formatted lines (1-2)")
-    single_line: str = Field(..., description="Single line version")
+    """One target language of a result.
+
+    status:
+        ok            engine output (or the text itself when target == source)
+        fallback      output of a fallback engine after the preferred one failed
+        untranslated  nothing translated it; single_line is the source text as a placeholder
+        error         translation failed; single_line is "" and error_type says why
+    """
+
+    lines: List[str] = Field(..., description="Formatted lines (1-2); empty on error")
+    single_line: str = Field(..., description="Single line version; empty on error")
     language: str = Field(..., description="Language code")
+    status: str = Field(default="ok", description="ok | fallback | untranslated | error")
+    engine: Optional[str] = Field(default=None, description="engine that produced the line")
+    error_type: Optional[str] = Field(default=None, description="obs error_type when status is error/untranslated")
+    error: Optional[str] = Field(default=None, description="why it is not a translation")
     
     @property
     def display_text(self) -> str:
@@ -172,6 +187,7 @@ class ConfigUpdate(BaseModel):
     max_chars_vi: Optional[int] = None  # Vietnamese support
     max_chars_by_lang: Optional[Dict[str, int]] = None  # Generic per-language limits
     refiner_enabled: Optional[bool] = None
+    source_lang_hint: Optional[str] = None  # language of this tab's page/track; see settings.lang_detect
     cloud_keys: Optional[Dict[str, str]] = None  # {google_api_key, azure_translator_key, azure_translator_region, gladia_api_key, elevenlabs_api_key, groq_api_key, gemini_api_key}
 
 

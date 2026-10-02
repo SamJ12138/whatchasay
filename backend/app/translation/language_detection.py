@@ -32,15 +32,10 @@ class LanguageDetector:
     """
     Fast local language detection for subtitle text.
     
-    Uses langdetect with fallbacks for short/ambiguous text.
+    Script rules first, then langdetect for long Latin-script text only, with a
+    session hint for everything it cannot decide (settings.lang_detect).
     """
-    
-    # Minimum confidence threshold
-    MIN_CONFIDENCE = 0.7
-    
-    # Minimum text length for reliable detection
-    MIN_TEXT_LENGTH = 10
-    
+
     # Scripts that indicate specific languages
     SCRIPT_INDICATORS = {
         # CJK
@@ -60,14 +55,16 @@ class LanguageDetector:
         'ru': '\u0400-\u04ff',  # Cyrillic
         'th': '\u0e00-\u0e7f',  # Thai
         'hi': '\u0900-\u097f',  # Devanagari
+        'bn': '\u0980-\u09ff',  # Bengali
     }
     
-    def __init__(self, default_source_lang: str = "en"):
+    def __init__(self, default_source_lang: Optional[str] = None):
         """
         Initialize detector.
-        
+
         Args:
-            default_source_lang: Default language when detection fails
+            default_source_lang: hint used when the caller gives none
+                (default: settings.lang_detect.default_hint)
         """
         self.default_source_lang = default_source_lang
         self._compile_script_patterns()
@@ -79,54 +76,56 @@ class LanguageDetector:
         for lang, chars in self.SCRIPT_INDICATORS.items():
             self.script_patterns[lang] = re.compile(f'[{chars}]')
     
-    def detect(self, text: str) -> Tuple[str, float]:
+    def detect(self, text: str, hint: Optional[str] = None) -> Tuple[str, float]:
         """
-        Detect language of text.
-        
+        Detect the language of a subtitle line (rule: settings.lang_detect).
+
+        1. A distinctive script (CJK, kana, Hangul, Bengali, Devanagari, ...) decides.
+        2. Latin-script text shorter than min_chars takes the session hint:
+           langdetect is unreliable on a few words ("It is raining again." -> tl).
+        3. Longer text takes langdetect's answer if prob >= confidence_floor and
+           the language is a candidate; otherwise the session hint.
+
         Args:
             text: Text to analyze
-            
+            hint: session language (the tab's page/track language), or None
+
         Returns:
             Tuple of (language_code, confidence)
         """
+        from ..config import settings
+
+        cfg = settings.lang_detect
+        hint = hint or self.default_source_lang or cfg.default_hint
         text = text.strip()
-        
+
         if not text:
-            return self.default_source_lang, 0.0
-        
-        # Try script-based detection first for CJK and other distinctive scripts
+            return hint, 0.0
+
         script_lang = self._detect_by_script(text)
         if script_lang:
             return script_lang, 0.95
-        
-        # If text is too short, use simple heuristics
-        if len(text) < self.MIN_TEXT_LENGTH:
-            return self._detect_short_text(text)
-        
-        # Use langdetect for longer text
+
+        if len(text) < cfg.min_chars:
+            return hint, 0.5
+
         try:
             results = detect_langs(text)
             if results:
                 top = results[0]
                 lang = self._normalize_lang_code(top.lang)
-                confidence = top.prob
-                
-                # If confidence is low, check for mixed content
-                if confidence < self.MIN_CONFIDENCE:
-                    # Try script detection as tiebreaker
-                    script_lang = self._detect_by_script(text)
-                    if script_lang:
-                        return script_lang, max(confidence, 0.7)
-                
-                return lang, confidence
-                
+                if top.prob >= cfg.confidence_floor and lang in cfg.candidate_languages:
+                    return lang, top.prob
+                obs.log("lang_detect", "skip", error_type="input_invalid", text_len=len(text), detected=lang,
+                        prob=round(float(top.prob), 2), hint=hint,
+                        error_message=f"langdetect {lang!r} ({top.prob:.2f}) below the floor or not a candidate; session hint used")
         except LangDetectException as e:
             logger.debug(f"Language detection failed: {e}")
             obs.log("lang_detect", "fail", error_type="input_invalid", error_message=f"langdetect: {e}",
-                    text_len=len(text), degraded=f"defaulted to {self.default_source_lang!r} (confidence 0.5)")
+                    text_len=len(text), degraded=f"defaulted to the session hint {hint!r} (confidence 0.5)")
 
-        return self.default_source_lang, 0.5
-    
+        return hint, 0.5
+
     def _detect_by_script(self, text: str) -> Optional[str]:
         """
         Detect language based on character script.
@@ -160,30 +159,6 @@ class LanguageDetector:
         
         return None
     
-    def _detect_short_text(self, text: str) -> Tuple[str, float]:
-        """
-        Detect language of short text using simple heuristics.
-        """
-        # Try script detection first
-        script_lang = self._detect_by_script(text)
-        if script_lang:
-            return script_lang, 0.8
-        
-        # Try langdetect with lower confidence threshold
-        try:
-            lang = detect(text)
-            return self._normalize_lang_code(lang), 0.6
-        except LangDetectException as e:
-            obs.log("lang_detect", "fail", error_type="input_invalid", error_message=f"langdetect (short text): {e}",
-                    text_len=len(text), degraded="falls back to ASCII heuristic / default language")
-            pass
-        
-        # Default to English for Latin script
-        if text.isascii():
-            return 'en', 0.5
-        
-        return self.default_source_lang, 0.3
-    
     def _normalize_lang_code(self, code: str) -> str:
         """Normalize language code to ISO 639-1."""
         code = code.lower()
@@ -206,18 +181,19 @@ class LanguageDetector:
 
 
 @lru_cache(maxsize=1000)
-def detect_language(text: str) -> Tuple[str, float]:
+def detect_language(text: str, hint: Optional[str] = None) -> Tuple[str, float]:
     """
-    Cached language detection.
-    
+    Cached language detection (see LanguageDetector.detect for the rule).
+
     Args:
         text: Text to detect
-        
+        hint: session language hint, or None for settings.lang_detect.default_hint
+
     Returns:
         Tuple of (language_code, confidence)
     """
     detector = LanguageDetector()
-    return detector.detect(text)
+    return detector.detect(text, hint=hint)
 
 
 def get_language_name(code: str) -> str:

@@ -23,6 +23,7 @@ PW_PYTHON = (shutil.which(_env_py) or _env_py) if _env_py else (sys.executable i
 
 pytestmark = [
     pytest.mark.slow,
+    pytest.mark.timeout(400),
     pytest.mark.skipif(PW_PYTHON is None, reason="no Python with playwright (set ST_PLAYWRIGHT_PYTHON)"),
     pytest.mark.skipif(not has_zipformer("en"), reason="English Zipformer model not downloaded"),
 ]

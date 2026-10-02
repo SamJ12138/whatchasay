@@ -153,3 +153,17 @@ Browser: load `extension/` unpacked → YouTube video without captions → popup
   The browser harness is now `backend/scripts/e2e_extension.py` with `--path audio|captions` (the caption path: a
   `<video>` with a WebVTT track → detector → `/ws` → overlay, 0.5 s to the first translated cue); slow tests
   `tests/test_e2e_extension.py` (both paths, 45 s with model loads).
+- Batch 2 (T1-T8, T11, T12, W6, P6): every target of `/translate`, `/ws` and `/ws/asr` replies carries `status`
+  ok | fallback | untranslated | error (+ `engine`, `error_type`, `error`); results carry `degraded`. The router
+  (`BaseTranslator.translate_batch_detailed`) never returns the source as a translation: no engine → `untranslated`
+  (source only as a placeholder), engine failure/empty output → fallback engine → `fallback`, else `error` with no text;
+  an engine echoing its input → `untranslated`. Only ok/fallback reach the TM (fallback at quality 0.6 with the engine
+  name; TM `engine` column, additive migration; `set` keeps the better row), only all-ok results reach the memory cache;
+  a fallback TM row is re-asked of the primary engine and served as `fallback` if it still fails; legacy rows equal to
+  the source are never served. TM writes are awaited before replying and failures logged with `error_type`.
+  `/translate` returns `notes` + `degraded`. Language detection rule in `settings.lang_detect` (script first; Latin text
+  under 24 chars or below 0.90 confidence or outside the candidate set → session hint; hint from the cue, the `/ws`
+  connection's `source_lang_hint`, or `default_hint` "en"); the content script sends the track/page language as the hint.
+  `/ws` handler errors (correction, config) now use the error envelope with `error_type`; the extension parser surfaces
+  unsolicited errors, treats legacy `{status:"error"}` results as errors, draws only ok/fallback targets and caches only
+  all-ok results. `pytest-timeout` added (a hung WebSocket receive now fails the test).

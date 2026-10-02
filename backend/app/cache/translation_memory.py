@@ -109,6 +109,13 @@ class TranslationMemory:
                 ON glossary(source_term, source_lang);
         """)
         
+        # Additive migration: which engine produced a row (fallback rows are
+        # stored with a lower quality and replaced by a later primary result).
+        async with self._connection.execute("PRAGMA table_info(translations)") as cursor:
+            columns = {row[1] async for row in cursor}
+        if "engine" not in columns:
+            await self._connection.execute("ALTER TABLE translations ADD COLUMN engine TEXT")
+
         await self._connection.commit()
         self._initialized = True
         logger.info(f"Translation memory initialized: {self.db_path}")
@@ -155,7 +162,7 @@ class TranslationMemory:
         content_hash = self._compute_hash(source_text, source_lang, target_lang)
         
         async with self._connection.execute("""
-            SELECT translation, formatted_lines, is_user_corrected, quality_score
+            SELECT translation, formatted_lines, is_user_corrected, quality_score, engine
             FROM translations
             WHERE content_hash = ?
         """, (content_hash,)) as cursor:
@@ -175,6 +182,7 @@ class TranslationMemory:
                 'lines': json.loads(row[1]),
                 'is_user_corrected': bool(row[2]),
                 'quality_score': row[3],
+                'engine': row[4],
             }
         
         return None
@@ -187,10 +195,16 @@ class TranslationMemory:
         translation: str,
         formatted_lines: List[str],
         is_user_corrected: bool = False,
-        quality_score: float = 1.0
+        quality_score: float = 1.0,
+        engine: Optional[str] = None,
     ) -> None:
         """
         Store translation in memory.
+
+        An existing row is kept when it is a user correction (and this write is
+        not), or when this write has a lower quality score (a fallback engine's
+        output never replaces a primary or refined one). Otherwise this write
+        replaces it.
         
         Args:
             source_text: Source text
@@ -207,26 +221,28 @@ class TranslationMemory:
         content_hash = self._compute_hash(source_text, source_lang, target_lang)
         lines_json = json.dumps(formatted_lines, ensure_ascii=False)
         
-        await self._connection.execute("""
-            INSERT INTO translations 
-                (content_hash, source_text, source_lang, target_lang, 
-                 translation, formatted_lines, is_user_corrected, quality_score)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        keep_old = (
+            "((translations.is_user_corrected AND NOT excluded.is_user_corrected) OR "
+            "(NOT excluded.is_user_corrected AND excluded.quality_score < translations.quality_score))"
+        )
+        await self._connection.execute(f"""
+            INSERT INTO translations
+                (content_hash, source_text, source_lang, target_lang,
+                 translation, formatted_lines, is_user_corrected, quality_score, engine)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(content_hash) DO UPDATE SET
-                translation = CASE WHEN translations.is_user_corrected AND NOT excluded.is_user_corrected
-                                   THEN translations.translation ELSE excluded.translation END,
-                formatted_lines = CASE WHEN translations.is_user_corrected AND NOT excluded.is_user_corrected
-                                   THEN translations.formatted_lines ELSE excluded.formatted_lines END,
+                translation = CASE WHEN {keep_old} THEN translations.translation ELSE excluded.translation END,
+                formatted_lines = CASE WHEN {keep_old} THEN translations.formatted_lines ELSE excluded.formatted_lines END,
+                quality_score = CASE WHEN {keep_old} THEN translations.quality_score ELSE excluded.quality_score END,
+                engine = CASE WHEN {keep_old} THEN translations.engine ELSE excluded.engine END,
                 is_user_corrected = translations.is_user_corrected OR excluded.is_user_corrected,
-                quality_score = CASE WHEN translations.is_user_corrected AND NOT excluded.is_user_corrected
-                                   THEN translations.quality_score ELSE excluded.quality_score END,
                 updated_at = CURRENT_TIMESTAMP,
                 use_count = use_count + 1
         """, (content_hash, source_text, source_lang, target_lang,
-              translation, lines_json, is_user_corrected, quality_score))
-        
+              translation, lines_json, is_user_corrected, quality_score, engine))
+
         await self._connection.commit()
-    
+
     async def store_correction(
         self,
         source_text: str,
@@ -261,7 +277,8 @@ class TranslationMemory:
             translation=corrected_translation,
             formatted_lines=corrected_lines,
             is_user_corrected=True,
-            quality_score=1.0  # User corrections are highest quality
+            quality_score=1.0,  # User corrections are highest quality
+            engine="user",
         )
     
     async def get_glossary_term(
