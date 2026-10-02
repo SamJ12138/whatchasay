@@ -469,3 +469,12 @@ D4 cloud providers off by default, keys only in backend config.
   5.3-5.5 s, translations from 5.4-10.7 s, translate p50 34.7-43.6 ms / p95 114.5-148.1 ms per run. Five lines
   from run `run_20261002T141338-35728b` with what went wrong in them (রাজভোগ heard as রাজবুক, "royal book").
   Noticed: LID now takes ~0.87 s per call (30 s padding), was 0.18-0.56 s; not changed.
+- Batch 4 (YouTube demo GIF): `docs/demo-youtube.gif`, 9.0 s, 640 px, 6 fps, 128 colours, 2,670,229 bytes: the
+  Playwright recording of live run C (`run_20261002T141338-35728b`, the run whose five lines are in
+  `docs/live-test-youtube.md`), window 19.5-28.5 s of the recording, where Bengali words arrive and two translations
+  land ("It's too expensive to raise it.", "...tomorrow I need ten thousand royalbooks."), through the same
+  two-pass palette path. `make_demo_gif.py --recording FILE --start S` converts a harness recording without making
+  a new run. README: the GIF and its credit (title, channel, URL, "run on CPU") directly under the opening
+  paragraph; the NASA GIF and its caption moved to "How it works". `NOTICE.md`: the excerpt belongs to its rights
+  holders, is not under the MIT License, and is shown only to demonstrate the software. `tests/test_docs_media.py`:
+  the GIF's place and credit, at most 5 MB and 5-10 s, the NASA GIF inside "How it works".

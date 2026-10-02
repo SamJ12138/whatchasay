@@ -8,6 +8,11 @@
 
     python backend/scripts/make_demo_gif.py --models-root <dir with asr/ and punct/> [--screenshot]
 
+--recording FILE --start S skips steps 1-2 and converts a recording the harness already made
+(e2e_extension.py --record, e.g. a --url live test; docs/live-test-youtube.md has the command):
+
+    python backend/scripts/make_demo_gif.py --recording rec/<id>.webm --start 41.5 --seconds 8 --out docs/demo-youtube.gif
+
 Needs a Python with playwright and imageio-ffmpeg (run it with that Python); the backend's venv runs the
 backend. Prints a JSON summary (size, duration, window, harness summary).
 """
@@ -82,8 +87,18 @@ def main() -> int:
     ap.add_argument("--size", default="960x540", help="browser viewport and recording size")
     ap.add_argument("--font-size", type=int, default=28)
     ap.add_argument("--port", type=int, default=8799)
+    ap.add_argument("--recording", type=Path, help="convert this harness recording instead of making one")
+    ap.add_argument("--start", type=float, help="--recording: GIF window start (s into the recording)")
     args = ap.parse_args()
     seconds = min(args.seconds, 12.0)
+    if args.recording:
+        if args.start is None:
+            ap.error("--recording needs --start")
+        to_gif(args.recording, args.out, args.start, seconds, args.width, args.fps, args.colors)
+        print(json.dumps({"ok": True, "gif": str(args.out), "bytes": args.out.stat().st_size, "seconds": seconds,
+                          "window_start_s": args.start, "fps": args.fps, "width": args.width,
+                          "recording": args.recording.name}))
+        return 0
 
     work = Path(tempfile.mkdtemp(prefix="st-demo-"))
     clip = source_clip(work)

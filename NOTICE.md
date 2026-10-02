@@ -111,3 +111,10 @@ domain in the United States: "This file is in the public domain in the United St
 by NASA." NASA's logo, visible in the video's corner, is not covered by that and its use is restricted
 (14 CFR 1221); this project is not endorsed by NASA. The subtitles drawn over it are this project's own output.
 
+`docs/demo-youtube.gif` shows 9 seconds of **"10,000 রাজভোগের Order | Ora Char Jon | Movie Scene"** as played on
+YouTube by the channel Bengali Movies with English Subtitle (https://www.youtube.com/watch?v=-tpVpbIxFmI), with
+the YouTube page around it. The film and the video belong to their rights holders; they are not covered by this
+repository's MIT License and this project is not endorsed by them or by YouTube. The excerpt is shown only to
+demonstrate the software; the subtitles drawn over it are this project's own output. Its audio is not in the
+repository.
+

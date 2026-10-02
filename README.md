@@ -11,17 +11,19 @@ the same moment instead of one person explaining the joke to the other afterward
 It runs entirely on your own machine, and nothing you watch leaves your laptop unless
 you decide it should.
 
+![Demo: Bengali dialogue in a film scene on YouTube is captioned live and translated into English over the video](docs/demo-youtube.gif)
+
+*9 seconds of "10,000 রাজভোগের Order | Ora Char Jon | Movie Scene | Prosenjit | Abhishek Chatterjee | Debashree"
+from the YouTube channel Bengali Movies with English Subtitle
+(<https://www.youtube.com/watch?v=-tpVpbIxFmI>), run on CPU: Bengali speech detected and captioned live, each
+sentence translated into English above it. Recorded by the browser harness during a live test
+(`docs/live-test-youtube.md`), not by hand; the translations are as they came out, mistakes included.*
+
 It is for videos and live streams that have no subtitles, lectures, and meetings held in a browser tab in a language
 you do not speak. A Chrome extension captures the tab's sound, a local Python program turns English, Mandarin or
 Bengali speech into text and translates it, and the extension draws both lines over the video, usually under a
 second after each sentence ends. The extension only talks to the backend on 127.0.0.1, and nothing is sent to a
 cloud service unless you turn a cloud provider on yourself (it is off by default).
-
-![Demo: English speech in a NASA video is captioned live and translated into Chinese over the video](docs/demo.gif)
-
-*12 seconds of NASA ScienceCasts, "The Zero Gravity Coffee Cup" (public domain): English speech captioned live,
-words first, then each sentence cased and translated into Chinese. Speech recognition and translation ran on the
-CPU of a laptop (Intel i9-13900H), no GPU and no cloud. Recorded by the browser harness, not by hand.*
 
 ## Requirements
 
@@ -194,6 +196,12 @@ WenetSpeech, which is released for non-commercial use. It is opt-in:
 `--accept-mandarin-large-terms`; then set `SUBTITLE_ASR__ZH_MODEL=large`. Do not redistribute it.
 
 ## How it works
+
+![Demo: English speech in a NASA video is captioned live and translated into Chinese over the video](docs/demo.gif)
+
+*12 seconds of NASA ScienceCasts, "The Zero Gravity Coffee Cup" (public domain): English speech captioned live,
+words first, then each sentence cased and translated into Chinese. Speech recognition and translation ran on the
+CPU of a laptop (Intel i9-13900H), no GPU and no cloud. Recorded by the browser harness, not by hand.*
 
 ```
  Chrome tab ──audio──> offscreen document ──16 kHz PCM, 40 ms frames──┐       (WebSocket, 127.0.0.1)

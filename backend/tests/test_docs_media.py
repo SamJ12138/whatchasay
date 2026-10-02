@@ -74,6 +74,32 @@ def test_readme_opens_with_the_owner_paragraph_verbatim():
     assert "stay on your machine" not in paras[1], paras[1]
 
 
+YT_GIF = REPO / "docs" / "demo-youtube.gif"
+
+
+def test_youtube_gif_sits_right_under_the_opening_with_its_credit():
+    blocks = [" ".join(b.split()) for b in re.split(r"\n\s*\n", README) if b.strip()]
+    i = blocks.index(OPENING)
+    assert re.fullmatch(r"!\[[^\]]+\]\(docs/demo-youtube\.gif\)", blocks[i + 1]), blocks[i + 1]
+    caption = blocks[i + 2]
+    for part in ("Ora Char Jon", "Bengali Movies with English Subtitle", "https://www.youtube.com/watch?v=-tpVpbIxFmI",
+                 "run on CPU"):
+        assert part in caption, (part, caption)
+
+
+def test_nasa_gif_moved_to_how_it_works():
+    how = README.index("## How it works")
+    after = README.index("\n## ", how + 1)
+    assert README.index("](docs/demo.gif)") in range(how, after)
+
+
+def test_youtube_gif_size_and_length():
+    data = YT_GIF.read_bytes()
+    assert data[:6] in (b"GIF87a", b"GIF89a")
+    assert len(data) <= 5 * 1024 * 1024, len(data)
+    assert 5.0 <= gif_seconds(data) <= 10.0, gif_seconds(data)
+
+
 def test_live_youtube_test_record_has_its_numbers_and_at_most_five_lines():
     doc = (REPO / "docs" / "live-test-youtube.md").read_text(encoding="utf-8")
     for field in ("run_id", "Detected language", "Time to first subtitle", "p50", "p95", "youtube.com/watch?v=-tpVpbIxFmI"):
