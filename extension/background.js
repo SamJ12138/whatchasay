@@ -71,7 +71,7 @@ const DEFAULT_SETTINGS = {
   autoConnect: true,
   // Live captions
   asrSourceLang: 'auto',      // auto | en | zh | bn
-  asrEngine: 'auto',          // auto | sherpa-zipformer | whisper | cloud
+  asrEngine: 'auto',          // auto | sherpa-zipformer (the backend's only engine)
   translationEngine: 'auto',  // auto | chrome | backend
   showPartials: true,
   // Caption mode (D2): translate subtitles a page already shows. Off by default;

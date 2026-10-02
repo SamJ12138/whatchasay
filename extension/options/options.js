@@ -243,7 +243,8 @@ async function loadSettings() {
     if (elements.refinerEnabled) elements.refinerEnabled.checked = settings.refinerEnabled === true;
     if (elements.refinerProvider) elements.refinerProvider.value = settings.refinerProvider || 'ollama';
     if (elements.asrSourceLang) elements.asrSourceLang.value = settings.asrSourceLang || 'auto';
-    if (elements.asrEngine) elements.asrEngine.value = settings.asrEngine || 'auto';
+    // a stored engine the backend no longer has (the removed accuracy-mode option) shows as Auto
+    if (elements.asrEngine) elements.asrEngine.value = ['auto', 'sherpa-zipformer'].includes(settings.asrEngine) ? settings.asrEngine : 'auto';
     if (elements.translationEngine) elements.translationEngine.value = settings.translationEngine || 'auto';
     if (elements.showPartials) elements.showPartials.checked = settings.showPartials !== false;
     if (elements.captionMode) elements.captionMode.checked = settings.captionMode === true;
