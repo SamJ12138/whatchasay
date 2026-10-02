@@ -78,3 +78,42 @@ What the baseline says:
   speech), 6.0 s (Mandarin sample), 5.4-5.6 s (live clip), so the first line's first display is 2.6-5.1 s.
   English speech is recognised by the provisional recognizer from the start (first text at 0.3-0.5 s, dimmed) and
   undimmed at 4.0-4.2 s.
+
+## Batch 1: bounded segments (2026-10-02)
+
+Partial results were already streamed, so this batch did not change `first_display_ms`; it changed how long a
+line stays open, which is what the translation waits for.
+
+**What ends a line now** (`asr/sherpa_engine.py`, `SegmentRules`; settings `SUBTITLE_ASR__*`):
+
+| Setting | Default | Why this value |
+|---|---|---|
+| `RULE2_MIN_TRAILING_SILENCE` (the silence threshold) | 0.6 s | unchanged. The recognizer only checks it on decode-chunk boundaries (0.64 s for Bengali), so it misses most pauses in dialogue |
+| `SPLIT_GAP_S` | 0.5 s | a line also ends before a word whose first token comes this long after the previous token. On the live clip the gaps between sentences are 0.56-0.64 s and the gaps inside sentences 0.40-0.48 s (a hesitation, a breath), so 0.4 s (the first candidate, observations A9) made one- and two-word lines and 0.5 s cuts exactly at the sentences |
+| `SPLIT_GAP_RATIO` | 2.5 | the pause must also be 2.5 times the line's median gap between tokens. Without it the slow code-switched Mandarin sample ("…THE DAY AFTER / TOMORROW", a word every 0.4-0.7 s) was cut inside a sentence; fast speech is not affected (median gap 0.12-0.2 s) |
+| `SPLIT_MIN_PIECE_S` | 2.0 s | no pause cut before the line is this long: a hesitation after the first words ("কী … মশায়") stays in its sentence. 2.5 s merged two of the clip's sentences |
+| `MAX_SEGMENT_S` | 6.0 s | the longest line: past it the line is cut at its widest gap between words (one with `SPLIT_MIN_PIECE_S` before it if there is one), never inside a word. About two subtitle rows of speech; the English sample sentence (5.8 s) stays whole |
+| `MAX_SEGMENT_TOKENS` | 48 | the same limit in recognizer tokens (about 6-7 per second of speech), for speech too fast for the time limit to catch |
+| `RULE3_MIN_UTTERANCE_LENGTH` | 30 s (was 10) | the recognizer's own hard reset, which cuts inside a word ("…যে রাজব / গাবে না…"); now only a backstop |
+
+The cuts do not reset the recognizer: the tokens before the cut become a final, the ones after it the next line, so
+the recognizer keeps its context and no audio is decoded twice. With Auto-detect, the audio buffered during
+detection is replayed into the new recognizer in 40 ms frames instead of one block, so sentences inside it end where
+they end (and the frame that triggered detection is no longer fed twice).
+
+**Segment length distribution** (recognizer alone, 40 ms frames, the same audio through the old rules and the new;
+length = first word to last word of each final; `tests/test_segmentation_real.py` holds the first three rows'
+claims):
+
+| Clip | Before: finals (s) | After: finals (s) | Longest wait from a line's first word to its final, before -> after |
+|---|---|---|---|
+| Live clip (Bengali, 20 s) | 3: 0.68, 9.28, 7.84 | 6: 0.68, 2.76, 4.16, 2.16, 2.64, 3.48 | 9.64 s -> 5.60 s |
+| English sample `1.wav` (16.7 s, read prose) | 2: 9.44 (cut inside "to connect her / parent"), 6.24 | 3: 5.40, 3.96, 5.64 | 9.76 s -> 6.52 s |
+| Bengali sample `0.wav` | 1: 6.88 | 2: 3.68, 2.80 | 7.84 s -> 6.56 s |
+| English sample `0.wav` | 1: 5.84 | 1: 5.84 | 6.84 s -> 6.84 s |
+| Mandarin sample `0.wav` | 4: 1.76, 0.20, 3.16, 0.84 | the same | 3.96 s -> 3.96 s |
+| Mandarin sample `3.wav` | 1: 4.64 | the same | 5.56 s -> 5.56 s |
+| All | 12 finals, median 5.24 s, longest 9.44 s, 4 over 6.5 s | 17 finals, median 3.16 s, longest 5.84 s, none over 6.5 s | |
+
+The live clip's line 2 (9.3 s: "এর থেকে বড় সাইজের হয় না … দিনকাল যা পড়েছে") is now three lines, cut where the speakers
+pause, and the rest of the clip two more.

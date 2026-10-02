@@ -100,6 +100,29 @@ test('reset forgets the open lines: the next recognizer numbers its utterances f
   assert.equal(rec.lang, 'bn');
 });
 
+test('a line cut off a longer one counts its first display from when its first word was first drawn', () => {
+  // The length rule cuts an open line at its widest pause: the words after the cut were
+  // already on screen, inside the longer line's partial, before they became a line of their own.
+  const { clock, t } = tracker();
+  clock.ms = 1000500;
+  t.text('asr_0', { w_first: 1000.0, w_last: 1000.3, lang: 'en', lang_status: 'manual' });
+  clock.ms = 1003000;  // the partial now shows words up to the one whose audio arrived at 1002.6
+  t.text('asr_0', { w_first: 1000.0, w_last: 1002.6, lang: 'en', lang_status: 'manual' });
+  clock.ms = 1006500;  // cut: asr_0 ends with the word at 1002.0, asr_1 starts with the one at 1002.4
+  t.text('asr_0', { w_first: 1000.0, w_last: 1002.0, lang: 'en', lang_status: 'manual' }, { final: true });
+  t.text('asr_1', { w_first: 1002.4, w_last: 1006.2, lang: 'en', lang_status: 'manual' });
+  clock.ms = 1009000;
+  t.text('asr_1', { w_first: 1002.4, w_last: 1008.5, lang: 'en', lang_status: 'manual' }, { final: true });
+  const rec = t.translation('asr_1', { w_first: 1002.4, w_last: 1008.5, targets_pending: 0, translations: { zh: {} } });
+  assert.equal(rec.first_display_ms, 600);   // drawn at 1003.0, not at the cut (1006.5)
+
+  // a line that starts after everything drawn so far (a pause split, an endpoint) counts from now
+  clock.ms = 1010000;
+  t.text('asr_2', { w_first: 1009.6, w_last: 1009.8, lang: 'en', lang_status: 'manual' }, { final: true });
+  const next = t.translation('asr_2', { w_first: 1009.6, w_last: 1009.8, targets_pending: 0, translations: { zh: {} } });
+  assert.equal(next.first_display_ms, 400);
+});
+
 test('the first confirmed-language text of a session is reported once, from the session\'s first audio', () => {
   const { clock, t } = tracker();
   clock.ms = 7001000;

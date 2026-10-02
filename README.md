@@ -335,8 +335,13 @@ objects are JSON; relative paths are relative to `backend/`. Every setting:
 | `SUBTITLE_ASR__LANGUAGES` | `["en", "zh", "bn"]` | Spoken languages with streaming models (auto-detect chooses among these) |
 | `SUBTITLE_ASR__NUM_THREADS` | `2` | CPU threads per recognizer |
 | `SUBTITLE_ASR__RULE1_MIN_TRAILING_SILENCE` | `1.2` | Endpointing (seconds): reset after this much silence when no word was recognised yet |
-| `SUBTITLE_ASR__RULE2_MIN_TRAILING_SILENCE` | `0.6` | End a sentence after this much silence following speech |
-| `SUBTITLE_ASR__RULE3_MIN_UTTERANCE_LENGTH` | `10.0` | End it anyway after this long, even mid-sentence |
+| `SUBTITLE_ASR__RULE2_MIN_TRAILING_SILENCE` | `0.6` | The silence threshold: end a line after this much silence following speech (seconds) |
+| `SUBTITLE_ASR__RULE3_MIN_UTTERANCE_LENGTH` | `30.0` | The recognizer's own hard reset after this many seconds without an endpoint; it can cut inside a word and is only a backstop behind MAX_SEGMENT_S |
+| `SUBTITLE_ASR__SPLIT_GAP_S` | `0.5` | Also end a line before a word that starts this long after the previous one (seconds; pauses the silence rule misses; 0 = off) |
+| `SUBTITLE_ASR__SPLIT_GAP_RATIO` | `2.5` | ...only if that pause is at least this many times the line's median gap between tokens (slow speech is not chopped; 0 = no test) |
+| `SUBTITLE_ASR__SPLIT_MIN_PIECE_S` | `2.0` | ...and only once the line is at least this long (seconds; a hesitation does not become a line) |
+| `SUBTITLE_ASR__MAX_SEGMENT_S` | `6.0` | Longest line in seconds of speech: past it the line is cut at its widest gap between words (0 = no limit) |
+| `SUBTITLE_ASR__MAX_SEGMENT_TOKENS` | `48` | Longest line in recognizer tokens, cut the same way (0 = no limit) |
 | `SUBTITLE_ASR__LID_WINDOW_S` | `2.5` | Seconds of voiced audio before spoken-language ID runs |
 | `SUBTITLE_ASR__LID_MIN_CONFIDENCE` | `0.6` | Spoken-language ID answers only at or above this confidence among the spoken languages |
 | `SUBTITLE_ASR__PARTIAL_INTERVAL_MS` | `120` | Minimum gap between partial captions (ms) |
@@ -463,7 +468,8 @@ Windows (`.github/workflows/ci.yml`). `DEVLOG.md` is the project history; every 
 - Without the English punctuation model (if it is missing) English speech is translated in upper case, which OPUS-MT
   handles badly. The bilingual Mandarin model writes English words inside Mandarin speech in upper case, and they
   are not restored.
-- A sentence longer than 10 seconds of continuous speech is cut and its parts are translated separately.
+- A line ends at a pause (0.5-0.6 s) and is at most 6 seconds of speech: a longer sentence is cut at its widest
+  pause and its parts are translated separately, which can split a clause from its verb.
 - With *Auto-detect*, the first seconds (about 5 in the YouTube live test) are recognised as English until detection
   has heard enough. That text is dimmed under *Detecting language…* and thrown away if the language turns out to be
   another one; choosing the spoken language avoids the wait.
@@ -473,8 +479,8 @@ Windows (`.github/workflows/ci.yml`). `DEVLOG.md` is the project history; every 
   spoken language under *Live Captions* in the popup instead of *Auto-detect*.
 - There is no glossary: a word the recognizer gets wrong (a name, a dish) stays wrong, and an Alt+E correction
   covers only the exact sentence it was made on.
-- Bengali film dialogue comes out in long run-on lines (several sentences in one, up to the 10-second cut), which
-  the translator then garbles (`docs/observations.md`, A9).
+- Fast dialogue with pauses under half a second still runs two sentences into one line (up to the 6-second cut;
+  `docs/observations.md`, A9, and `docs/latency.md`).
 - Korean and Portuguese targets stay untranslated with OPUS-MT (no model from English).
 - Sites that protect their audio (DRM) give silence; the popup then says no audio is reaching the capture.
 - Chrome's built-in on-device translator (Chrome 138+, *Prepare on-device translation* in the popup) is wired in but

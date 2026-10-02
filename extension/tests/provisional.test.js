@@ -202,3 +202,40 @@ test('an on-device translation carries the status of its sentence', () => {
   const fn = off.slice(off.indexOf('async function translateOnDevice'));
   assert.match(fn, /lang_status: finalMsg\.lang_status/);
 });
+
+// ---- the line in progress (streaming partial results) ----
+
+test('a line still being recognised is marked as in progress until its final replaces it', () => {
+  const overlay = newOverlay();
+  overlay.setLanguageStatus('manual', { lang: 'en', name: 'English' });
+  overlay.showPartial('asr_0', 'where did you', 'en', 'manual');
+  let els = overlay.subtitleStack.children;
+  assert.equal(els.length, 1);
+  assert.ok(els[0].className.split(/\s+/).includes('partial'));
+  assert.ok(els[0].className.split(/\s+/).includes('in-progress'));
+  assert.equal(els[0].dataset.state, 'in-progress');
+  assert.equal(els[0].textContent, 'where did you');          // the growing text itself is not altered
+
+  overlay.showPartial('asr_0', 'where did you put the', 'en', 'manual');
+  els = overlay.subtitleStack.children;
+  assert.equal(els.length, 1);
+  assert.equal(els[0].textContent, 'where did you put the');
+
+  overlay.showTranslation('asr_0', 'Where did you put the keys?', {}, { sourceLang: 'en', langStatus: 'manual' });
+  els = overlay.subtitleStack.children;
+  assert.equal(els.length, 1);
+  assert.ok(!els[0].className.split(/\s+/).includes('in-progress'), 'the finished line is still marked in progress');
+  assert.equal(els[0].dataset.state, undefined);
+
+  // the next line grows under the finished one
+  overlay.showPartial('asr_1', 'i will be', 'en', 'manual');
+  const kinds = overlay.subtitleStack.children.map((el) => el.dataset.state || 'done');
+  assert.deepEqual(kinds, ['done', 'in-progress']);
+});
+
+test('the in-progress mark is visible: italic, greyed, with a trailing ellipsis drawn by the style sheet', () => {
+  const css = newOverlay()._getStyles();
+  const rule = (sel) => (css.match(new RegExp(sel.replace(/\./g, '\\.') + '\\s*\\{([^}]*)\\}')) || [])[1] || '';
+  assert.match(rule('.subtitle-line.partial'), /font-style:\s*italic/);
+  assert.match(rule('.subtitle-line.in-progress::after'), /content:\s*'\s*…'/);
+});

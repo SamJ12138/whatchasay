@@ -1,9 +1,10 @@
 """
 Local streaming ASR using sherpa-onnx Zipformer transducers (CPU).
 
-These models are chunk-synchronous: every ~40 ms of audio fed in produces an
-updated hypothesis with a fixed ~300-400 ms delay, and the built-in endpoint
-detector closes an utterance after trailing silence. That is what makes a
+These models are chunk-synchronous: the hypothesis is updated once per decode
+chunk (0.32 s for the English and Mandarin models, 0.64 s for the Bengali one),
+and the built-in endpoint detector closes an utterance after trailing silence;
+SherpaSession also ends a line at pauses and length limits (SegmentRules). That is what makes a
 sub-second subtitle possible; Whisper-family models cannot do this natively.
 
 Model directories live under data/models/asr/<name>/ and are downloaded
@@ -18,6 +19,7 @@ import tarfile
 import threading
 import time
 import urllib.request
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -167,17 +169,53 @@ def ensure_model(spec: ZipformerModelSpec, models_root: Path, allow_gated: bool 
     return model_dir
 
 
-class SherpaSession:
-    """One Zipformer stream with endpointing and partial/final emission."""
+@dataclass(frozen=True)
+class SegmentRules:
+    """Where a line ends besides the recognizer's own endpoint (observations A9).
 
-    def __init__(self, engine: "SherpaZipformerEngine", lang: str, recognizer):
+    Pause rule: the line ends before a word whose first token comes at least
+    `split_gap_s` after the previous token, if the line so far spans at least
+    `split_min_piece_s` and the gap is at least `split_gap_ratio` times the line's
+    median token gap (0 = no ratio test). split_gap_s 0 = off.
+    Length rule: a line spanning more than `max_segment_s`, or holding more than
+    `max_segment_tokens` tokens, is cut at its widest gap between words (0 = off).
+    """
+
+    split_gap_s: float = 0.5
+    split_gap_ratio: float = 2.5
+    split_min_piece_s: float = 2.0
+    max_segment_s: float = 6.0
+    max_segment_tokens: int = 48
+
+
+def _word_start(token: str) -> bool:
+    """Does this token begin a word? The Zipformer models mark a word's first piece with
+    a leading space (or the sentencepiece underline); a CJK character is a word of its own."""
+    c = token[:1]
+    return c in (" ", "▁") or "一" <= c <= "鿿" or "㐀" <= c <= "䶿"
+
+
+def _text_of(tokens: List[str]) -> str:
+    return "".join(tokens).replace("▁", " ").strip()
+
+
+class SherpaSession:
+    """One Zipformer stream: partial / final emission, the recognizer's endpointing, and
+    lines closed at pauses and at the length limits (SegmentRules) without resetting the
+    stream: the recognizer keeps its context, the tokens before the cut become a final,
+    the ones after it the next line."""
+
+    def __init__(self, engine: "SherpaZipformerEngine", lang: str, recognizer, rules: Optional[SegmentRules] = None):
         self.engine = engine
         self.lang = lang
         self.recognizer = recognizer
+        self.rules = rules or SegmentRules()
         self.stream = recognizer.create_stream()
         self._samples_fed = 0
         self._utterance_id = 0
-        self._utt_start_sample = 0
+        self._line_t0 = 0.0     # audio clock where the open line starts
+        self._cut = 0           # tokens of the recognizer's current segment already closed as finals
+        self._seen = 0          # token count when the rules were last applied
         self._last_partial = ""
         self._closed = False
 
@@ -196,20 +234,19 @@ class SherpaSession:
         while rec.is_ready(self.stream):
             rec.decode_stream(self.stream)
 
-        text = rec.get_result(self.stream).strip()
+        tokens, times = self._tokens()
         events: List[AsrEvent] = []
+        if len(tokens) != self._seen:
+            self._seen = len(tokens)
+            events.extend(self._close_lines(tokens, times))
 
         if rec.is_endpoint(self.stream):
-            if text:
-                events.append(self._make_event("final", text))
-            rec.reset(self.stream)
-            self._utterance_id += 1
-            self._utt_start_sample = self._samples_fed
-            self._last_partial = ""
-        elif text and text != self._last_partial:
-            self._last_partial = text
-            events.append(self._make_event("partial", text))
-
+            events.extend(self._end_segment(tokens, times))
+        else:
+            text = _text_of(tokens[self._cut:])
+            if text and text != self._last_partial:
+                self._last_partial = text
+                events.append(self._event("partial", tokens, times, self._cut, len(tokens)))
         return events
 
     def flush(self) -> List[AsrEvent]:
@@ -222,42 +259,88 @@ class SherpaSession:
         rec = self.recognizer
         while rec.is_ready(self.stream):
             rec.decode_stream(self.stream)
-        text = rec.get_result(self.stream).strip()
-        events = []
-        if text:
-            events.append(self._make_event("final", text))
-        rec.reset(self.stream)
-        self._utterance_id += 1
-        self._utt_start_sample = self._samples_fed
-        self._last_partial = ""
-        return events
+        tokens, times = self._tokens()
+        return self._close_lines(tokens, times) + self._end_segment(tokens, times)
 
     def close(self) -> None:
         self._closed = True
 
-    def _word_times(self) -> Tuple[Optional[float], Optional[float]]:
-        """Audio-clock time of the first and last token of the utterance in progress.
-        sherpa-onnx reports token timestamps relative to the segment's start_time."""
-        try:
-            r = self.recognizer.get_result_all(self.stream)
-            ts = r.timestamps
-            if not ts:
-                return None, None
-            return r.start_time + ts[0], r.start_time + ts[-1]
-        except Exception:  # timestamps only feed the latency log; never lose a caption over them
-            return None, None
+    # ------------------------------------------------------------- segmentation
 
-    def _make_event(self, kind: str, text: str) -> AsrEvent:
-        first, last = self._word_times()
+    def _tokens(self) -> Tuple[List[str], List[float]]:
+        """Tokens of the recognizer's current segment with their audio-clock times
+        (sherpa-onnx reports timestamps relative to the segment's start_time)."""
+        r = self.recognizer.get_result_all(self.stream)
+        tokens = list(r.tokens)
+        times = [r.start_time + t for t in r.timestamps]
+        n = min(len(tokens), len(times))
+        return tokens[:n], times[:n]
+
+    def _split_at(self, tokens: List[str], times: List[float]) -> Optional[int]:
+        """Index of the token that starts the next line, or None while the open line goes on."""
+        a, n, r = self._cut, len(tokens), self.rules
+        starts = [k for k in range(a + 1, n) if _word_start(tokens[k])]
+        if r.split_gap_s > 0:
+            for k in starts:
+                gap = times[k] - times[k - 1]
+                if gap < r.split_gap_s or times[k - 1] - times[a] < r.split_min_piece_s:
+                    continue
+                inner = sorted(times[j] - times[j - 1] for j in range(a + 1, k))
+                if r.split_gap_ratio > 0 and inner and gap < r.split_gap_ratio * inner[len(inner) // 2]:
+                    continue
+                return k
+        too_long = (r.max_segment_s > 0 and n > a and times[n - 1] - times[a] > r.max_segment_s) or \
+                   (r.max_segment_tokens > 0 and n - a > r.max_segment_tokens)
+        if not too_long:
+            return None
+        # cut where the part before fits the limits: at the widest gap that leaves a real line
+        # (split_min_piece_s) before it, else at the widest gap there is; among equals the latest
+        fits = [k for k in starts if not ((r.max_segment_tokens > 0 and k - a > r.max_segment_tokens) or
+                                          (r.max_segment_s > 0 and times[k - 1] - times[a] > r.max_segment_s))]
+        real = [k for k in fits if times[k - 1] - times[a] >= r.split_min_piece_s]
+        candidates = real or fits[1:] or fits  # never a one-word line while there is another place to cut
+        if not candidates:
+            return None
+        return max(candidates, key=lambda k: (times[k] - times[k - 1], k))
+
+    def _close_lines(self, tokens: List[str], times: List[float]) -> List[AsrEvent]:
+        events: List[AsrEvent] = []
+        while True:
+            k = self._split_at(tokens, times)
+            if k is None:
+                return events
+            events.append(self._event("final", tokens, times, self._cut, k))
+            self._cut = k
+            self._line_t0 = times[k]
+            self._utterance_id += 1
+            self._last_partial = ""
+
+    def _end_segment(self, tokens: List[str], times: List[float]) -> List[AsrEvent]:
+        """The recognizer's endpoint (or a flush): what is left of the segment is a final."""
+        events = []
+        if _text_of(tokens[self._cut:]):
+            events.append(self._event("final", tokens, times, self._cut, len(tokens)))
+        self.recognizer.reset(self.stream)
+        self._utterance_id += 1
+        self._line_t0 = self.audio_clock
+        self._cut = 0
+        self._seen = 0
+        self._last_partial = ""
+        return events
+
+    def _event(self, kind: str, tokens: List[str], times: List[float], a: int, b: int) -> AsrEvent:
+        """The line made of tokens[a:b]; a line closed by a rule ends with its last word,
+        any other at the audio clock."""
+        closed_by_rule = kind == "final" and b < len(tokens)
         return AsrEvent(
             kind=kind,
-            text=text,
+            text=_text_of(tokens[a:b]),
             lang=self.lang,
-            t0=self._utt_start_sample / SAMPLE_RATE,
-            t1=self.audio_clock,
+            t0=self._line_t0,
+            t1=min(times[b - 1] + 0.2, times[b]) if closed_by_rule else self.audio_clock,
             utterance_id=self._utterance_id,
-            first_word_t=first,
-            last_word_t=last,
+            first_word_t=times[a] if b > a else None,
+            last_word_t=times[b - 1] if b > a else None,
         )
 
 
@@ -273,7 +356,8 @@ class SherpaZipformerEngine:
         num_threads: int = 2,
         rule1_min_trailing_silence: float = 1.2,
         rule2_min_trailing_silence: float = 0.6,
-        rule3_min_utterance_length: float = 15.0,
+        rule3_min_utterance_length: float = 30.0,
+        rules: Optional[SegmentRules] = None,
     ):
         self.models_root = Path(models_root)
         self.models = models or DEFAULT_MODELS
@@ -281,6 +365,7 @@ class SherpaZipformerEngine:
         self.rule1 = rule1_min_trailing_silence
         self.rule2 = rule2_min_trailing_silence
         self.rule3 = rule3_min_utterance_length
+        self.rules = rules or SegmentRules()
         self._recognizers: Dict[str, object] = {}
         self._lock = threading.Lock()
 
@@ -349,4 +434,4 @@ class SherpaZipformerEngine:
     def start_session(self, lang: str) -> SherpaSession:
         if not self.supports(lang):
             raise ValueError(f"Language {lang!r} not supported by {self.name}")
-        return SherpaSession(self, lang, self.get_recognizer(lang))
+        return SherpaSession(self, lang, self.get_recognizer(lang), rules=self.rules)

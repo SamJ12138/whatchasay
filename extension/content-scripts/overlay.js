@@ -497,6 +497,11 @@ class SubtitleOverlay {
         animation: none;
       }
 
+      /* the mark of a line in progress; drawn by the style sheet so the text stays the recognizer's */
+      .subtitle-line.in-progress::after {
+        content: ' …';
+      }
+
       .subtitle-line.revised {
         animation: none;
       }
@@ -634,9 +639,11 @@ class SubtitleOverlay {
   _renderExtras() {
     if (this.partial && this.partial.text) {
       const line = document.createElement('div');
-      line.className = 'subtitle-line partial' + (this.partial.provisional ? ' provisional' : '');
+      // the line still being recognised: its text grows with every partial result
+      line.className = 'subtitle-line partial in-progress' + (this.partial.provisional ? ' provisional' : '');
       line.textContent = this.partial.text;
       line.dataset.cueId = this.partial.cueId;
+      line.dataset.state = 'in-progress';
       this.subtitleStack.appendChild(line);
     }
     const label = this._languageLabel();

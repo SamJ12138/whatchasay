@@ -230,10 +230,21 @@ class ASRConfig(BaseSettings):
     punct_dir: Path = Field(default=Path("data/models/punct"))
     languages: List[str] = Field(default=["en", "zh", "bn"], description="Languages with streaming models")
     num_threads: int = Field(default=2)
-    # Endpoint rules (seconds): trailing silence after speech / after any audio / max utterance
+    # Where a line ends. The recognizer's endpoint rules (seconds): silence with no word yet /
+    # silence after speech (the silence threshold) / its hard reset, which can cut inside a word
+    # and is only a backstop behind max_segment_s.
     rule1_min_trailing_silence: float = Field(default=1.2)
     rule2_min_trailing_silence: float = Field(default=0.6)
-    rule3_min_utterance_length: float = Field(default=10.0)
+    rule3_min_utterance_length: float = Field(default=30.0)
+    # Pauses the endpoint misses (it only looks on decode-chunk boundaries; observations A9): a
+    # line also ends before a word that starts split_gap_s after the previous token, once the
+    # line spans split_min_piece_s and the gap is split_gap_ratio times its median token gap.
+    split_gap_s: float = Field(default=0.5, description="0 = off")
+    split_gap_ratio: float = Field(default=2.5, description="0 = no ratio test")
+    split_min_piece_s: float = Field(default=2.0)
+    # Longest line: past either limit it is cut at its widest gap between words (0 = no limit).
+    max_segment_s: float = Field(default=6.0)
+    max_segment_tokens: int = Field(default=48)
     lid_window_s: float = Field(default=2.5)
     # Spoken-language ID picks the likeliest of `languages` (renormalised over them); below this
     # it stays undecided (provisional language kept). docs/observations.md A7

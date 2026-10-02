@@ -32,11 +32,21 @@
     const clock = now || (() => Date.now());
     let lines = new Map();
     let firstConfirmedDone = false;
+    // source text drawn so far: [{w: audio arrival of the last word shown, at: when}], w increasing
+    let drawn = [];
+
+    // When the word whose audio arrived at w was first on screen: now, unless an earlier
+    // line's partial already showed it (a line cut off a longer one by the length rule).
+    function firstDrawn(w, t) {
+      const earlier = drawn.find((d) => d.w >= w);
+      return earlier ? Math.min(earlier.at, t) : t;
+    }
 
     function line(cueId, ev, create) {
+      const t = clock();
       let ln = lines.get(cueId);
       if (!ln && create && num(ev.w_first)) {
-        ln = { wFirst: ev.w_first, wLast: null, lang: ev.lang || null, langStatus: null, shownAt: clock(),
+        ln = { wFirst: ev.w_first, wLast: null, lang: ev.lang || null, langStatus: null, shownAt: firstDrawn(ev.w_first, t),
                finalTextAt: null, firstTranslationAt: null, draftShown: false, targets: [], done: false };
         lines.set(cueId, ln);
         if (lines.size > 50) lines.delete(lines.keys().next().value);
@@ -49,13 +59,18 @@
     }
 
     return {
-      start() { lines = new Map(); firstConfirmedDone = false; },
+      start() { lines = new Map(); drawn = []; firstConfirmedDone = false; },
 
-      reset() { lines = new Map(); },
+      reset() { lines = new Map(); drawn = []; },
 
       text(cueId, ev, opts) {
-        const ln = line(cueId, ev || {}, true);
+        ev = ev || {};
+        const ln = line(cueId, ev, true);
         if (ln && opts && opts.final) ln.finalTextAt = clock();
+        if (num(ev.w_last) && (!drawn.length || drawn[drawn.length - 1].w < ev.w_last)) {
+          drawn.push({ w: ev.w_last, at: clock() });
+          if (drawn.length > 200) drawn.shift();
+        }
         return null;
       },
 

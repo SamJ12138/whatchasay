@@ -200,10 +200,11 @@ class StreamingASRSession:
         self._note_arrival()
         out: List[dict] = self.startup_messages()
 
+        self._frame_replayed = False
         if not self._lid_done:
             out.extend(self._collect_for_lid(pcm16))
 
-        if self.asr is not None:
+        if self.asr is not None and not self._frame_replayed:
             out.extend(self._emit(self.asr.feed(pcm16), capture_ts))
         return out
 
@@ -302,7 +303,14 @@ class StreamingASRSession:
                         "lid_ms": self.stats["lid_ms"], "switched": True})
             replay = np.concatenate(self._lid_buffer)
             pcm = (np.clip(replay, -1, 1) * 32767).astype("<i2").tobytes()
-            out.extend(self._emit(self.asr.feed(pcm), None))
+            # in 40 ms frames, as live audio arrives: the recognizer looks at its endpoint once
+            # per feed(), so one block could not end a sentence inside the buffer (A9)
+            step = int(SAMPLE_RATE * 0.04) * 2
+            events: List[AsrEvent] = []
+            for i in range(0, len(pcm), step):
+                events.extend(self.asr.feed(pcm[i:i + step]))
+            out.extend(self._emit(events, None))
+            self._frame_replayed = True  # the buffer ends with the frame that is being fed
         else:
             out.append({"type": "lid", "lang": lang, "source": "auto", "confirmed": True, "status": "confirmed",
                         "lid_ms": self.stats["lid_ms"]})

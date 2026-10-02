@@ -19,7 +19,7 @@ from ..config import settings
 from .. import obs
 from .engine import AsrEvent, AsrSession, StreamingASREngine, SAMPLE_RATE
 from .session import SessionConfig, StreamingASRSession
-from .sherpa_engine import SherpaZipformerEngine, SHERPA_AVAILABLE, models_for
+from .sherpa_engine import SegmentRules, SherpaZipformerEngine, SHERPA_AVAILABLE, models_for
 from .punctuation import Punctuator
 from .lid import SpokenLanguageId
 
@@ -43,6 +43,9 @@ def get_engines() -> Dict[str, StreamingASREngine]:
                 rule1_min_trailing_silence=cfg.rule1_min_trailing_silence,
                 rule2_min_trailing_silence=cfg.rule2_min_trailing_silence,
                 rule3_min_utterance_length=cfg.rule3_min_utterance_length,
+                rules=SegmentRules(split_gap_s=cfg.split_gap_s, split_gap_ratio=cfg.split_gap_ratio,
+                                   split_min_piece_s=cfg.split_min_piece_s, max_segment_s=cfg.max_segment_s,
+                                   max_segment_tokens=cfg.max_segment_tokens),
             )
         else:
             obs.log("startup", "skip", error_type="process", component="asr_engine", engine="sherpa-zipformer",

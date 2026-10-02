@@ -226,3 +226,57 @@ def test_declared_language_is_manual():
     s = StreamingASRSession(SessionConfig(source_lang="bn"), {"sherpa-zipformer": eng}, lid_identify=None)
     caps = [m for m in s.feed(loud_frame()) if m["type"] in ("partial", "final")]
     assert caps and caps[0]["confirmed"] is True and caps[0]["lang_status"] == "manual"
+
+
+# ---------------------------------------------------------------- A9: the detection buffer is replayed in frames
+
+
+class SizeRecordingSession(FakeSession):
+    def __init__(self, lang):
+        super().__init__(lang)
+        self.feeds = []
+
+    def feed(self, pcm16: bytes):
+        self.feeds.append(len(pcm16) // 2)
+        return super().feed(pcm16)
+
+
+class SizeRecordingEngine(FakeEngine):
+    def start_session(self, lang):
+        s = SizeRecordingSession(lang)
+        self.sessions.append(s)
+        return s
+
+
+def test_the_detection_buffer_is_replayed_in_40_ms_frames_and_no_frame_twice():
+    """The recognizer looks at its endpoint once per feed(): replayed as one block, the
+    buffered seconds could not end a sentence (observations A9). And the frame that
+    triggered detection is part of the buffer: it must not be fed again after the replay."""
+    eng = SizeRecordingEngine()
+    s = StreamingASRSession(
+        SessionConfig(source_lang="auto", allowed_langs=["en", "zh", "bn"], lid_window_s=1.0, lid_min_rms=0.001, partial_interval_ms=0),
+        {"sherpa-zipformer": eng}, lid_identify=lambda audio, allowed: "bn")
+    frames = 0
+    while s.lang != "bn":
+        s.feed(loud_frame())
+        frames += 1
+    new = eng.sessions[1]
+    assert new.feeds and max(new.feeds) <= 640, new.feeds[:5]
+    assert sum(new.feeds) == frames * 640, (sum(new.feeds), frames * 640)
+    s.feed(loud_frame())
+    assert sum(new.feeds) == (frames + 1) * 640
+
+
+def test_sentences_inside_the_replayed_buffer_come_out_as_their_own_finals():
+    """FakeSession ends an utterance every 2 s of audio it is fed, if feed() is called
+    there: 3 s of buffer replayed in frames must produce the final at 2 s."""
+    eng = FakeEngine()
+    s = StreamingASRSession(
+        SessionConfig(source_lang="auto", allowed_langs=["en", "zh", "bn"], lid_window_s=3.0, lid_min_rms=0.001, partial_interval_ms=0),
+        {"sherpa-zipformer": eng}, lid_identify=lambda audio, allowed: "bn")
+    msgs = []
+    while s.lang != "bn":
+        msgs.extend(s.feed(loud_frame()))
+    after = msgs[[m["type"] for m in msgs].index("reset"):]
+    replayed_finals = [m["text"] for m in after if m["type"] == "final" and m["lang"] == "bn"]
+    assert replayed_finals and replayed_finals[0] == "bn final 1", replayed_finals

@@ -138,8 +138,8 @@ def test_after_a_language_switch_word_times_point_at_the_original_arrival_not_th
     final = next(m for m in after if m["type"] == "final" and m["lang"] == "bn")
     # the new recognizer's clock zero is the session's first sample (all of it was buffered):
     # its first word at 0.20 s arrived at 1000.20, long before the switch at ~1000.36
-    assert final["w_first"] == pytest.approx(1000.20, abs=0.045)
-    assert final["w_last"] == pytest.approx(1000.60, abs=0.045)
+    assert final["w_first"] == pytest.approx(1000.20, abs=1e-3)
+    assert final["w_last"] == pytest.approx(1000.60, abs=1e-3)
 
 
 def test_ws_asr_translation_repeats_the_word_times_of_its_final(app_env):

@@ -77,9 +77,9 @@ the final. Typical 5–12-word subtitle sentences land inside the 1 s target; ve
 - Streaming models emit no punctuation and no casing. Phase 3: English is restored before translation
   (`asr/punctuation.py`, `docs/asr-input-quality.md`); Mandarin and Bengali are not (no measured gain). The bilingual
   Mandarin model still writes English words in UPPERCASE.
-- Utterances longer than 10 s are force-split (rule3) mid-sentence. Bengali film dialogue reaches it (9.6 s and 10.4 s
-  finals in the live test): utterances end only on the Bengali model's 0.64 s decode-chunk boundaries, so the 0.6 s
-  pause rule misses short pauses (observations A9).
+- Lines are bounded since 2026-10-02 (`SegmentRules`): they end at the endpoint's 0.6 s of silence, at a 0.5 s pause
+  between tokens, or at 6 s / 48 tokens (cut at the widest gap between words). The recognizer's own reset (rule3,
+  30 s) still cuts inside a word. A cut at the length limit can separate a clause from its verb (observations A9).
 - Provisional-language start shows wrong-language text until LID switches (about 5 s on the YouTube live test;
   cleared by `reset`). Since 2026-10-02 it is drawn dimmed under a "Detecting language…" label.
 - DRM sites: tab capture likely yields silence; only a "No audio" notice is shown (not verified on Netflix).
@@ -574,3 +574,24 @@ D4 cloud providers off by default, keys only in backend config.
   (the harness's `--targets auto` switch) sends `config` with `source_lang: auto`, which puts a confirmed session
   back to provisional and runs detection again (en sample: confirmed at 4.27 s, provisional again at 4.55 s).
   Tallies: fast 286, node 79.
+- Batch 1 (bounded segments; commit "feat: streaming partials and bounded segments"). Partial results already
+  streamed (Batch 0), so the work was segmentation. `SherpaSession` (`asr/sherpa_engine.py`, `SegmentRules`) closes a
+  line, without resetting the recognizer, (1) before a word that starts `asr.split_gap_s` (0.5 s) after the previous
+  token, once the line spans `asr.split_min_piece_s` (2 s) and the gap is `asr.split_gap_ratio` (2.5) times the line's
+  median token gap, and (2) past `asr.max_segment_s` (6 s) or `asr.max_segment_tokens` (48), at its widest gap between
+  words; `asr.rule3_min_utterance_length` 10 -> 30 s (backstop; it cuts inside words). Observation A9 folded in:
+  (a) is rule (1), measured at 0.5 s not 0.4 s (0.4 s cut the clip inside sentences and made one-word lines);
+  (b) the detection buffer is replayed in 40 ms frames, and the frame that triggered detection is no longer fed a
+  second time after the replay (found here: 40 ms of doubled audio at every language switch). Tokens of the
+  Zipformer models mark a word's first piece with a leading space, not the sentencepiece underline; CJK characters
+  are words of their own. Segment lengths, recognizer alone, clip + five sample WAVs: 12 finals (median 5.24 s,
+  longest 9.44 s, four over 6.5 s) -> 17 finals (median 3.16 s, longest 5.84 s, none over 6.5 s); the live clip's
+  3 finals (0.68, 9.28, 7.84 s) -> 6 (0.68, 2.76, 4.16, 2.16, 2.64, 3.48 s), line 2 cut at its sentences. In the
+  browser on the live clip (6 runs): 2 lines per run -> 4-6, first translated text p50 7.9-9.8 s -> 4.0-4.7 s after
+  the first word. Overlay: the line in progress carries class `in-progress` (`data-state`), drawn in italics with a
+  trailing ellipsis from the style sheet. Latency tracker: a line cut off a longer one counts its first display
+  from when its first word was first drawn (inside the longer line's partial). **Conflicts with the brief:** the
+  slow test "first_display_ms drops" could not be written honestly for this batch (partials were already shown at
+  the decode-chunk lag, 0.3-0.75 s); `tests/test_segmentation_real.py` asserts what does drop, the wait from a
+  line's first word to its final (9.76 -> 6.52 s on the English sample, 9.64 -> 5.60 s on the clip), and that first
+  display stays under 1 s before and after. Tallies: fast 301, slow 30, node 82.
