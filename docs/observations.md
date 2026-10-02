@@ -186,3 +186,14 @@ with the server up.
 | 6 | fix: clean install from requirements.txt (S1, S4) | S1, S3, S4, S5 | `scripts/clean_install_check.py`: fresh venv + requirements.txt + requirements-dev.txt → import app.main → fast suite (local, Python 3.10, newest packages: 120 passed) |
 | 5a | fix: bound lazy llama-server restarts on the request path (Batch 5 follow-up) | P2 | a request that found the child already reaped waited up to the 120 s first-start budget; now hymt_restart_timeout_s; 0.5 s connect timeout |
 | 7 | ci: fast suite, extension tests, clean-install check | none (CI) | `.github/workflows/ci.yml`: ubuntu-24.04 + windows-2025, Python 3.12, Node 22; actions pinned by SHA (all node24); verified after push (Phase 3) |
+
+## 8. Phase 2b (product scope D1-D4)
+
+| Batch | Commit | Rows / findings | Notes |
+|---|---|---|---|
+| 0 | fix: SW lifetime for ws; TM migration backup | new: port wake-up race (first Port message dropped while the worker restored enabled tabs) | real idle timeout tested over raw CDP (Playwright keeps attached workers alive); TM `.bak-<version>` before migrations |
+| 1 | feat: OPUS-MT default without repetition; HY-MT optional with license gate; NOTICE | new: OPUS source tokens lacked `</s>` (runaway decodes), opus-mt-en-zh lacked `>>cmn_Hans<<` | HY-MT never downloaded at runtime; p50 66.6 -> 30.4 ms |
+| 2 | feat: caption path opt-in with optional host permissions (D2) | E10 (content scripts only where injected/registered); new: `tabCapture` alone carries the all-sites install warning; double injection | fresh install: no origins, no warnings |
+| 3 | feat: audio sessions leave no trace by default; TM retention and clear (D3) | new: concurrent TM initialize race | audio text never in the TM, the process-wide cache or the refiner context |
+| 4 | feat: cloud providers off by default, keys in backend config and headers (D4) | new: Google/Gemini keys in URLs leaked into httpx error text; the obs redaction only caught key-shaped strings | keys only in backend config / `.env` |
+| 5 | docs: README outline | none | |

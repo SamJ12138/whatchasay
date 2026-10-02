@@ -285,3 +285,6 @@ D4 cloud providers off by default, keys only in backend config.
   pointing at `backend/.env`; key fields and the unimplemented cloud-ASR option removed; no key leaves the
   extension in any message. `cloud_translator.py` coverage 0% -> 91% (mocked httpx transport). Browser path
   `cloud-keys` (cloud off and on). `docs/architecture-notes.md` §5.
+- Batch 5: `docs/README-outline.md`: the README's section list, the product statement, and the quickstart / test
+  commands as they stand now (Python 3.10+, CI 3.12; Node 22), for Phase 3. Noticed on the way: the Options page's
+  shortcut list is stale (Alt+] / Alt+[; the manifest has Alt+Period and no decrease-font command).
