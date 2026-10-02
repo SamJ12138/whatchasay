@@ -47,6 +47,9 @@
   // Structured log. Only the top frame owns a session (one per tab page load);
   // records are relayed to the service worker, which posts them to /obs.
   const obs = window.STObs || { log() {}, init() {}, setSession() {}, newSessionId() { return null; } };
+  // per-line latency of live captions (docs/latency.md), logged as stage line_latency
+  const lineLatency = window.STLineLatency ? window.STLineLatency.createTracker()
+    : { start() {}, reset() {}, text() { return null; }, translation() { return null; }, confirmed() { return null; } };
   obs.init({ context: IS_TOP ? 'content' : 'content-frame', relay: true });
   if (IS_TOP) obs.setSession(obs.newSessionId('cs'));
 
@@ -382,6 +385,7 @@
     live.sourceLang = sourceLang || null;
     if (active) {
       overlay.clear();
+      lineLatency.start();
       const manual = sourceLang && sourceLang !== 'auto';
       // auto-detect: the overlay shows "Detecting language…" until the backend confirms one
       if (manual) overlay.showNotice(`Listening (${LANG_NAMES[sourceLang] || sourceLang})`, 'info', 5000);
@@ -404,6 +408,10 @@
     return ev.cue_id || ('asr_' + ev.utterance_id);
   }
 
+  function logLineLatency(rec, ev) {
+    if (rec) obs.log('line_latency', 'success', Object.assign(rec, { utterance_id: ev.utterance_id, session_id: live.sessionId || undefined }));
+  }
+
   function scheduleLiveHide(cueId, ms) {
     if (live.hideTimer) clearTimeout(live.hideTimer);
     live.hideTimer = setTimeout(() => {
@@ -420,7 +428,10 @@
     switch (ev.type) {
       case 'partial':
         syncLanguageStatus(ev);
-        if (settings.showPartials !== false) overlay.showPartial('asr_' + ev.utterance_id, ev.text, ev.lang, ev.lang_status);
+        if (settings.showPartials !== false && overlay.showPartial('asr_' + ev.utterance_id, ev.text, ev.lang, ev.lang_status)) {
+          lineLatency.text('asr_' + ev.utterance_id, ev);
+          logLineLatency(lineLatency.confirmed(ev), ev);
+        }
         break;
       case 'final': {
         const cueId = 'asr_' + ev.utterance_id;
@@ -430,7 +441,10 @@
         for (const id of Array.from(overlay.currentCues.keys())) {
           if (id !== cueId && !(overlay.editMode && overlay.editCueId === id)) overlay.currentCues.delete(id);
         }
-        overlay.showTranslation(cueId, ev.text, {}, { sourceLang: ev.lang, langStatus: ev.lang_status });
+        if (overlay.showTranslation(cueId, ev.text, {}, { sourceLang: ev.lang, langStatus: ev.lang_status })) {
+          lineLatency.text(cueId, ev, { final: true });
+          logLineLatency(lineLatency.confirmed(ev), ev);
+        }
         if (ev.server_ts) recordLatency((Date.now() / 1000 - ev.server_ts) * 1000, 'final');
         obs.log('ext_render', 'success', { kind: 'final', utterance_id: ev.utterance_id, lang: ev.lang, text_len: (ev.text || '').length,
           session_id: live.sessionId || undefined, server_to_glass_ms: ev.server_ts ? Math.round(Date.now() - ev.server_ts * 1000) : null });
@@ -443,8 +457,10 @@
         const existing = overlay.currentCues.get(cueId);
         // targets arrive one at a time; merge into what is already shown for this cue
         const merged = Object.assign({}, existing ? existing.translations : {}, ev.translations || {});
-        overlay.showTranslation(cueId, existing ? existing.original : ev.source_text, merged,
-          { revised: ev.revision > 1 || !!existing, sourceLang: ev.source_lang, langStatus: ev.lang_status });
+        if (overlay.showTranslation(cueId, existing ? existing.original : ev.source_text, merged,
+          { revised: ev.revision > 1 || !!existing, sourceLang: ev.source_lang, langStatus: ev.lang_status })) {
+          logLineLatency(lineLatency.translation(cueId, ev), ev);
+        }
         if (ev.mt_ms !== undefined && !(ev.targets_pending > 0)) recordLatency(ev.mt_ms, 'mt');
         obs.log('ext_render', 'success', { kind: ev.type, utterance_id: ev.utterance_id, revision: ev.revision, engine: ev.engine || 'backend',
           targets: Object.keys(ev.translations || {}), statuses: statusesOf(ev.translations), mt_ms: ev.mt_ms, session_id: live.sessionId || undefined,
@@ -456,6 +472,7 @@
         // language switched after auto-detect: provisional captions are discarded,
         // and so is anything of theirs that arrives later
         overlay.discardProvisional();
+        lineLatency.reset();
         break;
       case 'lid':
         live.sourceLang = ev.lang;

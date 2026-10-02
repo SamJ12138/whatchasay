@@ -272,7 +272,8 @@ async def ws_asr(websocket: WebSocket):
             # nothing to translate: still tell the UI the caption is complete
             await send({"type": "translation", "utterance_id": msg["utterance_id"], "cue_id": "asr_%s" % msg["utterance_id"],
                         "revision": 1, "source_text": text, "source_lang": lang, "lang_status": msg.get("lang_status"),
-                        "translations": {}, "mt_ms": 0, "server_ts": time.time()})
+                        "translations": {}, "targets_pending": 0, "mt_ms": 0, "w_first": msg.get("w_first"),
+                        "w_last": msg.get("w_last"), "server_ts": time.time()})
             return
         results: List[Any] = []
 
@@ -299,6 +300,9 @@ async def ws_asr(websocket: WebSocket):
                 "translations": {target: payload["translations"][target]} if target in payload["translations"] else payload["translations"],
                 "targets_pending": max(0, len(targets) - len(results)),
                 "mt_ms": round((time.time() - t0) * 1000),
+                # latency clock of the line (docs/latency.md), as on its final
+                "w_first": msg.get("w_first"),
+                "w_last": msg.get("w_last"),
                 "capture_ts": msg.get("capture_ts"),
                 "server_ts": time.time(),
             })

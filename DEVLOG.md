@@ -555,3 +555,22 @@ D4 cloud providers off by default, keys only in backend config.
 - Batch -1 (README): the worked correction example under "Using it" is replaced by one limitation line (corrections
   are matched on the whole recognised sentence and rarely reused on live speech; a term-level glossary is planned,
   observations T13 / T14). The full case stays in `docs/live-test-youtube.md`; `tests/test_docs_media.py` pins both.
+- Batch 0 (measure what the viewer feels; `docs/latency.md`). Two latencies per subtitle line, measured where the
+  text is drawn: `first_display_ms` (audio of the line's first word -> first text of the line on screen) and
+  `final_ms` (audio of its last word -> final translation on screen); also `first_translation_ms` (first word ->
+  first translated text) and, per session, the first confirmed-language subtitle. Mechanism: `SherpaSession` reads
+  the recognizer's token timestamps (`AsrEvent.first_word_t` / `last_word_t`), `StreamingASRSession` keeps every
+  frame's arrival time and stamps partial / final / translation messages with `w_first`, `w_last`, `w_session`
+  (wall clock of that audio's arrival; after a language switch still the original arrival, not the replay), the
+  content script subtracts when it draws (`content-scripts/line-latency.js`, stage `line_latency`, pipeline stage
+  a17.1), `failure_report.py` section 6 summarises per run and session, the browser harness's summary carries
+  `line_latency`, and `backend/scripts/line_latency_table.py` runs the harness N times per clip and prints the
+  table. No behaviour change. Baseline, 3 runs each on the three sample WAVs and the live clip (run_ids in
+  `docs/latency.md`): first display 0.29-0.75 s once the language is known, first translated text 6.6-10.4 s after
+  the first word, final translation 0.3-1.5 s after the last word, first confirmed subtitle 4.0-6.0 s, the live
+  clip's two lines 10.4 s and 10.2 s long. **Conflict with the brief:** "a line appears only after the recognizer
+  closes the segment" is true of the translation, not of the source text: partial results already reached the
+  overlay (italic line). Seen on the way, not changed here: with Auto-detect, a settings change during a session
+  (the harness's `--targets auto` switch) sends `config` with `source_lang: auto`, which puts a confirmed session
+  back to provisional and runs detection again (en sample: confirmed at 4.27 s, provisional again at 4.55 s).
+  Tallies: fast 286, node 79.

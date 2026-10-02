@@ -12,6 +12,11 @@ Sections:
   3. stage x error_type counts (fail + skip records that carry an error_type)
   4. per-session summary
   5. most frequent error messages
+  6. per-line latency (stage line_latency, logged by the content script per subtitle
+     line; docs/latency.md): first_display_ms = audio of the line's first word -> first
+     text of the line on screen; final_ms = audio of its last word -> final translation
+     on screen; first_translation_ms = first word -> first translated text; and the
+     time from a session's first audio to its first confirmed-language subtitle
 Per-frame stages (ws_receive, asr_chunk, ext_ws_send) log one summary line per
 100 frames whose duration_ms is the window mean, so their p50/p95 are over
 window means. Records with context.degraded mark silently-degraded paths.
@@ -92,6 +97,41 @@ def build(recs):
     return layers, stages, matrix, sessions, messages
 
 
+LINE_FIELDS = ("first_display_ms", "final_ms", "first_translation_ms")
+
+
+def _dist(xs):
+    return {"n": len(xs), "p50": pct(xs, 50), "p95": pct(xs, 95)}
+
+
+def line_latency(recs):
+    """Per-line latency over the run and per session, from the `line_latency` records."""
+    def empty():
+        return {"lines": 0, **{f: [] for f in LINE_FIELDS}, "first_confirmed_ms": []}
+
+    total, sessions = empty(), defaultdict(empty)
+    for r in recs:
+        if r.get("stage") != "line_latency" or r.get("event") != "success":
+            continue
+        ctx = r.get("context") or {}
+        for bucket in (total, sessions[r.get("session_id") or "(none)"]):
+            if ctx.get("kind") == "first_confirmed":
+                if isinstance(ctx.get("since_session_ms"), (int, float)):
+                    bucket["first_confirmed_ms"].append(ctx["since_session_ms"])
+            elif ctx.get("kind") == "line":
+                bucket["lines"] += 1
+                for f in LINE_FIELDS:
+                    if isinstance(ctx.get(f), (int, float)):
+                        bucket[f].append(ctx[f])
+
+    def shape(b, per_session=False):
+        fc = b["first_confirmed_ms"]
+        return {"lines": b["lines"], **{f: _dist(b[f]) for f in LINE_FIELDS},
+                "first_confirmed_ms": (fc[0] if fc else None) if per_session else fc}
+
+    return {**shape(total), "sessions": {sid: shape(b, True) for sid, b in sessions.items()}}
+
+
 def table(headers, rows):
     cols = [list(map(str, c)) for c in zip(headers, *rows)] if rows else [[h] for h in headers]
     widths = [max(len(x) for x in c) for c in cols]
@@ -130,6 +170,7 @@ def main() -> int:
                            "n_duration": len(v["dur"]), "p50_ms": pct(v["dur"], 50), "p95_ms": pct(v["dur"], 95)}
                        for k, v in stages.items()},
             "stage_x_error_type": {k: dict(v) for k, v in matrix.items()},
+            "line_latency": line_latency(recs),
             "sessions": {k: {"layers": sorted(v["layers"]), "records": v["n"], "events": dict(v["events"]),
                              "fail_stages": dict(v["fail_stages"]), "first": v["first"], "last": v["last"],
                              "translate_n": len(v["translate_ms"]), "translate_p50_ms": pct(v["translate_ms"], 50)}
@@ -172,6 +213,22 @@ def main() -> int:
     print("5. Most frequent error messages (fail + skip)")
     rows = [[n, st, et, msg] for (st, et, msg), n in messages.most_common(15)]
     print(table(["n", "stage", "error_type", "error_message"], rows) if rows else "(none)")
+
+    ll = line_latency(recs)
+    print()
+    print("6. Per-line latency (ms; first word -> first text, last word -> final translation, first word -> first translated text)")
+    if not ll["lines"] and not ll["first_confirmed_ms"]:
+        print("(no line_latency records)")
+        return 0
+
+    def cells(b):
+        return [b["lines"]] + [v if v is not None else "-" for f in LINE_FIELDS for v in (b[f]["p50"], b[f]["p95"])]
+
+    rows = [["(all)"] + cells(ll) + [", ".join(str(round(x)) for x in ll["first_confirmed_ms"]) or "-"]]
+    for sid, b in sorted(ll["sessions"].items()):
+        rows.append([sid] + cells(b) + [round(b["first_confirmed_ms"]) if b["first_confirmed_ms"] is not None else "-"])
+    print(table(["session_id", "lines", "first_display p50", "p95", "final p50", "p95", "first_translation p50", "p95",
+                 "first confirmed subtitle"], rows))
     return 0
 
 

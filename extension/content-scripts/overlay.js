@@ -105,7 +105,8 @@ class SubtitleOverlay {
   }
 
   /**
-   * Show a translation for a cue.
+   * Show a translation for a cue. Returns false when it was not drawn (a live caption
+   * from a recognizer that has been replaced since), else true.
    */
   showTranslation(cueId, originalText, translations, options = {}) {
     if (!this.container) {
@@ -115,7 +116,7 @@ class SubtitleOverlay {
     const existing = this.currentCues.get(cueId);
     const drawn = options.langStatus ? this._treatment(options.langStatus, options.sourceLang)
       : (existing && existing.provisional ? 'dim' : 'normal');
-    if (drawn === 'drop') return;
+    if (drawn === 'drop') return false;
     // Store cue data (merge so a later revision keeps original/sourceLang)
     this.currentCues.set(cueId, {
       original: originalText,
@@ -132,6 +133,7 @@ class SubtitleOverlay {
 
     // Update display
     this._updateDisplay();
+    return true;
   }
 
   /**
@@ -143,9 +145,10 @@ class SubtitleOverlay {
       this.init();
     }
     const drawn = langStatus ? this._treatment(langStatus, lang) : 'normal';
-    if (drawn === 'drop') return;
+    if (drawn === 'drop') return false;
     this.partial = { cueId, text, lang, provisional: drawn === 'dim' };
     this._updateDisplay();
+    return true;
   }
 
   /**

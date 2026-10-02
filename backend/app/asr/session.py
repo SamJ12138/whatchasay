@@ -18,8 +18,13 @@ Language handling
                         discarded.
 
 Messages (JSON, sent by the WebSocket endpoint):
-    {type:'partial', utterance_id, text, lang, lang_status, confirmed, t0, t1}
-    {type:'final',   utterance_id, text, lang, lang_status, confirmed, t0, t1[, raw_text]}
+    {type:'partial', utterance_id, text, lang, lang_status, confirmed, t0, t1, w_first, w_last, w_session}
+    {type:'final',   utterance_id, text, lang, lang_status, confirmed, t0, t1, w_first, w_last, w_session[, raw_text]}
+
+Latency clock (docs/latency.md): w_first / w_last are the wall-clock times (epoch
+seconds) at which the audio of the line's first and last recognised word reached this
+session, w_session the arrival of the session's first frame. The content script
+subtracts them from the moment it draws the text.
 
 Text restoration: with a `restore_text(text, lang, final)` hook (asr/punctuation.py
 for English) partial and final text is cased and punctuated before it is sent, so
@@ -41,6 +46,7 @@ confirmed is true only for confirmed and manual.
 
 from __future__ import annotations
 
+import bisect
 import logging
 import time
 from dataclasses import dataclass, field
@@ -97,6 +103,13 @@ class StreamingASRSession:
         self._pending_partial: Optional[AsrEvent] = None
         self.started_at = time.time()
         self.samples_received = 0
+        # latency clock: when each frame arrived (end sample -> wall time), and where on the
+        # session's sample count the current recognizer's audio clock starts
+        self._now: Callable[[], float] = time.time
+        self._arrival_end: List[int] = []
+        self._arrival_wall: List[float] = []
+        self._asr_origin = 0
+        self._session_wall: Optional[float] = None
         self.stats = {"partials": 0, "finals": 0, "lid_ms": 0.0, "lid_switches": 0}
         self._startup_msgs: List[dict] = []
 
@@ -137,6 +150,7 @@ class StreamingASRSession:
         self.lang = lang
         self.engine = self._pick_engine(lang)
         self.asr = self.engine.start_session(lang)
+        self._asr_origin = self.samples_received
         self._last_partial_sent = 0.0
         self._pending_partial = None
         logger.info("ASR session: lang=%s engine=%s", lang, self.engine.name)
@@ -183,6 +197,7 @@ class StreamingASRSession:
     def feed(self, pcm16: bytes, capture_ts: Optional[float] = None) -> List[dict]:
         """Consume one audio frame; return JSON-able messages to send."""
         self.samples_received += len(pcm16) // 2
+        self._note_arrival()
         out: List[dict] = self.startup_messages()
 
         if not self._lid_done:
@@ -191,6 +206,24 @@ class StreamingASRSession:
         if self.asr is not None:
             out.extend(self._emit(self.asr.feed(pcm16), capture_ts))
         return out
+
+    def _note_arrival(self) -> None:
+        now = self._now()
+        if self._session_wall is None:
+            self._session_wall = now
+        self._arrival_end.append(self.samples_received)
+        self._arrival_wall.append(now)
+        if len(self._arrival_end) > 9000:  # keep the last few minutes (40 ms frames)
+            del self._arrival_end[:4500], self._arrival_wall[:4500]
+
+    def _wall_at(self, recognizer_t: Optional[float]) -> Optional[float]:
+        """Wall-clock time at which the audio at `recognizer_t` (seconds on the current
+        recognizer's clock) reached the session: the arrival of the frame holding it."""
+        if recognizer_t is None or not self._arrival_end:
+            return None
+        sample = self._asr_origin + int(round(recognizer_t * SAMPLE_RATE))
+        i = min(bisect.bisect_right(self._arrival_end, sample), len(self._arrival_end) - 1)
+        return round(self._arrival_wall[i], 3)
 
     def _collect_for_lid(self, pcm16: bytes) -> List[dict]:
         samples = pcm16_to_float32(pcm16)
@@ -262,6 +295,8 @@ class StreamingASRSession:
             logger.info("LID switched language %s -> %s (replaying %.1fs)", self.lang, lang, self._lid_buffer_samples / SAMPLE_RATE)
             self.stats["lid_switches"] += 1
             self._start_recognizer(lang)
+            # the new recognizer's clock starts at the first replayed sample
+            self._asr_origin = self.samples_received - self._lid_buffer_samples
             out.append({"type": "reset"})
             out.append({"type": "lid", "lang": lang, "source": "auto", "confirmed": True, "status": "confirmed",
                         "lid_ms": self.stats["lid_ms"], "switched": True})
@@ -317,6 +352,9 @@ class StreamingASRSession:
             "confirmed": self.lang_confirmed,
             "t0": round(ev.t0, 3),
             "t1": round(ev.t1, 3),
+            "w_first": self._wall_at(ev.first_word_t if ev.first_word_t is not None else ev.t0),
+            "w_last": self._wall_at(ev.last_word_t if ev.last_word_t is not None else ev.t1),
+            "w_session": round(self._session_wall, 3) if self._session_wall is not None else None,
             "capture_ts": capture_ts,
             "server_ts": time.time(),
         }

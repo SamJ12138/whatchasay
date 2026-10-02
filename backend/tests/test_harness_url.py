@@ -196,3 +196,24 @@ def test_kept_translation_memory_is_never_the_users_own(tmp_path):
 def test_page_untouched_by_typing_a_correction(before, after, elapsed, ok):
     assert h.page_untouched(before, after, elapsed) is ok
 
+
+
+def test_line_latency_summary_from_the_content_scripts_records():
+    """--lines: the summary keeps the per-line latencies the content script logged
+    (stage line_latency, docs/latency.md) and when the first confirmed-language subtitle
+    was drawn, counted from the moment the harness started the video."""
+    def rec(**ctx):
+        return {"stage": "line_latency", "event": "success", "context": ctx}
+
+    records = [
+        rec(kind="line", cue_id="asr_0", lang="bn", first_display_ms=480, final_ms=760, first_translation_ms=3100, draft_shown=False),
+        {"stage": "ext_render", "event": "success", "context": {"kind": "final"}},
+        rec(kind="first_confirmed", lang="bn", since_session_ms=5450, at_ms=1700000005300),
+        rec(kind="line", cue_id="asr_1", lang="bn", first_display_ms=900, final_ms=1200, first_translation_ms=None, draft_shown=False),
+    ]
+    out = h.line_latency_summary(records, play_t=1700000000.0)
+    assert out == {
+        "lines": 2, "lang": ["bn", "bn"], "first_display_ms": [480, 900], "final_ms": [760, 1200], "first_translation_ms": [3100, None],
+        "drafts_shown": 0, "first_confirmed_after_play_s": 5.3, "first_confirmed_since_session_ms": 5450,
+    }
+    assert h.line_latency_summary([], play_t=None)["lines"] == 0

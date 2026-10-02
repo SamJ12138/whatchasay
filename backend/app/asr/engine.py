@@ -36,6 +36,11 @@ class AsrEvent:
     t1: float
     confidence: float = 1.0
     utterance_id: int = 0
+    # Audio-clock time of the utterance's first and last recognised word (the
+    # recognizer's token timestamps), when the engine knows them: the per-line
+    # latencies count from these (docs/latency.md).
+    first_word_t: Optional[float] = None
+    last_word_t: Optional[float] = None
     # Wall-clock timestamp (time.time()) when the event was produced, so the
     # extension can measure end-to-end latency against its capture clock.
     produced_at: float = field(default_factory=time.time)

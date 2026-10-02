@@ -235,7 +235,20 @@ class SherpaSession:
     def close(self) -> None:
         self._closed = True
 
+    def _word_times(self) -> Tuple[Optional[float], Optional[float]]:
+        """Audio-clock time of the first and last token of the utterance in progress.
+        sherpa-onnx reports token timestamps relative to the segment's start_time."""
+        try:
+            r = self.recognizer.get_result_all(self.stream)
+            ts = r.timestamps
+            if not ts:
+                return None, None
+            return r.start_time + ts[0], r.start_time + ts[-1]
+        except Exception:  # timestamps only feed the latency log; never lose a caption over them
+            return None, None
+
     def _make_event(self, kind: str, text: str) -> AsrEvent:
+        first, last = self._word_times()
         return AsrEvent(
             kind=kind,
             text=text,
@@ -243,6 +256,8 @@ class SherpaSession:
             t0=self._utt_start_sample / SAMPLE_RATE,
             t1=self.audio_clock,
             utterance_id=self._utterance_id,
+            first_word_t=first,
+            last_word_t=last,
         )
 
 

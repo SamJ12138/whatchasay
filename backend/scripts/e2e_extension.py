@@ -358,6 +358,23 @@ class LineCollector:
         return list(self._kept.values())
 
 
+def line_latency_summary(records: list[dict], play_t: float | None) -> dict:
+    """Per-line latencies as the content script logged them (stage line_latency,
+    docs/latency.md), in line order, and the first confirmed-language subtitle: seconds
+    after the harness started the video, and ms after the session's first audio frame."""
+    ctxs = [r.get("context") or {} for r in records if r.get("stage") == "line_latency" and r.get("event") == "success"]
+    lines = [c for c in ctxs if c.get("kind") == "line"]
+    first = next((c for c in ctxs if c.get("kind") == "first_confirmed"), None)
+    after_play = round(first["at_ms"] / 1000 - play_t, 2) if first and play_t and first.get("at_ms") else None
+    return {"lines": len(lines), "lang": [c.get("lang") for c in lines],
+            "first_display_ms": [c.get("first_display_ms") for c in lines],
+            "final_ms": [c.get("final_ms") for c in lines],
+            "first_translation_ms": [c.get("first_translation_ms") for c in lines],
+            "drafts_shown": sum(1 for c in lines if c.get("draft_shown")),
+            "first_confirmed_after_play_s": after_play,
+            "first_confirmed_since_session_ms": first.get("since_session_ms") if first else None}
+
+
 def correction_target(lines: list[dict]) -> dict | None:
     """The cue Alt+E would edit, as drawn: the translated line on screen (not dimmed,
     provisional lines are not offered) with its original."""
@@ -1254,6 +1271,7 @@ def main() -> int:
             if args.path == "audio":
                 page.wait_for_timeout(1500)  # let the other target's translation land too
                 summary["tm_rows_after"] = tm_rows(args.port)
+                summary["line_latency"] = line_latency_summary(records, play_t)
                 summary["asr_models"] = asr_models(args.port)
                 summary["finals"] = [(r.get("context") or {}).get("text_len") for r in records
                                      if r.get("stage") == "ext_render" and (r.get("context") or {}).get("kind") == "final"][:5]
