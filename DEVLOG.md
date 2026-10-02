@@ -77,7 +77,9 @@ the final. Typical 5–12-word subtitle sentences land inside the 1 s target; ve
 - Streaming models emit no punctuation and no casing. Phase 3: English is restored before translation
   (`asr/punctuation.py`, `docs/asr-input-quality.md`); Mandarin and Bengali are not (no measured gain). The bilingual
   Mandarin model still writes English words in UPPERCASE.
-- Utterances longer than 10 s are force-split (rule3) mid-sentence.
+- Utterances longer than 10 s are force-split (rule3) mid-sentence. Bengali film dialogue reaches it (9.6 s and 10.4 s
+  finals in the live test): utterances end only on the Bengali model's 0.64 s decode-chunk boundaries, so the 0.6 s
+  pause rule misses short pauses (observations A9).
 - Provisional-language start shows wrong-language text until LID switches (about 5 s on the YouTube live test;
   cleared by `reset`). Since 2026-10-02 it is drawn dimmed under a "Detecting language…" label.
 - DRM sites: tab capture likely yields silence; only a "No audio" notice is shown (not verified on Netflix).
@@ -525,3 +527,18 @@ D4 cloud providers off by default, keys only in backend config.
   ("bar", "kings") and mangles a Latin spelling in the source ("rajbug", "rajbeg"), so a glossary needs both a
   replacement on the recognised text and a placeholder through MT. Live page, provisional text (Batch 1): dimmed
   from 1.1-1.25 s, first undimmed line at the 5.1-5.3 s confirmation, no violation in 381 samples.
+- Batch 3 (segmentation, recorded only; owner: do not fix now). `docs/observations.md` A9: Bengali finals run
+  sentences together (line 2 of the live test: 9.6 s of dialogue, several sentences, as one final; in the rerun a
+  10.4 s first final cut by the 10 s limit inside a word; OPUS-MT then loses the meaning). Stage responsible:
+  `segment` (a8), the endpoint rules in `sherpa_engine.SherpaSession.feed`; nothing before `translate` splits
+  Bengali text (English has `punctuate`).
+  Mechanism, measured offline on the recorded 20 s: the Bengali model decodes in 0.64 s chunks
+  (`decode_chunk_len` 64) and utterances end only on chunk boundaries (after each run's first finals every
+  `audio_s` in the run logs is a multiple of 0.64 s), so pauses under about 1.2 s can be missed; the token gaps
+  inside line 2 are 0.64 s (twice), 0.44 s, 0.40 s. Rule 2 at 0.3 s split the later lines but not line 2.
+  Second cause, Auto-detect only: on a language switch the buffered audio (4-5 s) is replayed to the new
+  recognizer in one `feed()` call and the endpoint is looked at once per call, so nothing can end inside the
+  replay; offline, the first 4.0 or 5.3 s fed as one block turns the first sentence and the next ones into one
+  10.4 s final (the rerun's line 1), in 40 ms frames the first sentence stays its own 2.1 s final. Candidate
+  fixes: split a final at token-timestamp gaps of about 0.4 s or more before MT, with a minimum piece length;
+  replay the detection buffer in frames; alternatives in the row.
