@@ -66,7 +66,20 @@
     }
 
     async attachPort(port) {
+      // Listeners first, synchronously: a worker woken by this port (it was stopped
+      // for idleness) gets the port's first message right after onConnect, while
+      // the enabled tab ids are still being restored; a message with no listener is
+      // lost. Early messages are held and replayed once the port is accepted.
+      const early = [];
+      let conn = null;
+      let gone = false;
+      port.onMessage.addListener((m) => { if (conn) this._onPortMessage(conn, m); else early.push(m); });
+      port.onDisconnect.addListener(() => {
+        gone = true;
+        if (conn && this.conns.get(conn.tabId) === conn) this.close(conn.tabId, 'port closed');
+      });
       await this.ready;
+      if (gone) return;
       const sender = port.sender || {};
       const tabId = sender.tab && sender.tab.id;
       if (tabId == null || sender.frameId !== 0) {
@@ -76,12 +89,9 @@
         return this._refuse(port, 'disabled');
       }
       this.close(tabId, 'replaced');
-      const conn = { port, socket: null, tabId };
+      conn = { port, socket: null, tabId };
       this.conns.set(tabId, conn);
-      port.onMessage.addListener((m) => this._onPortMessage(conn, m));
-      port.onDisconnect.addListener(() => {
-        if (this.conns.get(tabId) === conn) this.close(tabId, 'port closed');
-      });
+      for (const m of early.splice(0)) this._onPortMessage(conn, m);
     }
 
     _refuse(port, reason) {

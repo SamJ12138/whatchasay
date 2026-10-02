@@ -7,6 +7,10 @@ end to end, with no human click. Two paths:
   --path captions  existing subtitles:
                    <video> with a WebVTT <track> -> subtitle detector -> service worker
                    socket /ws (cue) -> MT -> content script overlay
+  --path sw-idle   the caption path across service-worker idle timeouts (raw CDP,
+                   no Playwright: an attached DevTools session keeps the worker
+                   alive): keepalive keeps it; idle stop -> restart -> next cue
+                   still translated; forced stop -> same
   --path security  E16/E17/W8 in the browser: no /ws connection before the tab is
                    enabled; the page's own scripts cannot open /ws or POST /translate;
                    after enabling, one connection from the extension; a cue posted
@@ -76,6 +80,9 @@ CAPTION_PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8"><ti
 </body></html>"""
 
 SECURITY_PAGE = CAPTION_PAGE.replace("</body>", '<iframe id="xo" src="{frame_url}" width="200" height="60"></iframe></body>')
+# sw-idle: the subtitles end after a few seconds and the clip does not loop, so the
+# tab really goes quiet; later cues are posted by the page itself (same origin)
+IDLE_PAGE = CAPTION_PAGE.replace(" autoplay muted loop ", " autoplay muted ")
 FRAME_PAGE = """<!doctype html><html><body>cross-origin frame</body></html>"""
 
 SUBS_VTT = """WEBVTT
@@ -218,9 +225,280 @@ def security_checks(page, ctl, tab_id, records, port, summary) -> bool:
     return all(checks.values())
 
 
+class CDP:
+    """Minimal Chrome DevTools Protocol client (flattened sessions) on websockets'
+    sync client. The sw-idle path cannot use Playwright: Playwright attaches
+    DevTools to every service worker, and Chrome never stops an attached worker
+    for idleness (measured: same worker instance after 45 s of silence)."""
+
+    def __init__(self, url: str):
+        from websockets.sync.client import connect
+
+        self.ws = connect(url, max_size=None, open_timeout=15)
+        self.next_id = 0
+        self.lock = threading.Lock()
+        self.cond = threading.Condition()
+        self.results: dict = {}
+        self.listeners: list = []
+        self.closed = False
+        threading.Thread(target=self._reader, daemon=True).start()
+
+    def _reader(self):
+        try:
+            for raw in self.ws:
+                m = json.loads(raw)
+                with self.cond:
+                    if "id" in m:
+                        self.results[m["id"]] = m
+                    self.cond.notify_all()
+                if "id" not in m:
+                    for fn in list(self.listeners):
+                        try:
+                            fn(m)
+                        except Exception:
+                            pass
+        except Exception:
+            pass
+        finally:
+            with self.cond:
+                self.closed = True
+                self.cond.notify_all()
+
+    def send(self, method: str, params: dict | None = None, session: str | None = None, timeout: float = 30):
+        with self.lock:
+            self.next_id += 1
+            mid = self.next_id
+        msg = {"id": mid, "method": method, "params": params or {}}
+        if session:
+            msg["sessionId"] = session
+        self.ws.send(json.dumps(msg))
+        end = time.time() + timeout
+        with self.cond:
+            while mid not in self.results:
+                left = end - time.time()
+                if left <= 0 or self.closed:
+                    raise TimeoutError(f"CDP {method} timed out")
+                self.cond.wait(left)
+            res = self.results.pop(mid)
+        if "error" in res:
+            raise RuntimeError(f"CDP {method}: {res['error']}")
+        return res.get("result", {})
+
+    def evaluate(self, session: str, expr: str, context_id: int | None = None, timeout: float = 30):
+        p = {"expression": expr, "awaitPromise": True, "returnByValue": True}
+        if context_id is not None:
+            p["contextId"] = context_id
+        r = self.send("Runtime.evaluate", p, session, timeout)
+        if r.get("exceptionDetails"):
+            raise RuntimeError(json.dumps(r["exceptionDetails"])[:500])
+        return (r.get("result") or {}).get("value")
+
+    def attach(self, target_id: str) -> str:
+        return self.send("Target.attachToTarget", {"targetId": target_id, "flatten": True})["sessionId"]
+
+    def close(self):
+        try:
+            self.ws.close()
+        except Exception:
+            pass
+
+
+def chromium_executable() -> str:
+    from playwright.sync_api import sync_playwright
+
+    with sync_playwright() as pw:
+        return pw.chromium.executable_path
+
+
+def launch_raw(user_dir: Path, extension: Path, headless: bool):
+    """Chromium with the unpacked extension and a DevTools port, without Playwright
+    (nothing attaches to the service worker unless the caller does)."""
+    user_dir.mkdir(parents=True, exist_ok=True)
+    args = [chromium_executable(), f"--user-data-dir={user_dir}", "--remote-debugging-port=0",
+            "--no-first-run", "--no-default-browser-check",
+            f"--disable-extensions-except={extension}", f"--load-extension={extension}",
+            "--autoplay-policy=no-user-gesture-required"]
+    if headless:
+        args.append("--headless=new")
+    args.append("about:blank")
+    proc = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    port_file = user_dir / "DevToolsActivePort"
+    end = time.time() + 30
+    while time.time() < end:
+        try:
+            lines = port_file.read_text().split()
+            if len(lines) >= 2:
+                return proc, f"ws://127.0.0.1:{lines[0]}{lines[1]}"
+        except OSError:
+            pass
+        time.sleep(0.2)
+    proc.kill()
+    raise RuntimeError("Chromium did not write DevToolsActivePort")
+
+
+def sw_idle_run(args, page_url: str, scratch: Path, summary: dict) -> bool:
+    """A caption session that goes quiet for longer than the service worker's idle
+    timeout (30 s) still delivers the next cue. Three phases on one tab:
+      A  idle `--idle` s with the content script's keepalive running: the worker
+         must not be stopped, and the next cue is translated;
+      B  keepalive cleared (in the content script's own world): Chrome's real idle
+         timeout stops the worker; the next cue must still be translated (port
+         reopened -> worker restarted -> socket reconnected);
+      C  worker stopped through DevTools (ServiceWorker.stopAllWorkers), the way
+         any other termination looks; the next cue must still be translated."""
+    checks = summary.setdefault("checks", {})
+    proc, browser_ws = launch_raw(scratch / "profile-raw", args.extension, not args.headful)
+    cdp = CDP(browser_ws)
+    try:
+        sw_events: list = []  # (t, 'created'|'destroyed', targetId)
+        sw_ids: set = set()
+        records: list = []
+        contexts: dict = {}
+        state = {"ext_id": None, "page_session": None}
+
+        def on_event(m):
+            meth, p = m.get("method"), m.get("params") or {}
+            ti = p.get("targetInfo") or {}
+            if meth == "Target.targetCreated" and ti.get("type") == "service_worker" \
+                    and ti.get("url", "").startswith("chrome-extension://") and ti["url"].endswith("/background.js"):
+                state["ext_id"] = state["ext_id"] or ti["url"].split("/")[2]
+                sw_ids.add(ti["targetId"])
+                sw_events.append((time.time(), "created", ti["targetId"]))
+            elif meth == "Target.targetDestroyed" and p.get("targetId") in sw_ids:
+                sw_events.append((time.time(), "destroyed", p["targetId"]))
+            elif meth == "Runtime.consoleAPICalled" and m.get("sessionId") == state["page_session"]:
+                text = " ".join(str(a.get("value", "")) for a in p.get("args") or [])
+                if "[ST-OBS]" in text:
+                    try:
+                        records.append(json.loads(text.split("[ST-OBS]", 1)[1].strip()))
+                    except Exception:
+                        pass
+            elif meth == "Runtime.executionContextCreated" and m.get("sessionId") == state["page_session"]:
+                c = p.get("context") or {}
+                contexts[c.get("id")] = c
+
+        cdp.listeners.append(on_event)
+        cdp.send("Target.setDiscoverTargets", {"discover": True})
+        end = time.time() + 20
+        while not state["ext_id"] and time.time() < end:
+            time.sleep(0.2)
+        ext_id = state["ext_id"]
+        summary["extension_id"] = ext_id
+        if not ext_id:
+            summary["error"] = "extension service worker not found"
+            return False
+        for t in cdp.send("Target.getTargets")["targetInfos"]:
+            if t["type"] == "page" and t["url"].startswith(f"chrome-extension://{ext_id}/options/"):
+                cdp.send("Target.closeTarget", {"targetId": t["targetId"]})  # opened by onInstalled
+
+        def ext_page():
+            tid = cdp.send("Target.createTarget", {"url": f"chrome-extension://{ext_id}/popup/popup.html"})["targetId"]
+            s = cdp.attach(tid)
+            end = time.time() + 10
+            while time.time() < end and cdp.evaluate(s, "typeof chrome !== 'undefined' && !!chrome.runtime && document.readyState") != "complete":
+                time.sleep(0.2)
+            return tid, s
+
+        ctl_id, ctl = ext_page()
+        targets = [t for t in args.targets.split(",") if t]
+        cdp.evaluate(ctl, "(async () => { const cur = (await chrome.storage.local.get('settings')).settings || {};"
+                          f" await chrome.storage.local.set({{settings: {{...cur, serverUrl: {json.dumps(f'ws://127.0.0.1:{args.port}/ws')},"
+                          f" targetLanguages: {json.dumps(targets)}}}}}); return true; }})()")
+
+        page_id = cdp.send("Target.createTarget", {"url": page_url})["targetId"]
+        state["page_session"] = page = cdp.attach(page_id)
+        cdp.send("Runtime.enable", session=page)
+        end = time.time() + 15
+        while time.time() < end and cdp.evaluate(page, "document.readyState") != "complete":
+            time.sleep(0.2)
+        frame_id = cdp.send("Page.getFrameTree", session=page)["frameTree"]["frame"]["id"]
+        tab_id = cdp.evaluate(ctl, f"chrome.tabs.query({{url: {json.dumps(page_url)}}}).then(t => t[0] && t[0].id)")
+        enable = cdp.evaluate(ctl, "new Promise(r => chrome.runtime.sendMessage("
+                                   f"{{type: 'SET_TAB_ENABLED', tabId: {int(tab_id)}, enabled: true}}, r))")
+        summary["enable"] = enable
+
+        def rendered(cue_id=None):
+            return [r for r in records if r.get("stage") == "ext_render"
+                    and (r.get("context") or {}).get("from") == "backend"
+                    and (cue_id is None or (r.get("context") or {}).get("cue_id") == cue_id)]
+
+        def wait_for(pred, timeout):
+            end = time.time() + timeout
+            while time.time() < end:
+                if pred():
+                    return True
+                time.sleep(0.25)
+            return bool(pred())
+
+        checks["first_cue_translated"] = wait_for(lambda: rendered(), 30)
+        cdp.send("Target.closeTarget", {"targetId": ctl_id})  # no extension page stays open
+
+        def post_cue(cue_id, text):
+            cue = {"cueId": cue_id, "text": text, "startTime": 0, "endTime": 2}
+            cdp.evaluate(page, f"window.postMessage({json.dumps({'__subtrans': 'cue', 'cue': cue})}, '*'); true")
+
+        def destroyed_since(t0):
+            return [e for e in sw_events if e[1] == "destroyed" and e[0] >= t0]
+
+        def content_world():
+            """The content script's isolated world in the tab's top frame."""
+            worlds = [cid for cid, c in contexts.items()
+                      if (c.get("auxData") or {}).get("type") == "isolated" and (c.get("auxData") or {}).get("frameId") == frame_id]
+            return worlds[-1] if worlds else None
+
+        timeline = summary.setdefault("timeline", {})
+        # A: quiet tab, keepalive on
+        t_a = time.time()
+        time.sleep(args.idle)
+        timeline["A_idle_s"] = round(time.time() - t_a, 1)
+        timeline["A_sw_stops"] = len(destroyed_since(t_a))
+        checks["A_keepalive_kept_worker"] = not destroyed_since(t_a)
+        post_cue("after-idle-a", "The meeting starts at nine tomorrow morning.")
+        checks["A_cue_after_idle_translated"] = wait_for(lambda: rendered("after-idle-a"), 20)
+
+        # B: keepalive off -> Chrome's own idle timeout stops the worker
+        world = content_world()
+        cleared = cdp.evaluate(page, "(() => { const w = globalThis.subtitleWS; if (!w) return false;"
+                                     " clearInterval(w.keepaliveTimer); w.keepaliveTimer = null; return true; })()",
+                               context_id=world) if world else False
+        timeline["B_keepalive_cleared"] = bool(cleared)
+        t_b = time.time()
+        stopped = wait_for(lambda: destroyed_since(t_b), args.idle + 45)
+        timeline["B_sw_stopped_after_s"] = round(destroyed_since(t_b)[0][0] - t_b, 1) if stopped else None
+        checks["B_worker_stopped_by_idle_timeout"] = bool(cleared) and stopped
+        time.sleep(3)  # quiet a little longer after the stop, then the next cue
+        post_cue("after-idle-b", "Please call me when you get home.")
+        checks["B_cue_after_idle_stop_translated"] = wait_for(lambda: rendered("after-idle-b"), 20)
+
+        # C: worker stopped from outside
+        t_c = time.time()
+        cdp.send("ServiceWorker.enable", session=page)
+        cdp.send("ServiceWorker.stopAllWorkers", session=page)
+        timeline["C_sw_stopped"] = wait_for(lambda: destroyed_since(t_c), 10)
+        time.sleep(2)
+        post_cue("after-stop-c", "We need two more chairs in the kitchen.")
+        checks["C_cue_after_forced_stop_translated"] = wait_for(lambda: rendered("after-stop-c"), 20)
+
+        summary["sw_events"] = [(round(t - t_a, 1), kind) for t, kind, _ in sw_events if t >= t_a]
+        summary["renders"] = [(r.get("context") or {}).get("cue_id") for r in rendered()][-8:]
+        summary["errors"] = [r.get("error_message") for r in records if r.get("event") == "fail"][:6]
+        return all(checks.values())
+    finally:
+        try:
+            cdp.send("Browser.close", timeout=5)
+        except Exception:
+            pass
+        cdp.close()
+        try:
+            proc.wait(timeout=10)
+        except Exception:
+            proc.kill()
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--path", choices=("audio", "captions", "security"), default="audio")
+    ap.add_argument("--path", choices=("audio", "captions", "security", "sw-idle"), default="audio")
+    ap.add_argument("--idle", type=float, default=40.0, help="sw-idle: seconds of silence per phase (Chrome's idle timeout is 30 s)")
     ap.add_argument("--wav", type=Path, default=DEFAULT_WAV)
     ap.add_argument("--port", type=int, default=8765)
     ap.add_argument("--start-backend", action="store_true")
@@ -252,10 +530,17 @@ def main() -> int:
         (site / "frame.html").write_text(FRAME_PAGE, encoding="utf-8")
         srv, http_port = serve_dir(site)
         srv2, http_port2 = serve_dir(site)  # a second origin for the cross-origin iframe
-        page = {"audio": AUDIO_PAGE, "captions": CAPTION_PAGE,
+        page = {"audio": AUDIO_PAGE, "captions": CAPTION_PAGE, "sw-idle": IDLE_PAGE,
                 "security": SECURITY_PAGE.replace("{frame_url}", f"http://127.0.0.1:{http_port2}/frame.html")}[args.path]
         (site / "index.html").write_text(page, encoding="utf-8")
         page_url = f"http://127.0.0.1:{http_port}/index.html"
+
+        if args.path == "sw-idle":
+            ok = sw_idle_run(args, page_url, scratch, summary)
+            srv.shutdown()
+            srv2.shutdown()
+            summary["ok"] = ok
+            return 0 if ok else 1
 
         with sync_playwright() as pw:
             # 1st launch: learn the unpacked extension's id

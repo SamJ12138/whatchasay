@@ -11,6 +11,8 @@ Provides long-term storage of translations with:
 import asyncio
 import json
 import logging
+import sqlite3
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -18,8 +20,46 @@ import xxhash
 import aiosqlite
 
 from ..config import settings
+from .. import obs
 
 logger = logging.getLogger(__name__)
+
+# Schema versions, kept in PRAGMA user_version:
+#   1  baseline (fffcdda): translations, corrections, glossary
+#   2  + translations.engine (Phase 2a; databases migrated by 2a have the column
+#      but user_version 0, and are recognised by it)
+SCHEMA_VERSION = 2
+
+
+def _detect_version(con: sqlite3.Connection) -> int:
+    """Schema version of an existing database; 0 = no TM tables yet (new file)."""
+    stamped = con.execute("PRAGMA user_version").fetchone()[0]
+    if stamped:
+        return stamped
+    tables = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    if "translations" not in tables:
+        return 0
+    columns = {r[1] for r in con.execute("PRAGMA table_info(translations)")}
+    return 2 if "engine" in columns else 1
+
+
+def _backup_db(db_path: Path, version: int) -> Path:
+    """Copy the database to <name>.bak-<version> with SQLite's online backup (rows
+    still in the -wal file included). An existing backup is never overwritten: the
+    new one then gets a timestamp suffix."""
+    target = db_path.with_name(f"{db_path.name}.bak-{version}")
+    if target.exists():
+        target = db_path.with_name(f"{db_path.name}.bak-{version}.{datetime.now():%Y%m%dT%H%M%S}")
+    src = sqlite3.connect(str(db_path))
+    try:
+        dst = sqlite3.connect(str(target))
+        try:
+            src.backup(dst)
+        finally:
+            dst.close()
+    finally:
+        src.close()
+    return target
 
 
 class TranslationMemory:
@@ -40,7 +80,33 @@ class TranslationMemory:
         self.db_path = db_path or settings.cache.tm_database_path
         self._connection: Optional[aiosqlite.Connection] = None
         self._initialized = False
+        self._migration: Optional[Dict[str, Any]] = None
     
+    def _prepare_migration(self) -> None:
+        """Before any schema change: find the database's version and, if it is
+        older than SCHEMA_VERSION, back it up. A failed backup stops start-up of
+        the TM (raises) so the schema is never changed without a copy."""
+        self._migration = None
+        if not self.db_path.exists():
+            return
+        con = sqlite3.connect(str(self.db_path))
+        try:
+            version = _detect_version(con)
+        finally:
+            con.close()
+        if version == 0 or version >= SCHEMA_VERSION:
+            return
+        t0 = time.perf_counter()
+        obs.log("tm_migration", "start", from_version=version, to_version=SCHEMA_VERSION, db=self.db_path.name)
+        try:
+            backup = _backup_db(self.db_path, version)
+        except Exception as e:
+            obs.log_exc("tm_migration", e, api="process", from_version=version, to_version=SCHEMA_VERSION,
+                        db=self.db_path.name, degraded="migration not run: backup failed")
+            raise
+        logger.warning("Translation memory schema %d -> %d: backup written to %s", version, SCHEMA_VERSION, backup)
+        self._migration = {"from_version": version, "backup": str(backup), "backup_ms": (time.perf_counter() - t0) * 1000}
+
     async def initialize(self) -> None:
         """Initialize the database and create tables."""
         if self._initialized:
@@ -48,6 +114,7 @@ class TranslationMemory:
         
         # Ensure directory exists
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        await asyncio.get_running_loop().run_in_executor(None, self._prepare_migration)
         
         self._connection = await aiosqlite.connect(str(self.db_path))
         
@@ -116,7 +183,12 @@ class TranslationMemory:
         if "engine" not in columns:
             await self._connection.execute("ALTER TABLE translations ADD COLUMN engine TEXT")
 
+        await self._connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         await self._connection.commit()
+        mig = self._migration
+        if mig and mig.get("backup"):
+            obs.log("tm_migration", "success", duration_ms=mig.get("backup_ms"), from_version=mig["from_version"],
+                    to_version=SCHEMA_VERSION, backup=mig["backup"], db=self.db_path.name)
         self._initialized = True
         logger.info(f"Translation memory initialized: {self.db_path}")
     

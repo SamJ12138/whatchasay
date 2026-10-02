@@ -81,3 +81,11 @@ ran without the server's real engines except `test_pipeline`.
 - `fake_llama(*stub_args)` → a `HyMTEngine` whose child is `tests/fake_llama_server.py` (flags: `--exit-on-start`,
   `--exit-after N`, `--exit-code N`, `--health-delay S`, `--never-healthy`, `--stderr-line TEXT`); shut down after the
   test.
+
+## Added in Phase 2b
+
+| File :: test | Asserts | Suite |
+|---|---|---|
+| `test_tm_migration` (6) | v1 database -> `<name>.bak-1` written before the migration (old schema, same rows, WAL rows included), logged; no backup for a new or current database; unstamped 2a databases are schema 2; an existing backup is never overwritten; a failed backup stops the migration | fast |
+| `test_e2e_extension` :: `test_caption_session_survives_service_worker_idle_timeout` | `--path sw-idle`: real idle timeout over raw CDP (keepalive kept the worker; idle stop -> restart -> next cue translated; forced stop -> same) | **slow** |
+| `extension/tests/sw-lifetime.test.js` (4) | a woken worker keeps the first message of a port that connects during the enabled-tab restore; refused / closed ports open no socket; the content side posts a keepalive every 20 s and reopens its port when the worker goes away (not when refused) | node |

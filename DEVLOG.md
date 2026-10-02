@@ -214,3 +214,22 @@ Browser: load `extension/` unpacked → YouTube video without captions → popup
   + `node --test` (Node 22), and the clean-install proof (`backend/scripts/clean_install_check.py`). No model downloads.
   Actions pinned by commit SHA: checkout v7.0.1, setup-python v7.0.0, setup-node v7.0.0, upload-artifact v7.0.1, all
   `using: node24`. Locally green on Windows / Python 3.10 (Python 3.12 and Linux are first exercised by CI in Phase 3).
+
+### 2026-10-02 — Phase 2b: product scope (D1-D4)
+Product statement: "live local subtitles for any tab's audio: nothing you hear leaves your machine unless you turn
+that on". Reviewer decisions: D1 OPUS-MT on CPU is the default engine, HY-MT optional behind a license gate; D2 the
+page-caption path is opt-in with optional host permissions; D3 audio sessions leave no trace in the persistent TM;
+D4 cloud providers off by default, keys only in backend config.
+- Batch 0 (SW lifetime, TM migration backup): the caption path's `/ws` socket lives in the service worker; how it
+  survives the worker's 30 s idle timeout is now written down (`docs/architecture-notes.md` §1) and tested in a real
+  browser. Playwright cannot test it: it attaches DevTools to every service worker and an attached worker is never
+  stopped (measured: same instance after 45 s idle). New harness path `e2e_extension.py --path sw-idle` drives
+  Chromium over raw CDP (websockets) with nothing attached to the worker: A) 40 s quiet with the content script's 20 s
+  Port keepalive: worker kept, next cue translated; B) keepalive cleared in the content script's world: Chrome stops
+  the worker after 30.3 s, the port reopens, the worker restarts and the next cue is translated over a new socket;
+  C) `ServiceWorker.stopAllWorkers`: same. A mutant whose port never reopens fails B and C. Fixed a wake-up race found
+  while reading the restart path: `TabConnections.attachPort` awaited the enabled-tab restore before adding its
+  listeners, so a woken worker could drop the port's first `{op:'connect'}` (node tests). TM: `PRAGMA user_version`
+  schema versions (1 = baseline, 2 = `engine` column; unstamped databases recognised by their columns); before any
+  migration the database is copied with SQLite's backup API (WAL rows included) to `<name>.bak-<old version>`, logged
+  as `tm_migration`; an existing backup is never overwritten; a failed backup stops the migration.

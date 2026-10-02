@@ -55,3 +55,11 @@ def test_origins_and_per_tab_enable_in_the_browser():
     summary, proc = run_harness("--path", "security")
     assert summary["ok"], (summary, proc.stderr[-2000:])
     assert all(summary["checks"].values()), summary["checks"]
+
+
+def test_caption_session_survives_service_worker_idle_timeout():
+    """Real idle timeout: the harness drives Chromium over raw CDP with nothing
+    attached to the service worker (Playwright's attachment keeps it alive)."""
+    summary, proc = run_harness("--path", "sw-idle")
+    assert summary["ok"], (summary, proc.stderr[-2000:])
+    assert summary["checks"]["B_worker_stopped_by_idle_timeout"], summary
