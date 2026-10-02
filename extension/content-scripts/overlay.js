@@ -271,6 +271,7 @@ class SubtitleOverlay {
   disableEditMode() {
     this.editMode = false;
     this.editCueId = null;
+    this._editingLine = null;
     this._updateDisplay();
   }
 
@@ -464,6 +465,9 @@ class SubtitleOverlay {
    */
   _updateDisplay() {
     if (!this.subtitleStack) return;
+    // While the user is typing a correction, new captions must not rebuild (and so
+    // discard) the line being edited; the display catches up when the edit ends.
+    if (this.editMode && this._editingLine && this._editingLine.isConnected) return;
 
     // Clear existing
     this.subtitleStack.innerHTML = '';
@@ -473,8 +477,10 @@ class SubtitleOverlay {
       return;
     }
 
-    // Get the most recent cue
-    const lastCue = Array.from(this.currentCues.entries()).pop();
+    // The cue being edited, else the most recent cue
+    const lastCue = this.editMode && this.currentCues.has(this.editCueId)
+      ? [this.editCueId, this.currentCues.get(this.editCueId)]
+      : Array.from(this.currentCues.entries()).pop();
     if (!lastCue) { this._renderExtras(); return; }
 
     const [cueId, cueData] = lastCue;
@@ -562,11 +568,13 @@ class SubtitleOverlay {
     // Handle edit mode
     if (this.editMode && this.editCueId === cueId && type !== 'original') {
       line.classList.add('editing');
+      this._editingLine = line;
       line.contentEditable = 'true';
       line.spellcheck = false;
 
       // Save on blur or Enter
-      line.addEventListener('blur', () => this._handleEdit(line, cueId, type));
+      // the correction is keyed by the line's language code, not its role (primary / secondary)
+      line.addEventListener('blur', () => this._handleEdit(line, cueId, langCode || type));
       line.addEventListener('keydown', (e) => {
         if (e.key === 'Enter' && !e.shiftKey) {
           e.preventDefault();
@@ -594,7 +602,7 @@ class SubtitleOverlay {
   /**
    * Handle edit completion.
    */
-  _handleEdit(line, cueId, type) {
+  _handleEdit(line, cueId, lang) {
     const newText = line.textContent.trim();
     const cueData = this.currentCues.get(cueId);
 
@@ -603,17 +611,16 @@ class SubtitleOverlay {
       return;
     }
 
-    const oldText = cueData.translations[type]?.single_line;
+    const oldText = cueData.translations[lang]?.single_line;
 
     if (newText !== oldText && this.onCorrectionCallback) {
       // Build correction data
       const originalTranslation = {};
       const correctedTranslation = {};
 
-      const langs = Object.keys(cueData.translations || {});
-      for (const lang of langs) {
-        originalTranslation[lang] = cueData.translations[lang]?.single_line || '';
-        correctedTranslation[lang] = lang === type ? newText : originalTranslation[lang];
+      for (const l of Object.keys(cueData.translations || {})) {
+        originalTranslation[l] = cueData.translations[l]?.single_line || '';
+        correctedTranslation[l] = l === lang ? newText : originalTranslation[l];
       }
 
       this.onCorrectionCallback({
@@ -625,9 +632,9 @@ class SubtitleOverlay {
       });
 
       // Update local display
-      if (cueData.translations[type]) {
-        cueData.translations[type].single_line = newText;
-        cueData.translations[type].display_text = newText;
+      if (cueData.translations[lang]) {
+        cueData.translations[lang].single_line = newText;
+        cueData.translations[lang].display_text = newText;
       }
     }
 

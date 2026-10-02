@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+import weakref
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
@@ -61,11 +62,27 @@ def caption_policy() -> MemoryPolicy:
     return MemoryPolicy(tm_write=settings.tm.persist_captions)
 
 
+# The running live sessions' own caches (weak: a cache goes when its session does), so a
+# user correction can reach them too.
+_live_caches: "weakref.WeakSet[TranslationCache]" = weakref.WeakSet()
+
+
 def audio_session_policy() -> MemoryPolicy:
     """One live-caption (/ws/asr) session: its own cache, gone with the session; the
     persistent TM is not written or touched unless settings.tm.persist_audio_sessions."""
     keep = settings.tm.persist_audio_sessions
-    return MemoryPolicy(cache=TranslationCache(), tm_write=keep, tm_touch=keep, context=keep)
+    cache = TranslationCache()
+    _live_caches.add(cache)
+    return MemoryPolicy(cache=cache, tm_write=keep, tm_touch=keep, context=keep)
+
+
+def clear_memory_caches(*extra: Optional[TranslationCache]) -> int:
+    """Empty the process-wide cache, every running live session's cache and `extra`, so
+    a user correction wins at once everywhere. Returns how many caches were cleared."""
+    caches = {id(c): c for c in (get_translation_cache(), *_live_caches, *extra) if c is not None}
+    for c in caches.values():
+        c.clear()
+    return len(caches)
 
 
 @dataclass

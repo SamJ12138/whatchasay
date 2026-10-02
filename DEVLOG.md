@@ -395,4 +395,15 @@ D4 cloud providers off by default, keys only in backend config.
   `core.hooksPath=scripts/hooks`; README Development documents it. Installed in this clone; no commit bypasses it.
   `tests/test_hooks.py` builds throwaway repos with a stand-in backend Python: green lets the commit through, a red
   backend or a red extension suite blocks it.
+- Corrections (Alt+E) now work, and on live-captions-only tabs too. Found on the way: they had never been saved
+  anywhere: the overlay passed a line's role ('primary' / 'secondary') to `_handleEdit` as if it were a language
+  code, so the "corrected" translation always equalled the original and the backend stored nothing (while
+  answering "saved"). Fixed (the line's language code). Live-only tabs have no caption socket: the content script
+  hands the correction to the service worker (`SUBMIT_CORRECTION`), which posts it with the extension's origin to
+  the new `POST /corrections` (`lib/corrections.js`); `save_correction` is shared with `/ws` and clears every
+  in-memory cache including running live sessions' own (`pipeline.clear_memory_caches`, weak registry), so the next
+  identical sentence in the same session shows the fix. Editing during live captions: Alt+E picks the newest cue
+  with a translation; the edited cue is neither hidden (8 s timer) nor dropped by the next sentence, and the
+  overlay does not rebuild the line while it is being typed in. Browser harness `--correct` (Alt+E, type, Enter
+  while the clip plays; `/stats` `user_corrections` 0 -> 1).
 

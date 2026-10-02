@@ -245,6 +245,33 @@ class PendingCue:
     skip_post_edit: bool = False
 
 
+async def save_correction(correction: TranslationCorrection, hint: Optional[str] = None, path: str = "/ws",
+                          pipeline: Optional[TranslationPipeline] = None) -> Dict[str, Any]:
+    """Store a user correction in the TM (user-corrected rows always persist, D3) and clear
+    every in-memory cache, running live sessions' included, so it applies at once. Used by
+    the caption path's /ws and by POST /corrections (live-captions-only tabs)."""
+    from .translation.pipeline import clear_memory_caches
+
+    tm = await get_translation_memory()
+    source_lang = correction.source_lang
+    if not source_lang or source_lang in ("auto", "unknown"):
+        from .translation.language_detection import detect_language
+
+        source_lang = detect_language(correction.source_text, hint)[0]
+    for lang, corrected_text in correction.corrected_translation.items():
+        original_text = correction.original_translation.get(lang, "")
+        if corrected_text and corrected_text != original_text:
+            lines = corrected_text.split("\n") if "\n" in corrected_text else [corrected_text]
+            await tm.store_correction(
+                source_text=correction.source_text, source_lang=source_lang, target_lang=lang,
+                original_translation=original_text, corrected_translation=corrected_text, corrected_lines=lines,
+            )
+    cleared = clear_memory_caches(pipeline._memory_cache if pipeline is not None else None)
+    obs.log("tm_store", "success", kind="correction", path=path, cue_id=correction.cue_id, source_lang=source_lang,
+            targets=list(correction.corrected_translation.keys()), caches_cleared=cleared)
+    return {"status": "saved", "cue_id": correction.cue_id, "source_lang": source_lang}
+
+
 class MicroBatcher:
     """Collect cues for a short window, then translate them in one call."""
 
@@ -432,27 +459,8 @@ class WebSocketHandler:
 
     async def _handle_correction(self, payload: Dict) -> Dict:
         try:
-            correction = TranslationCorrection(**payload)
-            tm = await get_translation_memory()
-            source_lang = correction.source_lang
-            if not source_lang or source_lang in ("auto", "unknown"):
-                from .translation.language_detection import detect_language
-
-                source_lang = detect_language(correction.source_text, self._conn_hint())[0]
-            cache = self.pipeline._memory_cache
-            for lang, corrected_text in correction.corrected_translation.items():
-                original_text = correction.original_translation.get(lang, "")
-                if corrected_text and corrected_text != original_text:
-                    lines = corrected_text.split("\n") if "\n" in corrected_text else [corrected_text]
-                    await tm.store_correction(
-                        source_text=correction.source_text, source_lang=source_lang, target_lang=lang,
-                        original_translation=original_text, corrected_translation=corrected_text, corrected_lines=lines,
-                    )
-            if cache is not None:
-                cache.clear()  # drop stale memory entries so the correction wins immediately
-            obs.log("tm_store", "success", kind="correction", cue_id=correction.cue_id, source_lang=source_lang,
-                    targets=list(correction.corrected_translation.keys()))
-            return {"status": "saved", "cue_id": correction.cue_id, "source_lang": source_lang}
+            return await save_correction(TranslationCorrection(**payload), self._conn_hint(), path="/ws",
+                                         pipeline=self.pipeline)
         except ValidationError:
             raise
         except Exception as e:

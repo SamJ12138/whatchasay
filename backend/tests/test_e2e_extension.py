@@ -62,6 +62,15 @@ def test_mandarin_tab_audio_with_the_licensed_model():
     assert summary["tm_rows_after"] == summary["tm_rows_before"], summary
 
 
+def test_alt_e_correction_on_a_live_captions_only_tab_is_saved():
+    """Follow-up 2: the tab has no caption socket (caption mode off); Alt+E, type, Enter
+    must store the correction in the backend's TM (content script -> worker -> POST
+    /corrections)."""
+    summary, proc = run_harness("--path", "audio", "--correct")
+    assert summary["ok"], (summary, proc.stderr[-2000:])
+    assert summary["correction_saved"], summary
+
+
 def test_page_subtitles_are_translated_over_ws():
     summary, proc = run_harness("--path", "captions", "--enable")
     assert summary["ok"], (summary, proc.stderr[-2000:])

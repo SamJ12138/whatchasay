@@ -129,9 +129,8 @@ the subtitle text those pages show. Even then nothing is read until you switch o
 tab** in the popup for a particular tab. Switching caption mode off gives the site access back.
 
 **Corrections.** Press **Alt+E** while a translation is on screen, edit it, and press Enter (Escape cancels). The
-correction is stored in the translation memory and used whenever the same sentence comes up again. Corrections are
-saved only on a tab where caption mode is on and *Translate subtitles on this tab* is switched on (see
-limitations).
+subtitles hold still while you type. The correction is stored in the translation memory and used from the next
+time the same sentence comes up, in live captions and in caption mode alike.
 
 **What is remembered.** Live-caption text and its translations are kept in memory only until the session ends.
 Page subtitles from caption mode and your corrections are kept in `backend/data/translation_memory.db`; machine
@@ -439,8 +438,6 @@ Windows (`.github/workflows/ci.yml`). `DEVLOG.md` is the project history; every 
 - With *Auto-detect*, the first one or two seconds may show text in the wrong language until detection switches;
   choosing the spoken language avoids it.
 - Korean and Portuguese targets stay untranslated with OPUS-MT (no model from English).
-- Corrections (Alt+E) are only saved on a tab with caption mode and *Translate subtitles on this tab* on; on a tab
-  that only runs live captions the edit is shown but not saved.
 - Sites that protect their audio (DRM) give silence; the popup then says no audio is reaching the capture.
 - Chrome's built-in on-device translator (Chrome 138+, *Prepare on-device translation* in the popup) is wired in but
   has not been measured.

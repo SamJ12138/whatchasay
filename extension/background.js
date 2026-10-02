@@ -13,6 +13,7 @@ import './content-scripts/ws-protocol.js';
 import './lib/websocket-client.js';
 import './lib/tab-connections.js';
 import './lib/caption-mode.js';
+import './lib/corrections.js';
 import './lib/settings-migration.js';
 
 const obs = globalThis.STObs;
@@ -518,6 +519,23 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         tabConnections.setEnabled(tabId, on);
         chrome.tabs.sendMessage(tabId, { type: 'TAB_ENABLED', enabled: on }).catch(() => {});
         sendResponse({ ok: true, enabled: on });
+      })();
+      return true;
+    }
+    case 'SUBMIT_CORRECTION': {
+      // Alt+E on a tab without a caption socket (live captions only): post it to the
+      // backend from here, with the extension's origin. Only from a tab's content script.
+      if (!sender.tab || (sender.url || '').startsWith(chrome.runtime.getURL(''))) {
+        sendResponse({ ok: false, error: 'not from a tab' });
+        return false;
+      }
+      (async () => {
+        const res = await STCorrections.submit(message.correction || {}, (await getSettings()).serverUrl);
+        obs.log('ext_correction', res.ok ? 'success' : 'fail', {
+          path: '/corrections', tab_id: sender.tab.id, cue_id: (message.correction || {}).cueId,
+          ...(res.ok ? {} : { error_type: 'process', error_message: res.error }),
+        });
+        sendResponse(res);
       })();
       return true;
     }

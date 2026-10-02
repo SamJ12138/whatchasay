@@ -21,11 +21,11 @@ from pydantic import BaseModel
 import orjson
 
 from .config import settings
-from .models import HealthResponse, SubtitleCue
+from .models import HealthResponse, SubtitleCue, TranslationCorrection
 from .translation import get_pipeline, warmup_pipeline
 from .translation.pipeline import audio_session_policy
 from .cache import get_translation_memory, get_translation_cache
-from .websocket_handler import websocket_endpoint, manager, format_result, ignore_cloud_keys
+from .websocket_handler import websocket_endpoint, manager, format_result, ignore_cloud_keys, save_correction
 from .translation.cloud_translator import cloud_receivers
 from . import asr as asr_pkg
 from . import obs
@@ -615,6 +615,21 @@ async def update_config(updates: Dict[str, Any]):
     if "cloud_keys" in updates:
         ignore_cloud_keys(updates, path="/config")
     return await get_config()
+
+
+@app.post("/corrections")
+async def post_correction(correction: TranslationCorrection):
+    """A user correction (Alt+E) from a tab that has no caption-path /ws socket, i.e. a
+    tab running only live captions; the extension's service worker posts it. Same
+    storage as a /ws correction; running live sessions see it on their next sentence."""
+    try:
+        return await save_correction(correction, settings.lang_detect.default_hint, path="/corrections",
+                                     pipeline=await get_pipeline())
+    except Exception as e:
+        obs.log_exc("tm_store", e, api="process", kind="correction", path="/corrections",
+                    degraded="error sent to the extension")
+        return JSONResponse(status_code=500, content={"status": "error", "error": f"correction not saved: {e}",
+                                                      "error_type": obs.classify(e, "process")})
 
 
 @app.post("/cache/clear")

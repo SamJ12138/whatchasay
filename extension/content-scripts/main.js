@@ -341,15 +341,20 @@
   }
 
   async function handleCorrection(correction) {
-    if (!connected) return;
     try {
-      await ws.submitCorrection(
-        correction.cueId,
-        correction.sourceText,
-        correction.originalTranslation,
-        correction.correctedTranslation,
-        correction.sourceLang || null
-      );
+      if (connected) {
+        await ws.submitCorrection(
+          correction.cueId,
+          correction.sourceText,
+          correction.originalTranslation,
+          correction.correctedTranslation,
+          correction.sourceLang || null
+        );
+      } else {
+        // no caption socket on this tab (live captions only): the worker posts it
+        const res = await chrome.runtime.sendMessage({ type: 'SUBMIT_CORRECTION', correction });
+        if (!res || !res.ok) throw new Error((res && res.error) || 'correction not saved');
+      }
       const updated = {};
       for (const [lang, text] of Object.entries(correction.correctedTranslation)) {
         updated[lang] = { lines: [text], single_line: text, display_text: text };
@@ -388,6 +393,8 @@
   function scheduleLiveHide(cueId, ms) {
     if (live.hideTimer) clearTimeout(live.hideTimer);
     live.hideTimer = setTimeout(() => {
+      // never hide a cue while its translation is being corrected
+      if (overlay.editMode && overlay.editCueId === cueId) { scheduleLiveHide(cueId, ms); return; }
       // hide only if nothing newer arrived
       const last = Array.from(overlay.currentCues.keys()).pop();
       if (last === cueId) overlay.hideTranslation(cueId);
@@ -405,7 +412,7 @@
         live.lastUtteranceId = ev.utterance_id;
         // drop older live cues so the stack shows one utterance at a time
         for (const id of Array.from(overlay.currentCues.keys())) {
-          if (id !== cueId) overlay.currentCues.delete(id);
+          if (id !== cueId && !(overlay.editMode && overlay.editCueId === id)) overlay.currentCues.delete(id);
         }
         overlay.showTranslation(cueId, ev.text, {}, { sourceLang: ev.lang });
         if (ev.server_ts) recordLatency((Date.now() / 1000 - ev.server_ts) * 1000, 'final');
@@ -581,8 +588,11 @@
         overlay.decreaseFontSize();
         break;
       case 'toggle-edit': {
-        const lastCue = Array.from(overlay.currentCues.keys()).pop();
-        if (lastCue) overlay.enableEditMode(lastCue);
+        // the newest cue that has a translation (with live captions the newest cue is
+        // often the next sentence, still in progress, with nothing to correct yet)
+        const editable = Array.from(overlay.currentCues.entries()).reverse()
+          .find(([, cue]) => cue && cue.translations && Object.keys(cue.translations).length);
+        if (editable) overlay.enableEditMode(editable[0]);
         break;
       }
     }

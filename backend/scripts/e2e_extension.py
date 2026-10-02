@@ -305,6 +305,12 @@ def tm_rows(port: int) -> int:
         return json.loads(r.read())["translation_memory"]["total_translations"]
 
 
+def tm_corrections(port: int) -> int:
+    """User corrections in the backend's (scratch) translation memory."""
+    with urllib.request.urlopen(f"http://127.0.0.1:{port}/stats", timeout=5) as r:
+        return json.loads(r.read())["translation_memory"]["user_corrections"]
+
+
 def asr_models(port: int) -> dict:
     """{lang: model name} of the backend's Zipformer engine, and the punctuation model."""
     with urllib.request.urlopen(f"http://127.0.0.1:{port}/health/json", timeout=5) as r:
@@ -733,6 +739,7 @@ def main() -> int:
     ap.add_argument("--record", type=Path, help="audio path: record the tab with Playwright into this folder")
     ap.add_argument("--size", help="viewport and recording size, e.g. 1280x720")
     ap.add_argument("--screenshot", type=Path, help="audio path: save a screenshot after the first translation")
+    ap.add_argument("--correct", action="store_true", help="audio path: after the first translation, correct it with Alt+E")
     ap.add_argument("--font-size", type=int, help="overlay font size in px (the Options page setting; default 20)")
     ap.add_argument("--hold", type=float, default=0.0, help="audio path: keep captioning this many seconds after the first translation")
     ap.add_argument("--port", type=int, default=8765)
@@ -905,6 +912,21 @@ def main() -> int:
                 summary["asr_models"] = asr_models(args.port)
                 summary["finals"] = [(r.get("context") or {}).get("text_len") for r in records
                                      if r.get("stage") == "ext_render" and (r.get("context") or {}).get("kind") == "final"][:5]
+                if got and args.correct:
+                    summary["corrections_before"] = tm_corrections(args.port)
+                    # Alt+E on a live-captions-only tab (no caption socket): edit the translation on screen
+                    # and press Enter; the correction must reach the backend's TM (through the worker)
+                    # the clip keeps playing: new captions arrive while the line is being edited
+                    page.keyboard.press("Alt+e")
+                    page.wait_for_timeout(300)
+                    page.keyboard.press("Control+a")
+                    page.keyboard.type("corrected by the harness")
+                    page.keyboard.press("Enter")
+                    end = time.time() + 8
+                    while time.time() < end and tm_corrections(args.port) == 0:
+                        page.wait_for_timeout(250)
+                    summary["corrections_after"] = tm_corrections(args.port)
+                    summary["correction_saved"] = summary["corrections_after"] == 1
             if got:
                 # D3: an audio session leaves no rows in the persistent TM
                 summary["ok"] = args.path != "audio" or summary["tm_rows_after"] == summary["tm_rows_before"]
