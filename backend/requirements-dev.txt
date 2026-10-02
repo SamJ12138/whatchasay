@@ -1,0 +1,8 @@
+# Tests and CI. Install together with the runtime:
+#   pip install -r requirements.txt -r requirements-dev.txt
+pytest>=7,<9
+pytest-asyncio>=0.23
+pytest-timeout>=2.3
+pytest-cov>=4.1
+# Optional, for the slow browser harness (scripts/e2e_extension.py, pytest -m slow):
+#   pip install playwright && playwright install chromium

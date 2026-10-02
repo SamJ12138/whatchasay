@@ -205,48 +205,6 @@ class HealthResponse(BaseModel):
     refiner_enabled: bool = Field(default=False)
 
 
-class PostEditorOutput(BaseModel):
-    """Structured output from the post-editor. Now supports arbitrary languages."""
-
-    # Dynamic translations keyed by language code
-    translations: Dict[str, Dict[str, Any]] = Field(
-        default_factory=dict,
-        description="Translations keyed by language code {lang: {lines, single_line}}"
-    )
-    notes: Optional[Dict[str, bool]] = Field(
-        default=None,
-        description="Quality/safety notes"
-    )
-
-    # Legacy fields for backwards compatibility
-    en: Optional[Dict[str, Any]] = Field(
-        default=None,
-        description="English translation with lines (legacy)"
-    )
-    zh: Optional[Dict[str, Any]] = Field(
-        default=None,
-        description="Chinese translation with lines (legacy)"
-    )
-
-    @classmethod
-    def from_raw(cls, data: dict, target_languages: Optional[List[str]] = None) -> "PostEditorOutput":
-        """Parse from raw dict, handling missing fields."""
-        translations = {}
-
-        # Try to extract translations for each known language
-        all_langs = target_languages or ['en', 'zh', 'vi', 'ja', 'ko', 'es', 'fr', 'de', 'ru']
-        for lang in all_langs:
-            if lang in data and data[lang]:
-                translations[lang] = data[lang]
-
-        return cls(
-            translations=translations,
-            en=data.get("en"),
-            zh=data.get("zh"),
-            notes=data.get("notes", {})
-        )
-
-
 class TranslationMemoryEntry(BaseModel):
     """Entry in the translation memory database."""
     

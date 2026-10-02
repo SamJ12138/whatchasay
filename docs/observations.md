@@ -78,11 +78,11 @@ before one obs bug was fixed (see "Bugs I introduced"). Both runs used a scratch
 
 | # | Where | What happens today | Now logged as | What I would change | Status |
 |---|---|---|---|---|---|
-| S1 | `translation/__init__.py` → `post_editor.py:19` | `ollama` missing → `ModuleNotFoundError` → `run.py` "Server error", exit 1 (known bug, clean install) | `startup` fail `process`, `missing_module=ollama` | Remove the import of dead `post_editor`, or declare `ollama` | open |
+| S1 | `translation/__init__.py` → `post_editor.py:19` | `ollama` missing → `ModuleNotFoundError` → `run.py` "Server error", exit 1 (known bug, clean install) | `startup` fail `process`, `missing_module=ollama` | Remove the import of dead `post_editor`, or declare `ollama` | fixed, Batch 6: dead v1 post_editor (the only `import ollama`) deleted; requirements.txt alone imports app.main |
 | S2 | `config.py:24`, `:35` (`_detect_cuda`) | Any probe error → CPU; HY-MT silently skipped | `startup` skip `cuda_detect`, degraded | Log at WARNING with the reason | open |
-| S3 | `translation/cuda_dlls.py:29`, `:49` | Only used by `spike_hymt.py`; errors swallowed | `startup` skip `cuda_dlls` | Delete with the spike | open |
-| S4 | `scripts/spike_hymt.py:18` | `llama_cpp` not installed → script fails; the app does not need it | `dependency` skip `llama_cpp` at every backend start; the spike's own failure is a script-level traceback, not in the run log | Delete the spike or move it to `llama-server` | open |
-| S5 | `translation/post_editor.py` | 7 `except` clauses in dead v1 code (never called in v2) | **not instrumented** on purpose | Delete the file | open |
+| S3 | `translation/cuda_dlls.py:29`, `:49` | Only used by `spike_hymt.py`; errors swallowed | `startup` skip `cuda_dlls` | Delete with the spike | fixed, Batch 6: cuda_dlls.py deleted with the spike |
+| S4 | `scripts/spike_hymt.py:18` | `llama_cpp` not installed → script fails; the app does not need it | `dependency` skip `llama_cpp` at every backend start; the spike's own failure is a script-level traceback, not in the run log | Delete the spike or move it to `llama-server` | fixed, Batch 6: llama_cpp spike deleted; requirements split (runtime / gpu / dev); clean-install check script for CI |
+| S5 | `translation/post_editor.py` | 7 `except` clauses in dead v1 code (never called in v2) | **not instrumented** on purpose | Delete the file | fixed, Batch 6: post_editor.py deleted (and the unused PostEditorOutput model) |
 | S6 | `cache/translation_memory.py:135-171` | Every TM hit runs UPDATE + COMMIT on the hot path; SQLite errors propagate into T5 | `tm_lookup` duration / fail `process` | Batch use-count updates off the hot path | open |
 
 ### Extension
@@ -183,3 +183,4 @@ with the server up.
 | 3 | fix: origin checks on HTTP, ws and postMessage; localhost bind (W8, E16, E17) | W8, E16, E17 | `/ws` socket moved from the content script to the service worker (a content-script socket carries the page origin); browser harness `--path security` (8 checks) |
 | 4 | fix: per-session config; honest LID status (W7, A1-A3) | W7, A1, A2, A3 | `lang_status` on lid/partial/final: provisional, confirmed, manual, fallback, error; `confirmed:true` only for confirmed/manual |
 | 5 | fix: translator process restart race, warmup retry, stderr capture, fast spawn | P1, P2, P3, P9 | real P9 (fresh process, warm disk): spawn→Popen 1187-1236 ms → 1.1-3.8 ms; Popen→ready unchanged ~1.1 s |
+| 6 | fix: clean install from requirements.txt (S1, S4) | S1, S3, S4, S5 | `scripts/clean_install_check.py`: fresh venv + requirements.txt + requirements-dev.txt → import app.main → fast suite (local, Python 3.10, newest packages: 120 passed) |

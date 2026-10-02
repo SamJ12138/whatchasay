@@ -70,10 +70,13 @@ async def lifespan(app: FastAPI):
     await tm.close()
 
 
+# Not needed by the app any more (S1, S4): the v1 post-editor (ollama) and the
+# llama-cpp-python spike were removed. Still reported, without an error type.
+_UNUSED_DEPS = ("ollama", "llama_cpp")
+
+
 def _log_optional_deps() -> None:
-    """Record which optional modules import in this venv (ollama is required in
-    practice because translation/__init__ imports post_editor; llama_cpp is only
-    used by scripts/spike_hymt.py)."""
+    """Record which optional modules import in this venv."""
     import importlib.util
 
     for mod in ("ollama", "llama_cpp", "ctranslate2", "sherpa_onnx", "torch", "huggingface_hub"):
@@ -83,6 +86,8 @@ def _log_optional_deps() -> None:
             found = False
         if found:
             obs.log("dependency", "success", module=mod)
+        elif mod in _UNUSED_DEPS:
+            obs.log("dependency", "skip", module=mod, error_message=f"module {mod!r} not installed (not used by the app)")
         else:
             obs.log("dependency", "skip", error_type="process", error_message=f"module {mod!r} not installed", module=mod)
 

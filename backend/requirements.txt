@@ -1,4 +1,8 @@
-# Core runtime (CPU-only install works end to end: Zipformer ASR + OPUS-MT CTranslate2)
+# Runtime, CPU default (works end to end without a GPU: Zipformer ASR + OPUS-MT CTranslate2).
+#   pip install -r requirements.txt                       # run the backend
+#   pip install -r requirements-gpu.txt --extra-index-url https://download.pytorch.org/whl/cu128   # NVIDIA extras
+#   pip install -r requirements-dev.txt                   # tests (fast suite) and CI
+# Enough for `python -c "import app.main"` and the fast suite (scripts/clean_install_check.py proves it in CI).
 fastapi>=0.109
 uvicorn[standard]>=0.27
 websockets>=12
@@ -29,10 +33,5 @@ huggingface_hub>=0.23
 # Needed once to convert OPUS-MT checkpoints to CTranslate2 (torch is pulled by requirements-gpu.txt;
 # on a CPU-only machine install: pip install torch --index-url https://download.pytorch.org/whl/cpu)
 transformers>=4.56
-
-# Testing / dev
-pytest>=7,<9
-pytest-asyncio>=0.23
-pytest-timeout>=2.3
 
 # Optional cloud ASR (Gladia / ElevenLabs) uses websockets + httpx above; no extra deps.

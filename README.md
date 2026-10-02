@@ -97,6 +97,7 @@ extension/                MV3 extension: background.js (tabCapture), offscreen.j
 
 ```bash
 cd backend
+venv\Scripts\pip install -r requirements-dev.txt   # pytest, pytest-asyncio, pytest-timeout, pytest-cov
 venv\Scripts\python -m pytest -v             # fast suite: no models, no server, no network
 venv\Scripts\python -m pytest -m slow -v     # real models + Chromium harness (scripts/e2e_extension.py)
 cd ..\extension && node --test               # extension modules

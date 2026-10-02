@@ -217,10 +217,24 @@ def ws_recv(ws, timeout: float = 3.0):
     import json
     import queue
 
-    try:
-        message = ws._send_queue.get(timeout=timeout)
-    except queue.Empty:
-        return None
+    if hasattr(ws, "_send_rx"):  # Starlette >= 0.4x/1.x: anyio memory stream read through the portal
+        import anyio
+
+        async def _receive():
+            with anyio.move_on_after(timeout):
+                return await ws._send_rx.receive()
+            return None
+
+        message = ws.portal.call(_receive)
+        if message is None:
+            return None
+    elif hasattr(getattr(ws, "_send_queue", None), "get"):  # older Starlette: a queue.Queue
+        try:
+            message = ws._send_queue.get(timeout=timeout)
+        except queue.Empty:
+            return None
+    else:  # unknown layout: plain blocking receive (pytest-timeout guards it)
+        return ws.receive_json()
     if isinstance(message, BaseException):
         raise message
     if message.get("type") == "websocket.close":

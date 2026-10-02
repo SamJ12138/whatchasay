@@ -6,7 +6,7 @@ subtitle without changing meaning. Called by pipeline.refine_batch() under a
 deadline; if it is late the fast output simply stays on screen.
 
 Providers:
-    ollama - local model via the existing PostEditor (Qwen3-4B recommended on 8 GB)
+    ollama - local model over Ollama's HTTP API (httpx; no ollama package needed)
     groq   - hosted small models, ~0.2-0.35 s
     gemini - Gemini 2.5 Flash-Lite, ~0.5 s
 

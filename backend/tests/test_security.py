@@ -148,8 +148,9 @@ def test_websocket_handshake_from_foreign_origin_gets_403(live_server, path):
         try:
             async with websockets.connect(f"ws://127.0.0.1:{live_server}{path}", origin=origin, open_timeout=5):
                 return 101
-        except websockets.exceptions.InvalidStatusCode as e:
-            return e.status_code
+        except websockets.exceptions.InvalidHandshake as e:
+            # websockets < 14: InvalidStatusCode.status_code; >= 14: InvalidStatus.response.status_code
+            return getattr(e, "status_code", None) or getattr(getattr(e, "response", None), "status_code", None)
 
     assert asyncio.run(attempt(EVIL)) == 403
     assert asyncio.run(attempt(ext_origin())) == 101

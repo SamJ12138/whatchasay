@@ -197,3 +197,10 @@ Browser: load `extension/` unpacked → YouTube video without captions → popup
   `retry_in_s`. P9: the torch wheel's CUDA lib dir is found with `importlib.util.find_spec` (no `import torch`):
   spawn→Popen 1187-1236 ms → 1.1-3.8 ms in a fresh process (`scripts/measure_spawn.py`; the observations' 2.46 s was a
   cold disk cache); Popen→ready unchanged at ~1.1 s, so the DLL path still works.
+- Batch 6 (S1, S3-S5): deleted the dead v1 `translation/post_editor.py` (the only `import ollama`, imported at startup
+  through `translation/__init__`), the unused `PostEditorOutput` model, the `llama_cpp` spike `scripts/spike_hymt.py` and
+  `translation/cuda_dlls.py`. Requirements split: `requirements.txt` (runtime, CPU default), `requirements-gpu.txt`
+  (CUDA extras, unchanged), `requirements-dev.txt` (pytest, pytest-asyncio, pytest-timeout, pytest-cov).
+  `backend/scripts/clean_install_check.py` = the clean-install proof (fresh venv, both files, `import app.main`, fast
+  suite): passes locally on Python 3.10 with the newest packages (FastAPI 0.142, Starlette 1.7). It caught a test-helper
+  portability bug (Starlette 1.x reads WebSocket test messages from an anyio stream, not a queue).
