@@ -146,11 +146,9 @@ subtitles hold still while you type. The correction is stored in the translation
 source sentence comes up again, letter for letter. Page subtitles (caption mode) repeat exactly, so there a
 correction holds. Live captions mostly do not: the recognizer rarely writes a sentence the same way twice.
 
-*Example, from the live test (`docs/live-test-youtube.md`).* In a Bengali film scene the recognizer hears the sweet
-রাজভোগ (rajbhog) as রাজবুক, "royal book", and the first line, "একটা রাজবুক দেখান্ত", was translated as "A Royal Book
-Shower". Alt+E, type "Show me a rajbhog.", Enter: saved. When the scene was played again the recognizer wrote that
-sentence differently (it did in each of five passes), so the correction was not used and the line was wrong again.
-A glossary that fixes one word wherever it is heard does not exist yet (`docs/observations.md`, T13).
+*Limitation:* corrections are matched on the whole recognised sentence and are rarely reused on live speech; a
+term-level glossary is planned (`docs/observations.md`, T13 and T14; the worked case is in
+`docs/live-test-youtube.md`).
 
 **What is remembered.** Live-caption text and its translations are kept in memory only until the session ends.
 Page subtitles from caption mode and your corrections are kept in `backend/data/translation_memory.db`; machine

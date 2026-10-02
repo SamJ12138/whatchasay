@@ -116,17 +116,21 @@ def test_relative_links_in_the_readme_exist():
     assert links and not missing, missing
 
 
-def test_using_it_has_the_real_correction_example_and_says_what_a_correction_covers():
-    """One example under "Using it", from the live test: the real mistranscription, what was
-    typed, and what happened on the rerun. The README must not promise more than that run
-    showed (the correction was saved and not used again: the sentence did not recur)."""
+def test_using_it_states_the_correction_limitation_in_one_line_and_the_case_stays_in_the_live_test():
+    """"Using it" carries no worked correction example: one limitation line says what a
+    correction is matched on and that a term-level glossary is planned. The full case (the
+    real mistranscription, what was typed, what the rerun showed) lives in
+    docs/live-test-youtube.md."""
     using = " ".join(README[README.index("## Using it"):README.index("## Optional extras")].split())
     corrections = using[using.index("**Corrections.**"):using.index("**What is remembered.**")]
-    assert "docs/live-test-youtube.md" in corrections
-    for real in ("রাজভোগ", "রাজবুক", "A Royal Book Shower", "Show me a rajbhog."):
-        assert real in corrections, real
-    assert "letter for letter" in corrections      # when a correction is used again
-    assert "was not used" in corrections           # what the rerun showed
-    assert "T13" in corrections                    # no glossary yet, and where the fix is described
+    for gone in ("রাজভোগ", "রাজবুক", "A Royal Book Shower", "Show me a rajbhog.", "*Example"):
+        assert gone not in corrections, gone
+    limitation = [s for s in re.split(r"(?<=[.)])\s+(?=[*A-Z])", corrections) if "glossary" in s]
+    assert len(limitation) == 1, limitation
+    for part in ("whole recognised sentence", "rarely reused on live speech", "term-level glossary is planned", "T13", "T14"):
+        assert part in limitation[0], (part, limitation[0])
     assert "in live captions and in caption mode alike" not in README
+    doc = (REPO / "docs" / "live-test-youtube.md").read_text(encoding="utf-8")
+    for real in ("রাজভোগ", "রাজবুক", "A Royal Book Shower", "Show me a rajbhog.", "was not fixed"):
+        assert real in doc, real
 

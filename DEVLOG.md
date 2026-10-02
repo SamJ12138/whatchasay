@@ -549,3 +549,9 @@ D4 cloud providers off by default, keys only in backend config.
   reused when the source sentence returns letter for letter, which page subtitles do and live captions mostly do
   not. Two limitations added (no glossary; Bengali run-on lines, A9). `tests/test_docs_media.py` pins the example.
   Tallies: fast 278, slow 27 (12 browser), node 71.
+
+
+### 2026-10-02 — Subtitles that keep up with the scene (latency batches)
+- Batch -1 (README): the worked correction example under "Using it" is replaced by one limitation line (corrections
+  are matched on the whole recognised sentence and rarely reused on live speech; a term-level glossary is planned,
+  observations T13 / T14). The full case stays in `docs/live-test-youtube.md`; `tests/test_docs_media.py` pins both.
