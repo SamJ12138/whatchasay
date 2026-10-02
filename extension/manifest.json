@@ -40,6 +40,7 @@
       "matches": ["<all_urls>"],
       "js": [
         "obs.js",
+        "content-scripts/ws-protocol.js",
         "content-scripts/websocket-client.js",
         "content-scripts/subtitle-detector.js",
         "content-scripts/overlay.js",

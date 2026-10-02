@@ -22,6 +22,7 @@ def test_prompt_uses_english_template_otherwise():
     assert p.startswith("Translate the following segment into Bengali")
 
 
+@pytest.mark.slow
 @pytest.mark.skipif(
     settings.translation.device != "cuda" or not LLAMA_SERVER.exists() or not Path(settings.mt.hymt_gguf).exists(),
     reason="needs CUDA, llama-server binary and the HY-MT GGUF",

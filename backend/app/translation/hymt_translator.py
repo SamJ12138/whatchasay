@@ -146,6 +146,7 @@ class HyMTEngine:
         self.stats = {"calls": 0, "total_ms": 0.0}
         self._spawns = 0
         self._stopping: set = set()  # pids the backend itself is stopping
+        self.available = LLAMA_AVAILABLE
         atexit.register(self.shutdown)
 
     # -- process management ------------------------------------------------
@@ -196,18 +197,22 @@ class HyMTEngine:
         _plog("fail", error_type="process", error_message=f"llama-server exited on its own with code {code}",
               action="exit", exit_code=code, pid=proc.pid, lived_s=round(time.time() - t_spawn, 1))
 
-    def _start_child(self) -> None:
+    def _command(self, port: int) -> List[str]:
+        """llama-server command line (tests replace this with tests/fake_llama_server.py)."""
         server = ensure_llama_server()
         model = self._ensure_model()
-        self._port = _free_port()
-        env = dict(os.environ)
-        env["PATH"] = os.pathsep.join(_cuda_dll_dirs() + [env.get("PATH", "")])
-        cmd = [
+        return [
             str(server.resolve()), "-m", str(model.resolve()),
-            "--host", "127.0.0.1", "--port", str(self._port),
+            "--host", "127.0.0.1", "--port", str(port),
             "-ngl", str(self.n_gpu_layers), "-c", str(self.n_ctx * self.parallel), "-np", str(self.parallel),
             "--no-webui", "--log-disable",
         ]
+
+    def _start_child(self) -> None:
+        self._port = _free_port()
+        cmd = self._command(self._port)
+        env = dict(os.environ)
+        env["PATH"] = os.pathsep.join(_cuda_dll_dirs() + [env.get("PATH", "")])
         creation = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
         t0 = time.time()
         self._proc = subprocess.Popen(cmd, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=creation)
@@ -233,7 +238,7 @@ class HyMTEngine:
             raise RuntimeError("llama-server did not become healthy in time")
         logger.info("HY-MT1.5-1.8B ready via llama-server on port %d (%.1fs)", self._port, time.time() - t0)
         _plog("success", duration_ms=(time.time() - t0) * 1000, action="ready", port=self._port, pid=self._proc.pid,
-              health_polls=polls, last_poll_error=last_poll_error, model=model.name, slots=self.parallel)
+              health_polls=polls, last_poll_error=last_poll_error, model=self.gguf_path.name, slots=self.parallel)
 
     def shutdown(self) -> None:
         proc, self._proc = self._proc, None
@@ -271,7 +276,7 @@ class HyMTEngine:
     # -- MTEngine ------------------------------------------------------------
 
     def supports(self, source_lang: str, target_lang: str) -> bool:
-        if not LLAMA_AVAILABLE or self._load_error:
+        if not self.available or self._load_error:
             return False
         return source_lang in self.languages and target_lang in self.languages
 
@@ -312,7 +317,7 @@ class HyMTEngine:
     def status(self) -> dict:
         return {
             "engine": self.name,
-            "available": LLAMA_AVAILABLE and not self._load_error,
+            "available": self.available and not self._load_error,
             "loaded": self._proc is not None and self._proc.poll() is None,
             "model": self.gguf_path.name,
             "port": self._port,

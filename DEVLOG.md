@@ -88,7 +88,9 @@ the final. Typical 5–12-word subtitle sentences land inside the 1 s target; ve
 
 ```
 backend\venv\Scripts\python run.py                      # http://127.0.0.1:8765/health/json → device cuda, mt_engines hymt+opus
-backend\venv\Scripts\python -m pytest backend\tests -v  # 53 tests; integration tests run when the server is up
+cd backend && venv\Scripts\python -m pytest -v          # fast suite (no models, no server, no network)
+cd backend && venv\Scripts\python -m pytest -m slow     # real Zipformer / HY-MT / extension audio harness
+cd extension && node --test                             # extension pure modules
 backend\venv\Scripts\python backend\scripts\e2e_ws_asr.py <wav> auto en,zh
 ```
 Browser: load `extension/` unpacked → YouTube video without captions → popup → Start Live Captions.
@@ -141,3 +143,13 @@ Browser: load `extension/` unpacked → YouTube video without captions → popup
   `--use-fake-ui-for-media-stream` breaks the offscreen `getUserMedia({chromeMediaSource:'tab'})` ("Requested device
   not found"); leave it out.
 
+- Batch 1: `docs/test-inventory.md` (what each of the original 54 tests asserts). `pytest.ini`: fast suite by default,
+  `-m slow` for the two model tests + the audio harness. The five live-server tests are now in-process
+  (`tests/test_app_inprocess.py`, FastAPI `TestClient` + fake engines). Fixtures: `tests/fakes.py` (fake MT engine with
+  ok/fail/timeout/source/empty modes, fake ASR engine), `tests/fake_llama_server.py` (llama-server HTTP stub that can be
+  told to exit), `app_env` (real app on fakes + scratch TM); the whole test session's data paths point at a scratch dir.
+  `HyMTEngine._command()` seam for the stub. Extension: `content-scripts/ws-protocol.js` (pure `/ws` frame parser, used
+  by the content-script client) and `node --test` suites for it and `obs.js`.
+  The browser harness is now `backend/scripts/e2e_extension.py` with `--path audio|captions` (the caption path: a
+  `<video>` with a WebVTT track → detector → `/ws` → overlay, 0.5 s to the first translated cue); slow tests
+  `tests/test_e2e_extension.py` (both paths, 45 s with model loads).

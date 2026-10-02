@@ -370,34 +370,31 @@ class SubtitleWebSocket {
    */
   _handleMessage(data) {
     this.stats.messagesReceived++;
+    const parsed = globalThis.STWsProtocol.parseServerMessage(data, (cid) => this.pendingRequests.has(cid));
 
-    try {
-      const message = JSON.parse(data);
-      const correlationId = message.correlation_id;
-
-      // Find pending request
-      if (correlationId && this.pendingRequests.has(correlationId)) {
-        const pending = this.pendingRequests.get(correlationId);
-        this.pendingRequests.delete(correlationId);
-
-        // Update latency stats
-        const latency = Date.now() - pending.sentAt;
-        this.stats.avgLatencyMs = (this.stats.avgLatencyMs * 0.9) + (latency * 0.1);
-
-        if (message.type === 'error') {
-          pending.reject(new Error(message.payload?.error || 'Unknown error'));
-        } else {
-          pending.resolve(message.payload);
-        }
-      } else if (this.onPushCallback) {
-        this.onPushCallback(message);
+    if (parsed.kind === 'invalid') {
+      console.error('[WS] Message parse error:', parsed.error);
+      if (globalThis.STObs) globalThis.STObs.log('ext_ws_receive', 'fail', { error_type: 'parse', error_message: parsed.error, path: '/ws' });
+      return;
+    }
+    if (parsed.kind === 'reply' || parsed.kind === 'error') {
+      const pending = this.pendingRequests.get(parsed.correlationId);
+      this.pendingRequests.delete(parsed.correlationId);
+      const latency = Date.now() - pending.sentAt;
+      this.stats.avgLatencyMs = (this.stats.avgLatencyMs * 0.9) + (latency * 0.1);
+      if (parsed.kind === 'error') {
+        const err = new Error(parsed.error);
+        err.errorType = parsed.errorType;
+        pending.reject(err);
       } else {
-        console.log('[WS] Unsolicited message:', message.type);
+        pending.resolve(parsed.payload);
       }
-
-    } catch (error) {
-      console.error('[WS] Message parse error:', error);
-      if (window.STObs) window.STObs.log('ext_ws_receive', 'fail', { error_type: 'parse', error_message: error.message || String(error), path: '/ws' });
+      return;
+    }
+    if (this.onPushCallback) {
+      this.onPushCallback(parsed.message);
+    } else {
+      console.log('[WS] Unsolicited message:', parsed.message.type);
     }
   }
 

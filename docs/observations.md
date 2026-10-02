@@ -166,9 +166,9 @@ with the server up.
   `taskkill /T /F`, which skips `atexit`.
 - The audio path's extension stages (`ext_capture`, `ext_ws_send`, `ext_relay`, live `ext_render`) are instrumented but
   were not run in a browser.
-  **Status (Phase 2, Batch 0):** run end to end without a human click by `backend/scripts/e2e_extension_audio.py`
+  **Status (Phase 2, Batch 0):** run end to end without a human click by `backend/scripts/e2e_extension.py` (`--path audio`)
   (Playwright Chromium, `--allowlisted-extension-id` instead of the action-click grant, real tab audio from a `<video>`
-  playing a sample WAV); slow test `tests/test_e2e_extension_audio.py`.
+  playing a sample WAV); slow test `tests/test_e2e_extension.py`.
 - Subtitle text is never logged (lengths and ids only); API keys are redacted from error messages (`key=`, `Bearer`,
   `AIza…`, `gsk_…`, `sk-…`) because httpx puts the request URL, which carries the Google and Gemini keys, into its
   errors.
@@ -178,3 +178,4 @@ with the server up.
 | Batch | Commit | Rows addressed | Notes |
 |---|---|---|---|
 | 0 | chore: phase-1 diff audit, audio-path harness | §6 audio path not run | `docs/phase1-diff-audit.md`: one phase-1 behaviour change (lifespan aborted startup when the pipeline failed to build) reverted with a test |
+| 1 | test: inventory, fakes, in-process app client, node tests for extension | none (scaffolding) | fast suite no longer needs the server or models; `docs/test-inventory.md` |

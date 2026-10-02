@@ -126,6 +126,7 @@ def test_manual_override_restarts_recognizer():
     assert s.lang == "zh" and len(eng.sessions) == 2
 
 
+@pytest.mark.slow
 @pytest.mark.skipif(not has_zipformer("en"), reason="English Zipformer model not downloaded")
 def test_real_zipformer_streams_partials_before_end():
     import soundfile as sf

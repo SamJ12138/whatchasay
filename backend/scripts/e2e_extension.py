@@ -1,28 +1,37 @@
-"""Audio-path harness: drives the real extension's live-caption path end to end
-without a human click.
+"""Browser harness: drives the real unpacked extension in Playwright Chromium,
+end to end, with no human click. Two paths:
 
-    tab plays a WAV  ->  tabCapture (offscreen doc, AudioWorklet)  ->  /ws/asr
-    ->  ASR + MT in the backend  ->  offscreen -> service worker -> content script
+  --path audio     (default) live captions:
+                   tab plays a WAV -> tabCapture (offscreen doc, AudioWorklet) -> /ws/asr
+                   -> ASR + MT in the backend -> offscreen -> service worker -> content script
+  --path captions  existing subtitles:
+                   <video> with a WebVTT <track> -> subtitle detector -> /ws (cue) -> MT
+                   -> content script overlay
 
-How the user gesture is avoided: Chromium's `--allowlisted-extension-id=<id>`
+How the user gesture is avoided (audio): Chromium's `--allowlisted-extension-id=<id>`
 switch lets that extension call chrome.tabCapture.getMediaStreamId without the
 action-click grant (tab_capture_api.cc). The id of an unpacked extension depends
 on its path, so the browser is launched once to read it and then relaunched
 with the switch. Do not add --use-fake-ui-for-media-stream: with it the
 offscreen getUserMedia({chromeMediaSource:'tab'}) fails with "Requested device
 not found". The audio is real tab audio (a <video> element playing the WAV,
-autoplay allowed by --autoplay-policy), not a fake capture device. ASR_START is sent from an extension page exactly like the
-popup does. Success = the content script of the captured tab logs an
-`ext_render` record for a translation (extension/obs.js writes every record to
-console.debug with the [ST-OBS] prefix).
+autoplay allowed by --autoplay-policy), not a fake capture device. ASR_START is
+sent from an extension page exactly like the popup does.
+
+Success = the content script of the test tab logs an `ext_render` record for a
+translation (extension/obs.js writes every record to console.debug with the
+[ST-OBS] prefix). For the caption path, `--enable` first enables translation on
+the tab the way the popup does (needed once the extension stops connecting on
+every page).
 
 Needs: a Python with `playwright` (pip install playwright; the Chromium build
 in %LOCALAPPDATA%/ms-playwright is used), and either a backend already running
 on --port or --start-backend (uses backend/venv and a scratch translation
 memory, never backend/data/translation_memory.db).
 
-    python backend/scripts/e2e_extension_audio.py --start-backend
-    python backend/scripts/e2e_extension_audio.py --wav path/to.wav --targets zh,bn
+    python backend/scripts/e2e_extension.py --start-backend
+    python backend/scripts/e2e_extension.py --start-backend --path captions
+    python backend/scripts/e2e_extension.py --wav path/to.wav --targets zh,bn
 
 Exit code 0 when a translated cue reached the content script, 1 otherwise.
 Prints one JSON summary line at the end.
@@ -49,10 +58,35 @@ REPO = BACKEND.parent
 EXTENSION = REPO / "extension"
 DEFAULT_WAV = BACKEND / "data/models/asr/sherpa-onnx-streaming-zipformer-en-2023-06-26/test_wavs/0.wav"
 
-PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8"><title>audio harness</title></head>
+AUDIO_PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8"><title>audio harness</title></head>
 <body><h1>audio harness</h1><video id="v" src="/clip.wav" autoplay loop controls></video>
 <script>const v=document.getElementById('v');v.play().catch(e=>console.log('play failed',e));</script>
 </body></html>"""
+
+CAPTION_PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8"><title>caption harness</title></head>
+<body><h1>caption harness</h1>
+<video id="v" src="/clip.wav" autoplay muted loop controls width="640" height="360">
+  <track kind="subtitles" srclang="en" label="English" src="/subs.vtt" default>
+</video>
+<script>const v=document.getElementById('v');v.play().catch(e=>console.log('play failed',e));</script>
+</body></html>"""
+
+SUBS_VTT = """WEBVTT
+
+00:00:00.200 --> 00:00:02.500
+Where did you put the keys?
+
+00:00:02.600 --> 00:00:05.000
+I will be back in five minutes.
+
+00:00:05.100 --> 00:00:09.000
+Please do not touch anything.
+"""
+
+
+class _QuietHandler(http.server.SimpleHTTPRequestHandler):
+    def log_message(self, *args):
+        pass
 
 
 def wait_http(url: str, timeout: float) -> bool:
@@ -65,11 +99,6 @@ def wait_http(url: str, timeout: float) -> bool:
         except Exception:
             time.sleep(0.5)
     return False
-
-
-class _QuietHandler(http.server.SimpleHTTPRequestHandler):
-    def log_message(self, *args):
-        pass
 
 
 def serve_dir(directory: Path) -> tuple[socketserver.TCPServer, int]:
@@ -91,6 +120,7 @@ def start_backend(port: int, scratch: Path) -> subprocess.Popen:
     py = BACKEND / ("venv/Scripts/python.exe" if os.name == "nt" else "venv/bin/python")
     env = dict(os.environ)
     env["SUBTITLE_CACHE__TM_DATABASE_PATH"] = str(scratch / "tm.db")
+    env["SUBTITLE_DATA_DIR"] = str(scratch / "data")
     env["SUBTITLE_SERVER__PORT"] = str(port)
     log = open(scratch / "backend.log", "w", encoding="utf-8")
     return subprocess.Popen([str(py), "run.py", "--port", str(port)], cwd=str(BACKEND), env=env,
@@ -110,13 +140,17 @@ def launch(pw, user_dir: Path, ext_id: str | None, headless: bool):
     return pw.chromium.launch_persistent_context(str(user_dir), headless=False, args=args)
 
 
-def extension_id(ctx) -> str:
-    sw = ctx.service_workers[0] if ctx.service_workers else ctx.wait_for_event("serviceworker", timeout=15000)
-    return sw.url.split("/")[2]
+def service_worker(ctx):
+    return ctx.service_workers[0] if ctx.service_workers else ctx.wait_for_event("serviceworker", timeout=15000)
+
+
+def send_from_extension_page(ctl, message: dict):
+    return ctl.evaluate("(m) => new Promise(r => chrome.runtime.sendMessage(m, r))", message)
 
 
 def main() -> int:
     ap = argparse.ArgumentParser()
+    ap.add_argument("--path", choices=("audio", "captions"), default="audio")
     ap.add_argument("--wav", type=Path, default=DEFAULT_WAV)
     ap.add_argument("--port", type=int, default=8765)
     ap.add_argument("--start-backend", action="store_true")
@@ -124,13 +158,14 @@ def main() -> int:
     ap.add_argument("--targets", default="en,zh")
     ap.add_argument("--timeout", type=float, default=45.0)
     ap.add_argument("--headful", action="store_true")
+    ap.add_argument("--enable", action="store_true", help="captions: enable translation on the tab like the popup does")
     args = ap.parse_args()
 
     from playwright.sync_api import sync_playwright
 
-    scratch = Path(tempfile.mkdtemp(prefix="st-audio-harness-"))
+    scratch = Path(tempfile.mkdtemp(prefix="st-ext-harness-"))
     backend = None
-    summary = {"ok": False, "wav": args.wav.name, "targets": args.targets}
+    summary = {"ok": False, "path": args.path, "wav": args.wav.name, "targets": args.targets}
     try:
         if args.start_backend:
             backend = start_backend(args.port, scratch)
@@ -142,20 +177,21 @@ def main() -> int:
         site = scratch / "site"
         site.mkdir()
         shutil.copy(args.wav, site / "clip.wav")
-        (site / "index.html").write_text(PAGE, encoding="utf-8")
+        (site / "index.html").write_text(AUDIO_PAGE if args.path == "audio" else CAPTION_PAGE, encoding="utf-8")
+        (site / "subs.vtt").write_text(SUBS_VTT, encoding="utf-8")
         srv, http_port = serve_dir(site)
         page_url = f"http://127.0.0.1:{http_port}/index.html"
 
         with sync_playwright() as pw:
             # 1st launch: learn the unpacked extension's id
             ctx = launch(pw, scratch / "profile", None, not args.headful)
-            ext_id = extension_id(ctx)
+            ext_id = service_worker(ctx).url.split("/")[2]
             ctx.close()
             summary["extension_id"] = ext_id
 
             # 2nd launch: allowlist it for tabCapture without a gesture
             ctx = launch(pw, scratch / "profile", ext_id, not args.headful)
-            sw = ctx.service_workers[0] if ctx.service_workers else ctx.wait_for_event("serviceworker")
+            sw = service_worker(ctx)
             targets = [t for t in args.targets.split(",") if t]
             sw.evaluate("""async ({url, targets}) => {
                 const cur = (await chrome.storage.local.get('settings')).settings || {};
@@ -175,43 +211,48 @@ def main() -> int:
 
             page.on("console", on_console)
             page.goto(page_url)
-            page.wait_for_function("document.getElementById('v').currentTime > 0.2", timeout=15000)
+            page.wait_for_function("document.getElementById('v').currentTime > 0.1", timeout=15000)
 
             tab_id = sw.evaluate("async (u) => (await chrome.tabs.query({url: u}))[0].id", page_url)
             ctl = ctx.new_page()
             ctl.goto(f"chrome-extension://{ext_id}/popup/popup.html")
-            res = ctl.evaluate("""([tabId, src]) => new Promise(r =>
-                chrome.runtime.sendMessage({type: 'ASR_START', tabId, sourceLang: src}, r))""", [tab_id, args.source])
-            summary["asr_start"] = res
-            if not (res and res.get("ok")):
-                summary["error"] = f"ASR_START failed: {res}"
-                return 1
+            if args.path == "audio":
+                res = send_from_extension_page(ctl, {"type": "ASR_START", "tabId": tab_id, "sourceLang": args.source})
+                summary["asr_start"] = res
+                if not (res and res.get("ok")):
+                    summary["error"] = f"ASR_START failed: {res}"
+                    return 1
+            elif args.enable:
+                res = ctl.evaluate("(tabId) => new Promise(r => chrome.tabs.sendMessage(tabId, {type: 'TOGGLE_TAB', enabled: true}, {frameId: 0}, r))", tab_id)
+                summary["enable"] = res
             page.bring_to_front()
 
+            kinds = ("translation", "revision") if args.path == "audio" else ("backend",)
             t0 = time.time()
             got = None
-            while time.time() - t0 < args.timeout:
+            while time.time() - t0 < args.timeout and not got:
                 for r in records:
                     c = r.get("context") or {}
-                    if r.get("stage") == "ext_render" and c.get("kind") in ("translation", "revision") and c.get("targets"):
+                    if r.get("stage") == "ext_render" and (c.get("kind") in kinds or c.get("from") in kinds) and c.get("targets"):
                         got = r
                         break
-                if got:
-                    break
-                page.wait_for_timeout(250)
+                if not got:
+                    page.wait_for_timeout(250)
             summary["seconds"] = round(time.time() - t0, 1)
             summary["renders"] = [
-                {"kind": (r.get("context") or {}).get("kind"), "targets": (r.get("context") or {}).get("targets"),
-                 "statuses": (r.get("context") or {}).get("statuses")}
+                {k: (r.get("context") or {}).get(k) for k in ("kind", "from", "targets", "statuses")}
                 for r in records if r.get("stage") == "ext_render"
             ][:12]
+            summary["ws"] = [{"event": r.get("event"), **{k: (r.get("context") or {}).get(k) for k in ("path", "action", "close_code")}}
+                             for r in records if r.get("stage") == "ext_ws"][:6]
             summary["errors"] = [r.get("error_message") for r in records if r.get("event") == "fail"][:5]
             if got:
                 summary["ok"] = True
-                summary["first_translation"] = {"utterance_id": got["context"].get("utterance_id"),
-                                                "targets": got["context"].get("targets"),
-                                                "server_to_glass_ms": got["context"].get("server_to_glass_ms")}
-            ctl.evaluate("() => new Promise(r => chrome.runtime.sendMessage({type: 'ASR_STOP'}, r))")
+                c = got["context"]
+                summary["first_translation"] = {"utterance_id": c.get("utterance_id"), "cue_id": c.get("cue_id"),
+                                                "targets": c.get("targets"), "server_to_glass_ms": c.get("server_to_glass_ms")}
+            if args.path == "audio":
+                send_from_extension_page(ctl, {"type": "ASR_STOP"})
             ctx.close()
             srv.shutdown()
         return 0 if summary["ok"] else 1
