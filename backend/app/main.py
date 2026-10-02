@@ -56,8 +56,12 @@ async def lifespan(app: FastAPI):
         logger.error("ASR warmup failed: %s", e)
         obs.log_exc("startup", e, component="asr_warmup", degraded="server starts without ASR warmup")
     logger.info("Warmup complete")
+    # Read the pipeline without building it: a log line must not retry (or fail) its init.
+    from .translation import pipeline as _pipeline_mod
+
+    built = _pipeline_mod._pipeline
     obs.log("startup", "success", duration_ms=(time.perf_counter() - t0) * 1000, component="backend",
-            mt_engines=list((await get_pipeline()).base_translator.engines.keys()))
+            mt_engines=list(built.base_translator.engines.keys()) if built is not None else None)
     yield
     logger.info("Shutting down...")
     obs.log("shutdown", "start", component="backend", uptime_s=round(time.time() - _start_time, 1))

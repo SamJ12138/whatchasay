@@ -1,6 +1,7 @@
 # Observations (observability pass, 2026-10-01)
 
-Scope: Phase 1 adds logging only. Nothing below is fixed. Every row says what the code does today, how it now shows up
+Scope: Phase 1 added logging only. The Status column tracks Phase 2 (`open` = not addressed yet; otherwise the
+batch/commit that addressed the row). Every row says what the code does today, how it now shows up
 in the run log (`backend/logs/run_<run_id>.jsonl`; stage names in `docs/pipeline-stages.md`), and what I would change in
 Phase 2 (test first). File:line refers to the code after the observability commit.
 
@@ -18,93 +19,93 @@ before one obs bug was fixed (see "Bugs I introduced"). Both runs used a scratch
 
 ### Translation (backend)
 
-| # | Where | What happens today | Now logged as | What I would change |
-|---|---|---|---|---|
-| T1 | `translation/base_translator.py:262-268` | No engine supports the pair → **input text returned as the translation**, no error | `mt_call` skip `input_invalid`, degraded | Return an explicit "untranslated" result; never cache or store it; tell the UI |
-| T2 | `base_translator.py:300-304` | Engine raised and no other engine supports the pair → input returned | `mt_call` fail (the engine) + `mt_call` skip, degraded | Same as T1 |
-| T3 | `base_translator.py:291-311` | Engine raised → silent retry on the next engine (HY-MT → OPUS). Caller never learns which engine answered; OPUS output is stored at the same quality 0.8 | `mt_call` fail + `mt_call` success with `fallback_for` | Put the engine name in the result; store fallback output with lower quality or not at all |
-| T4 | `translation/pipeline.py:203-207` | Exception from the router → `outs = texts`: **source text used as the translation**, then cached and written to the TM | `translate` fail, degraded | Mark the item failed; skip cache and TM |
-| T5 | `pipeline.py:113-117` | Whole-batch exception → error result whose translations are the source text, `notes.error` set; `/translate` still answers 200 | `translate` fail, degraded | Propagate as an error result the UI can show; don't fill translations with the source |
-| T6 | `pipeline.py` step 4 (`tm_store` via `asyncio.create_task`) | Any of T1–T5 output is **persisted to the TM at quality 0.8**; TM is checked before MT, so the bad row is served forever (PROJECT_REPORT §10 #2) | `tm_store` success with `equals_source=true`, degraded | Refuse to store translation == source for src≠tgt, store only engine-confirmed output; add a TM cleanup |
-| T7 | `pipeline.py` `tm_store` tasks | Fire-and-forget tasks: an SQLite error only shows as asyncio's "Task exception was never retrieved" | `tm_store` fail `process` (via `obs.traced`) | Await or attach a done-callback that logs; keep a bounded write queue |
-| T8 | `main.py` `TranslateResponse` (:463-467, :475) | `/translate` drops `notes`, so HTTP callers cannot see `notes.error` on a degraded result (the `sw→en` probe got its Swahili input back with 200) | the `translate`/`mt_call` lines | Return `notes` / an `untranslated` flag |
-| T9 | `pipeline.py:290`, `:295`; `main.py:275`; `websocket_handler.py:168` | Refiner timeout (INFO), failure (WARNING), and in `/ws/asr` any refine failure at **DEBUG** only | `refine` fail `timeout` / classified, degraded | One log level for all three; count refiner misses in `/metrics` |
-| T10 | `translation/refiner.py:48-69` (`_parse`) | Unparseable LLM output → "no change", nothing logged | `refine` fail `parse`, degraded | Keep, but log and count |
-| T11 | `translation/language_detection.py:123`, `:176` | `LangDetectException` → default language (DEBUG) | `lang_detect` fail `input_invalid`, degraded | Restrict detection to supported / likely languages; low confidence → ask the engine or keep the cue's declared language |
-| T12 | `language_detection.py` (no exception) | **Misdetection**: "It is raining again." → `tl` (Tagalog, 0.71). No engine supports tl→en / tl→bn → T1 → the English text is shown as the Bengali line and stored as `tl→en` and `tl→bn` rows | `lang_detect` success `lang=tl` + T1 + T6 lines | Same as T11; treat a detected language outside the configured source set as "unknown" and retry with script rules |
+| # | Where | What happens today | Now logged as | What I would change | Status |
+|---|---|---|---|---|---|
+| T1 | `translation/base_translator.py:262-268` | No engine supports the pair → **input text returned as the translation**, no error | `mt_call` skip `input_invalid`, degraded | Return an explicit "untranslated" result; never cache or store it; tell the UI | open |
+| T2 | `base_translator.py:300-304` | Engine raised and no other engine supports the pair → input returned | `mt_call` fail (the engine) + `mt_call` skip, degraded | Same as T1 | open |
+| T3 | `base_translator.py:291-311` | Engine raised → silent retry on the next engine (HY-MT → OPUS). Caller never learns which engine answered; OPUS output is stored at the same quality 0.8 | `mt_call` fail + `mt_call` success with `fallback_for` | Put the engine name in the result; store fallback output with lower quality or not at all | open |
+| T4 | `translation/pipeline.py:203-207` | Exception from the router → `outs = texts`: **source text used as the translation**, then cached and written to the TM | `translate` fail, degraded | Mark the item failed; skip cache and TM | open |
+| T5 | `pipeline.py:113-117` | Whole-batch exception → error result whose translations are the source text, `notes.error` set; `/translate` still answers 200 | `translate` fail, degraded | Propagate as an error result the UI can show; don't fill translations with the source | open |
+| T6 | `pipeline.py` step 4 (`tm_store` via `asyncio.create_task`) | Any of T1–T5 output is **persisted to the TM at quality 0.8**; TM is checked before MT, so the bad row is served forever (PROJECT_REPORT §10 #2) | `tm_store` success with `equals_source=true`, degraded | Refuse to store translation == source for src≠tgt, store only engine-confirmed output; add a TM cleanup | open |
+| T7 | `pipeline.py` `tm_store` tasks | Fire-and-forget tasks: an SQLite error only shows as asyncio's "Task exception was never retrieved" | `tm_store` fail `process` (via `obs.traced`) | Await or attach a done-callback that logs; keep a bounded write queue | open |
+| T8 | `main.py` `TranslateResponse` (:463-467, :475) | `/translate` drops `notes`, so HTTP callers cannot see `notes.error` on a degraded result (the `sw→en` probe got its Swahili input back with 200) | the `translate`/`mt_call` lines | Return `notes` / an `untranslated` flag | open |
+| T9 | `pipeline.py:290`, `:295`; `main.py:275`; `websocket_handler.py:168` | Refiner timeout (INFO), failure (WARNING), and in `/ws/asr` any refine failure at **DEBUG** only | `refine` fail `timeout` / classified, degraded | One log level for all three; count refiner misses in `/metrics` | open |
+| T10 | `translation/refiner.py:48-69` (`_parse`) | Unparseable LLM output → "no change", nothing logged | `refine` fail `parse`, degraded | Keep, but log and count | open |
+| T11 | `translation/language_detection.py:123`, `:176` | `LangDetectException` → default language (DEBUG) | `lang_detect` fail `input_invalid`, degraded | Restrict detection to supported / likely languages; low confidence → ask the engine or keep the cue's declared language | open |
+| T12 | `language_detection.py` (no exception) | **Misdetection**: "It is raining again." → `tl` (Tagalog, 0.71). No engine supports tl→en / tl→bn → T1 → the English text is shown as the Bengali line and stored as `tl→en` and `tl→bn` rows | `lang_detect` success `lang=tl` + T1 + T6 lines | Same as T11; treat a detected language outside the configured source set as "unknown" and retry with script rules | open |
 
 ### Translator subprocess (llama-server)
 
-| # | Where | What happens today | Now logged as | What I would change |
-|---|---|---|---|---|
-| P1 | `translation/hymt_translator.py:209`, `:213` | `--log-disable` and stdout/stderr → DEVNULL: a crash leaves only an exit code | `translator_process` fail `early_exit` / `exit` with `exit_code` | Write the child's stderr to `logs/llama-server_<run_id>.log` |
-| P2 | `hymt_translator.py:261` + `_start` | **Crash race (new):** a request that arrives after the child died but before Windows reaps it sees `poll() is None`, skips the restart, gets connection refused after ~2 s, falls back to OPUS (T3), and that output is stored in the TM. The restart happens one request later. Reproduced in both runs: 2.36 s / 2.39 s for the first request (OPUS), 1.43 s / 1.74 s for the second (restart). With 1 s between kill and request the first request restarts the child (1.25 s / 1.26 s) | `mt_call` fail `process` `WinError 10061` → `mt_call` success `fallback_for=hymt` → `translator_process` start `restart` | On a connection error, check `poll()` again (or wait briefly) and restart before falling back; add a health ping before reusing a child that has been idle |
-| P3 | `hymt_translator.py:264-269` | Any warmup failure sets `_load_error`; `supports()` is False **for the life of the process**, so all traffic goes to OPUS or T1 | `translator_process` fail `warmup`, degraded | Retry with backoff; expose the state in `/health/json` (it is in `mt_engines.hymt.error`) and in the UI |
-| P4 | `hymt_translator.py:88-90` (`_cuda_dll_dirs`) | `import torch` failure → CUDA DLL dir silently not added → the child may fail with only an exit code | `translator_process` skip `cuda_dlls` | Log the PATH used; fail early with a clear message |
-| P5 | `hymt_translator.py:293-299` | Multi-line model output silently cut to the first line | `mt_call` skip `parse`, degraded | Keep, but count; consider joining lines for long inputs |
-| P6 | `base_translator.py` `_run` (empty check) | Empty completion passed on as the translation (blank subtitle, stored) | `mt_call` fail `parse` | Treat empty as failure (T1 path without storing) |
-| P7 | `hymt_translator.py:246-253` (`shutdown`) | terminate/kill exceptions swallowed | `translator_process` fail `stop` | Keep, logged |
-| P8 | `hymt_translator.py:176` (health poll) | Poll errors swallowed while the model loads | `last_poll_error` in the `ready` line | Fine as is |
-| P9 | `hymt_translator.py` first spawn | **New:** the first spawn spends **2.46 s before `Popen`** (mostly `import torch` inside `_cuda_dll_dirs`); restarts spend ~0 ms. The INFO line "ready … (1.1–1.9 s)" measures only Popen→healthy | `translator_process` start → success `ready` timestamps | Resolve the torch lib dir without importing torch (`importlib.util.find_spec`) |
+| # | Where | What happens today | Now logged as | What I would change | Status |
+|---|---|---|---|---|---|
+| P1 | `translation/hymt_translator.py:209`, `:213` | `--log-disable` and stdout/stderr → DEVNULL: a crash leaves only an exit code | `translator_process` fail `early_exit` / `exit` with `exit_code` | Write the child's stderr to `logs/llama-server_<run_id>.log` | open |
+| P2 | `hymt_translator.py:261` + `_start` | **Crash race (new):** a request that arrives after the child died but before Windows reaps it sees `poll() is None`, skips the restart, gets connection refused after ~2 s, falls back to OPUS (T3), and that output is stored in the TM. The restart happens one request later. Reproduced in both runs: 2.36 s / 2.39 s for the first request (OPUS), 1.43 s / 1.74 s for the second (restart). With 1 s between kill and request the first request restarts the child (1.25 s / 1.26 s) | `mt_call` fail `process` `WinError 10061` → `mt_call` success `fallback_for=hymt` → `translator_process` start `restart` | On a connection error, check `poll()` again (or wait briefly) and restart before falling back; add a health ping before reusing a child that has been idle | open |
+| P3 | `hymt_translator.py:264-269` | Any warmup failure sets `_load_error`; `supports()` is False **for the life of the process**, so all traffic goes to OPUS or T1 | `translator_process` fail `warmup`, degraded | Retry with backoff; expose the state in `/health/json` (it is in `mt_engines.hymt.error`) and in the UI | open |
+| P4 | `hymt_translator.py:88-90` (`_cuda_dll_dirs`) | `import torch` failure → CUDA DLL dir silently not added → the child may fail with only an exit code | `translator_process` skip `cuda_dlls` | Log the PATH used; fail early with a clear message | open |
+| P5 | `hymt_translator.py:293-299` | Multi-line model output silently cut to the first line | `mt_call` skip `parse`, degraded | Keep, but count; consider joining lines for long inputs | open |
+| P6 | `base_translator.py` `_run` (empty check) | Empty completion passed on as the translation (blank subtitle, stored) | `mt_call` fail `parse` | Treat empty as failure (T1 path without storing) | open |
+| P7 | `hymt_translator.py:246-253` (`shutdown`) | terminate/kill exceptions swallowed | `translator_process` fail `stop` | Keep, logged | open |
+| P8 | `hymt_translator.py:176` (health poll) | Poll errors swallowed while the model loads | `last_poll_error` in the `ready` line | Fine as is | open |
+| P9 | `hymt_translator.py` first spawn | **New:** the first spawn spends **2.46 s before `Popen`** (mostly `import torch` inside `_cuda_dll_dirs`); restarts spend ~0 ms. The INFO line "ready … (1.1–1.9 s)" measures only Popen→healthy | `translator_process` start → success `ready` timestamps | Resolve the torch lib dir without importing torch (`importlib.util.find_spec`) | open |
 
 ### WebSockets and HTTP (backend)
 
-| # | Where | What happens today | Now logged as | What I would change |
-|---|---|---|---|---|
-| W1 | `main.py:333-337` (`/ws/asr` text) | Unknown message type is ignored with no reply | `ws_receive` skip `input_invalid` | Reply `{type:'error'}` like `/ws` does |
-| W2 | `main.py:305-307` | Odd-length binary frame: last byte dropped by `pcm16_to_float32` | `asr_chunk` fail `input_invalid` | Reject the frame; this is also where the documented-but-missing 8-byte timestamp header would land |
-| W3 | `main.py` `create_session` (now wrapped) | Unsupported language → exception escapes the endpoint after `accept()` | `ws_connection` fail | Validate query params, send `error`, close 4001 |
-| W4 | `main.py` `_handle_events` | `send` / `translate_final` tasks are never awaited; a failed send is "never retrieved" | `ws_reply` fail `process` | Track tasks per connection; cancel on close |
-| W5 | `websocket_handler.py:100-103`, `:115-119` | Send to a gone connection → `False`; send error → ERROR + `False`; every caller ignores the return value | `ws_reply` skip / fail `process`, degraded | Stop work for closed connections (drop pending batch items) |
-| W6 | `websocket_handler.py:391`, `:447` | `correction` / `config` handler errors are returned as `{status:'error'}` **inside a `result` envelope**; the client (`websocket-client.js`) resolves it as success, so `main.js` updates its cache as if the correction were saved | `tm_store` fail (correction) / `config` fail | Send an `error` envelope |
-| W7 | `websocket_handler.py:403` | Per-connection `config` overwrites the server-wide default target languages (known bug #6). Seen in both runs: the `/ws` probe changed it to `["en","bn"]`, then the headless-Chromium tab changed it to `["en","zh"]` | `config` success `scope=global` with `before` / `after` | Keep per-connection only |
-| W8 | `main.py:131` | CORS reflects any origin with credentials (known bug #5) | `http` lines show the request but not the Origin | Allow only `chrome-extension://<id>` and the backend's own origin |
-| W9 | `main.py:440-442` | Ollama probe in `/health/json`: `except … pass` | `health_probe` fail, degraded | Fine, logged |
-| W10 | `main.py:50`, `:55` | MT / ASR warmup failure: server starts anyway | `startup` fail, degraded | Fine; surface in `/health/json` |
+| # | Where | What happens today | Now logged as | What I would change | Status |
+|---|---|---|---|---|---|
+| W1 | `main.py:333-337` (`/ws/asr` text) | Unknown message type is ignored with no reply | `ws_receive` skip `input_invalid` | Reply `{type:'error'}` like `/ws` does | open |
+| W2 | `main.py:305-307` | Odd-length binary frame: last byte dropped by `pcm16_to_float32` | `asr_chunk` fail `input_invalid` | Reject the frame; this is also where the documented-but-missing 8-byte timestamp header would land | open |
+| W3 | `main.py` `create_session` (now wrapped) | Unsupported language → exception escapes the endpoint after `accept()` | `ws_connection` fail | Validate query params, send `error`, close 4001 | open |
+| W4 | `main.py` `_handle_events` | `send` / `translate_final` tasks are never awaited; a failed send is "never retrieved" | `ws_reply` fail `process` | Track tasks per connection; cancel on close | open |
+| W5 | `websocket_handler.py:100-103`, `:115-119` | Send to a gone connection → `False`; send error → ERROR + `False`; every caller ignores the return value | `ws_reply` skip / fail `process`, degraded | Stop work for closed connections (drop pending batch items) | open |
+| W6 | `websocket_handler.py:391`, `:447` | `correction` / `config` handler errors are returned as `{status:'error'}` **inside a `result` envelope**; the client (`websocket-client.js`) resolves it as success, so `main.js` updates its cache as if the correction were saved | `tm_store` fail (correction) / `config` fail | Send an `error` envelope | open |
+| W7 | `websocket_handler.py:403` | Per-connection `config` overwrites the server-wide default target languages (known bug #6). Seen in both runs: the `/ws` probe changed it to `["en","bn"]`, then the headless-Chromium tab changed it to `["en","zh"]` | `config` success `scope=global` with `before` / `after` | Keep per-connection only | open |
+| W8 | `main.py:131` | CORS reflects any origin with credentials (known bug #5) | `http` lines show the request but not the Origin | Allow only `chrome-extension://<id>` and the backend's own origin | open |
+| W9 | `main.py:440-442` | Ollama probe in `/health/json`: `except … pass` | `health_probe` fail, degraded | Fine, logged | open |
+| W10 | `main.py:50`, `:55` | MT / ASR warmup failure: server starts anyway | `startup` fail, degraded | Fine; surface in `/health/json` | open |
 
 ### ASR (backend)
 
-| # | Where | What happens today | Now logged as | What I would change |
-|---|---|---|---|---|
-| A1 | `asr/session.py:193` | LID exception → WARNING, treated as undecided | `lid` fail, degraded | Fine, logged |
-| A2 | `asr/session.py:200-206` | After two undecided attempts the provisional language is kept **and reported with `confirmed: true`** | `lid` skip `input_invalid`, degraded | Send `confirmed: false, source: 'fallback'` |
-| A3 | `asr/lid.py` `identify` | LID answer outside the allowed set → None (INFO) | `lid` skip with `detected` | Fine, logged |
-| A4 | `asr/session.py:100` | `RuntimeError` while picking a provisional language → next language tried | not logged (benign) | — |
-| A5 | `asr/__init__.py:51`, `:60` | Advertised cloud ASR / Whisper engines do not exist; ImportError at DEBUG (known) | `startup` skip `process`, degraded | Remove the UI options or implement |
-| A6 | `asr/sherpa_engine.py:275` | Per-language warmup failure → WARNING; that language loads on first session (seconds of delay) | `startup` fail `asr_model`, degraded | Fine, logged |
+| # | Where | What happens today | Now logged as | What I would change | Status |
+|---|---|---|---|---|---|
+| A1 | `asr/session.py:193` | LID exception → WARNING, treated as undecided | `lid` fail, degraded | Fine, logged | open |
+| A2 | `asr/session.py:200-206` | After two undecided attempts the provisional language is kept **and reported with `confirmed: true`** | `lid` skip `input_invalid`, degraded | Send `confirmed: false, source: 'fallback'` | open |
+| A3 | `asr/lid.py` `identify` | LID answer outside the allowed set → None (INFO) | `lid` skip with `detected` | Fine, logged | open |
+| A4 | `asr/session.py:100` | `RuntimeError` while picking a provisional language → next language tried | not logged (benign) | — | open |
+| A5 | `asr/__init__.py:51`, `:60` | Advertised cloud ASR / Whisper engines do not exist; ImportError at DEBUG (known) | `startup` skip `process`, degraded | Remove the UI options or implement | open |
+| A6 | `asr/sherpa_engine.py:275` | Per-language warmup failure → WARNING; that language loads on first session (seconds of delay) | `startup` fail `asr_model`, degraded | Fine, logged | open |
 
 ### Startup / environment
 
-| # | Where | What happens today | Now logged as | What I would change |
-|---|---|---|---|---|
-| S1 | `translation/__init__.py` → `post_editor.py:19` | `ollama` missing → `ModuleNotFoundError` → `run.py` "Server error", exit 1 (known bug, clean install) | `startup` fail `process`, `missing_module=ollama` | Remove the import of dead `post_editor`, or declare `ollama` |
-| S2 | `config.py:24`, `:35` (`_detect_cuda`) | Any probe error → CPU; HY-MT silently skipped | `startup` skip `cuda_detect`, degraded | Log at WARNING with the reason |
-| S3 | `translation/cuda_dlls.py:29`, `:49` | Only used by `spike_hymt.py`; errors swallowed | `startup` skip `cuda_dlls` | Delete with the spike |
-| S4 | `scripts/spike_hymt.py:18` | `llama_cpp` not installed → script fails; the app does not need it | `dependency` skip `llama_cpp` at every backend start; the spike's own failure is a script-level traceback, not in the run log | Delete the spike or move it to `llama-server` |
-| S5 | `translation/post_editor.py` | 7 `except` clauses in dead v1 code (never called in v2) | **not instrumented** on purpose | Delete the file |
-| S6 | `cache/translation_memory.py:135-171` | Every TM hit runs UPDATE + COMMIT on the hot path; SQLite errors propagate into T5 | `tm_lookup` duration / fail `process` | Batch use-count updates off the hot path |
+| # | Where | What happens today | Now logged as | What I would change | Status |
+|---|---|---|---|---|---|
+| S1 | `translation/__init__.py` → `post_editor.py:19` | `ollama` missing → `ModuleNotFoundError` → `run.py` "Server error", exit 1 (known bug, clean install) | `startup` fail `process`, `missing_module=ollama` | Remove the import of dead `post_editor`, or declare `ollama` | open |
+| S2 | `config.py:24`, `:35` (`_detect_cuda`) | Any probe error → CPU; HY-MT silently skipped | `startup` skip `cuda_detect`, degraded | Log at WARNING with the reason | open |
+| S3 | `translation/cuda_dlls.py:29`, `:49` | Only used by `spike_hymt.py`; errors swallowed | `startup` skip `cuda_dlls` | Delete with the spike | open |
+| S4 | `scripts/spike_hymt.py:18` | `llama_cpp` not installed → script fails; the app does not need it | `dependency` skip `llama_cpp` at every backend start; the spike's own failure is a script-level traceback, not in the run log | Delete the spike or move it to `llama-server` | open |
+| S5 | `translation/post_editor.py` | 7 `except` clauses in dead v1 code (never called in v2) | **not instrumented** on purpose | Delete the file | open |
+| S6 | `cache/translation_memory.py:135-171` | Every TM hit runs UPDATE + COMMIT on the hot path; SQLite errors propagate into T5 | `tm_lookup` duration / fail `process` | Batch use-count updates off the hot path | open |
 
 ### Extension
 
-| # | Where | What happens today | Now logged as | What I would change |
-|---|---|---|---|---|
-| E1 | `offscreen.js:51` (`emit`) | `sendMessage(...).catch(() => {})`: captions lost if the worker cannot receive | `ext_relay` fail (first + every 100th) | Fine, logged |
-| E2 | `offscreen.js:157` (`onPcmFrame`) | Socket not OPEN → audio frame dropped, no counter | `ext_ws_send` skip summary per 100 drops | Buffer a short window during reconnect |
-| E3 | `offscreen.js:225-227` | Comment says "retry once"; it retries every 1.5 s forever, each retry a new backend session (LID reset) | `ext_ws` start `reconnect` per attempt | Backoff with a cap; reuse the session id (it already does now) |
-| E4 | `offscreen.js:247` | Unparseable server message dropped | `ext_ws_receive` fail `parse` | Fine, logged |
-| E5 | `offscreen.js:265`, `:270` | In `auto` mode, on-device and backend translations are both rendered (duplicate) | `ext_translate_ondevice` success `duplicate_with_backend=true` | Suppress the backend translation when the on-device one succeeded |
-| E6 | `offscreen.js:293-309` | Translator API missing / pack not downloaded → silent fall back to backend | `ext_translate_ondevice` skip / fail | Fine, logged |
-| E7 | `offscreen.js` `stopCapture` | Each teardown step's error swallowed | one `ext_capture` line `action=stop` listing errors | Fine, logged |
-| E8 | `background.js:67` (`asrUrlFrom`) | Bad `serverUrl` → silently falls back to 127.0.0.1:8765 | not logged | Validate in Options |
-| E9 | `background.js:268` (`getAsrStatus`) | Offscreen status query errors swallowed | not logged (polled by the popup; would be noise) | — |
-| E10 | `background.js:341`, `:403`, `:409` | `tabs.sendMessage(...).catch(() => {})` for overlay toggle, settings broadcast, `PAGE_LOADED` | **not logged on purpose**: fails for every tab without the content script (chrome:// pages etc.) | Broadcast only to tabs that registered |
-| E11 | `content-scripts/websocket-client.js:349` | Offline queue full (100) → message dropped (console.warn) | `ext_ws_send` fail `process` | Fine, logged |
-| E12 | `websocket-client.js:107` | On close every pending request is rejected; the cue shows untranslated | `ext_ws` fail `close` with `pending_rejected`; `ext_cue_request` fail | Re-send idempotent cue requests after reconnect |
-| E13 | `websocket-client.js:422` | Gives up after 10 reconnects for the life of the page | `ext_ws` fail `give_up` | Keep retrying slowly while the page has video |
-| E14 | `content-scripts/main.js:253` | Not connected → source text shown untranslated, no request | `ext_cue_request` skip `process`, degraded | Show a notice |
-| E15 | `main.js:283` | Request failure (timeout / closed) → source text shown | `ext_cue_request` fail, degraded | Same |
-| E16 | `main.js:88` | `message` listener accepts cues from any frame or origin (known, PROJECT_REPORT §10 #15) | not logged | Check `e.origin` / `e.source` |
-| E17 | `main.js:78` | Connects to the backend on every top-level page (seen in the run: one `ws_connection` per page load) | `ext_ws` success per page | Connect only when a video is present |
+| # | Where | What happens today | Now logged as | What I would change | Status |
+|---|---|---|---|---|---|
+| E1 | `offscreen.js:51` (`emit`) | `sendMessage(...).catch(() => {})`: captions lost if the worker cannot receive | `ext_relay` fail (first + every 100th) | Fine, logged | open |
+| E2 | `offscreen.js:157` (`onPcmFrame`) | Socket not OPEN → audio frame dropped, no counter | `ext_ws_send` skip summary per 100 drops | Buffer a short window during reconnect | open |
+| E3 | `offscreen.js:225-227` | Comment says "retry once"; it retries every 1.5 s forever, each retry a new backend session (LID reset) | `ext_ws` start `reconnect` per attempt | Backoff with a cap; reuse the session id (it already does now) | open |
+| E4 | `offscreen.js:247` | Unparseable server message dropped | `ext_ws_receive` fail `parse` | Fine, logged | open |
+| E5 | `offscreen.js:265`, `:270` | In `auto` mode, on-device and backend translations are both rendered (duplicate) | `ext_translate_ondevice` success `duplicate_with_backend=true` | Suppress the backend translation when the on-device one succeeded | open |
+| E6 | `offscreen.js:293-309` | Translator API missing / pack not downloaded → silent fall back to backend | `ext_translate_ondevice` skip / fail | Fine, logged | open |
+| E7 | `offscreen.js` `stopCapture` | Each teardown step's error swallowed | one `ext_capture` line `action=stop` listing errors | Fine, logged | open |
+| E8 | `background.js:67` (`asrUrlFrom`) | Bad `serverUrl` → silently falls back to 127.0.0.1:8765 | not logged | Validate in Options | open |
+| E9 | `background.js:268` (`getAsrStatus`) | Offscreen status query errors swallowed | not logged (polled by the popup; would be noise) | — | open |
+| E10 | `background.js:341`, `:403`, `:409` | `tabs.sendMessage(...).catch(() => {})` for overlay toggle, settings broadcast, `PAGE_LOADED` | **not logged on purpose**: fails for every tab without the content script (chrome:// pages etc.) | Broadcast only to tabs that registered | open |
+| E11 | `content-scripts/websocket-client.js:349` | Offline queue full (100) → message dropped (console.warn) | `ext_ws_send` fail `process` | Fine, logged | open |
+| E12 | `websocket-client.js:107` | On close every pending request is rejected; the cue shows untranslated | `ext_ws` fail `close` with `pending_rejected`; `ext_cue_request` fail | Re-send idempotent cue requests after reconnect | open |
+| E13 | `websocket-client.js:422` | Gives up after 10 reconnects for the life of the page | `ext_ws` fail `give_up` | Keep retrying slowly while the page has video | open |
+| E14 | `content-scripts/main.js:253` | Not connected → source text shown untranslated, no request | `ext_cue_request` skip `process`, degraded | Show a notice | open |
+| E15 | `main.js:283` | Request failure (timeout / closed) → source text shown | `ext_cue_request` fail, degraded | Same | open |
+| E16 | `main.js:88` | `message` listener accepts cues from any frame or origin (known, PROJECT_REPORT §10 #15) | not logged | Check `e.origin` / `e.source` | open |
+| E17 | `main.js:78` | Connects to the backend on every top-level page (seen in the run: one `ws_connection` per page load) | `ext_ws` success per page | Connect only when a video is present | open |
 
 ---
 
@@ -165,6 +166,15 @@ with the server up.
   `taskkill /T /F`, which skips `atexit`.
 - The audio path's extension stages (`ext_capture`, `ext_ws_send`, `ext_relay`, live `ext_render`) are instrumented but
   were not run in a browser.
+  **Status (Phase 2, Batch 0):** run end to end without a human click by `backend/scripts/e2e_extension_audio.py`
+  (Playwright Chromium, `--allowlisted-extension-id` instead of the action-click grant, real tab audio from a `<video>`
+  playing a sample WAV); slow test `tests/test_e2e_extension_audio.py`.
 - Subtitle text is never logged (lengths and ids only); API keys are redacted from error messages (`key=`, `Bearer`,
   `AIza…`, `gsk_…`, `sk-…`) because httpx puts the request URL, which carries the Google and Gemini keys, into its
   errors.
+
+## 7. Phase 2 status by batch
+
+| Batch | Commit | Rows addressed | Notes |
+|---|---|---|---|
+| 0 | chore: phase-1 diff audit, audio-path harness | §6 audio path not run | `docs/phase1-diff-audit.md`: one phase-1 behaviour change (lifespan aborted startup when the pipeline failed to build) reverted with a test |

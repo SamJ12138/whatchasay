@@ -131,3 +131,13 @@ Browser: load `extension/` unpacked → YouTube video without captions → popup
   Tagalog → untranslated and stored; first llama-server spawn pays 2.5 s of `import torch`).
 - Verified: 49 pass / 5 skip (server down), 54 pass (server up); e2e on the three sample WAVs; caption path in headless
   Playwright Chromium with the unpacked extension. Tests now write obs logs to `backend/logs/pytest/`.
+
+### 2026-10-01/02 — Phase 2a: test-driven correctness, security, isolation, lifecycle, clean install
+- Batch 0: `docs/phase1-diff-audit.md` (every non-logging hunk of `f9758f0`); one behaviour change found and reverted
+  (lifespan re-called `get_pipeline()` for a log line and aborted startup when the pipeline failed to build;
+  `tests/test_startup.py`). Audio-path harness `backend/scripts/e2e_extension_audio.py`: Playwright Chromium + unpacked
+  extension + `--allowlisted-extension-id` (tabCapture without the action click) + a `<video>` playing a sample WAV →
+  translated cue logged by the content script (`ext_render`) in ~7.5 s; slow test `tests/test_e2e_extension_audio.py`.
+  `--use-fake-ui-for-media-stream` breaks the offscreen `getUserMedia({chromeMediaSource:'tab'})` ("Requested device
+  not found"); leave it out.
+
