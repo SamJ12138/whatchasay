@@ -204,3 +204,8 @@ Browser: load `extension/` unpacked → YouTube video without captions → popup
   `backend/scripts/clean_install_check.py` = the clean-install proof (fresh venv, both files, `import app.main`, fast
   suite): passes locally on Python 3.10 with the newest packages (FastAPI 0.142, Starlette 1.7). It caught a test-helper
   portability bug (Starlette 1.x reads WebSocket test messages from an anyio stream, not a queue).
+- Batch 5 follow-up (found while committing Batch 6): `test_restart_that_fails_falls_back_within_the_bound` was flaky
+  (killed child sometimes still answered) and hid a gap: a request that found the child already reaped restarted it
+  with the 120 s first-start health budget, not the restart bound. Lazy restarts after the first spawn now use
+  `hymt_restart_timeout_s`, and the llama-server client has a 0.5 s connect timeout (Windows takes ~2 s to refuse a
+  localhost connect to a dead port), counted as "child gone". The test covers both shapes (reaped / poll still running).

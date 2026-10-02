@@ -58,7 +58,10 @@ STDERR_TAIL_LINES = 50
 
 # The child is gone or not listening (crashed, killed, restarting): restart it.
 # A read *timeout* is not here: a busy child is not restarted.
-_CHILD_GONE = (httpx.ConnectError, httpx.RemoteProtocolError, httpx.ReadError, httpx.WriteError)
+# Connect timeout: a localhost connect takes well under a millisecond, but Windows
+# needs ~2 s to *refuse* one to a dead child's port; 0.5 s ends that wait early.
+_CHILD_GONE = (httpx.ConnectError, httpx.ConnectTimeout, httpx.RemoteProtocolError, httpx.ReadError, httpx.WriteError)
+_CLIENT_TIMEOUT = httpx.Timeout(20.0, connect=0.5)
 
 
 def _plog(event: str, **kw) -> None:
@@ -285,7 +288,7 @@ class HyMTEngine:
                                                       name="llama-server-output", daemon=True)
         drain.start()
         threading.Thread(target=self._watch, args=(self._proc, t0, tail, drain), name="llama-server-watch", daemon=True).start()
-        self._client = httpx.Client(base_url=f"http://127.0.0.1:{self._port}", timeout=20.0)
+        self._client = httpx.Client(base_url=f"http://127.0.0.1:{self._port}", timeout=_CLIENT_TIMEOUT)
         deadline = time.time() + (deadline_s if deadline_s is not None else settings.mt.hymt_health_timeout_s)
         polls = 0
         last_poll_error = None
@@ -422,7 +425,10 @@ class HyMTEngine:
     def translate_batch_sync(self, texts: List[str], source_lang: str, target_lang: str) -> List[str]:
         try:
             with self._lock:
-                self._start()  # cheap when already running; serializes only the startup
+                # cheap when already running; serializes only the startup. A restart on the
+                # request path (an earlier child existed) is bounded like _recover (P2);
+                # only the very first start gets the full model-load budget.
+                self._start(deadline_s=settings.mt.hymt_restart_timeout_s if self._spawns else None)
         except Exception as e:
             self._mark_failed(e)
             raise

@@ -113,18 +113,29 @@ async def test_child_that_exits_on_its_own_is_restarted_too(fake_llama, monkeypa
 
 
 @pytest.mark.asyncio
-async def test_restart_that_fails_falls_back_within_the_bound(fake_llama, monkeypatch, fast_backoff):
+@pytest.mark.parametrize("reaped", [True, False], ids=["child-reaped", "poll-still-running"])
+async def test_restart_that_fails_falls_back_within_the_bound(fake_llama, monkeypatch, obs_records, fast_backoff, reaped):
+    """Whether the request finds the child already reaped (lazy restart at the
+    top of the request) or still "running" (P2 window), a restart that never
+    becomes healthy costs at most hymt_restart_timeout_s, then falls back."""
     monkeypatch.setattr(settings.mt, "engine_order", ["hymt", "backup"])
-    monkeypatch.setattr(settings.mt, "hymt_restart_timeout_s", 3.0)
+    monkeypatch.setattr(settings.mt, "hymt_restart_timeout_s", 1.5)
+    monkeypatch.setattr(settings.mt, "hymt_health_timeout_s", 8.0)  # first-start budget, must not apply here
     eng = fake_llama(plan=[[], ["--never-healthy"]])
     router, backup = _router(eng)
     assert (await router.translate_batch_detailed(["one"], "en", "bn"))[0].engine == "hymt"
-    eng._proc.kill()
+    old = eng._proc
+    old.kill()
+    old.wait(timeout=10)
+    assert wait_for(lambda: proc_lines(obs_records, event="fail", action="exit"))
+    if not reaped:
+        old.poll = lambda: None
+        old.returncode = None
     t = time.perf_counter()
     res = await router.translate_batch_detailed(["two"], "en", "bn")
     elapsed = time.perf_counter() - t
     assert res[0].status == "fallback" and res[0].engine == "backup"
-    assert elapsed < 3.0 + 3.0, f"restart wait was not bounded ({elapsed:.1f}s)"
+    assert elapsed < 1.5 + 1.5, f"restart wait was not bounded by hymt_restart_timeout_s ({elapsed:.1f}s)"
 
 
 # ---------------------------------------------------------------- P3

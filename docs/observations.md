@@ -184,3 +184,4 @@ with the server up.
 | 4 | fix: per-session config; honest LID status (W7, A1-A3) | W7, A1, A2, A3 | `lang_status` on lid/partial/final: provisional, confirmed, manual, fallback, error; `confirmed:true` only for confirmed/manual |
 | 5 | fix: translator process restart race, warmup retry, stderr capture, fast spawn | P1, P2, P3, P9 | real P9 (fresh process, warm disk): spawn→Popen 1187-1236 ms → 1.1-3.8 ms; Popen→ready unchanged ~1.1 s |
 | 6 | fix: clean install from requirements.txt (S1, S4) | S1, S3, S4, S5 | `scripts/clean_install_check.py`: fresh venv + requirements.txt + requirements-dev.txt → import app.main → fast suite (local, Python 3.10, newest packages: 120 passed) |
+| 5a | fix: bound lazy llama-server restarts on the request path (Batch 5 follow-up) | P2 | a request that found the child already reaped waited up to the 120 s first-start budget; now hymt_restart_timeout_s; 0.5 s connect timeout |
