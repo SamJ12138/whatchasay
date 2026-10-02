@@ -55,3 +55,16 @@ test('the page shows the keys actually bound when chrome.commands is available',
   const js = fs.readFileSync(path.join(EXT, 'options', 'options.js'), 'utf8');
   assert.match(js, /chrome\.commands\.getAll\(\)/);
 });
+
+// The popup repeats the list in short form (label + key); its keys must be bound too.
+test('the popup lists only bound keys', () => {
+  const popup = fs.readFileSync(path.join(EXT, 'popup', 'popup.html'), 'utf8');
+  const block = popup.slice(popup.indexOf('class="shortcuts"'));
+  const keys = [...block.matchAll(/<span class="shortcut-key">([^<]*)<\/span>/g)].map((m) => m[1].trim());
+  const bound = new Set([...Object.values(manifest.commands).map((c) => asShown(c.suggested_key.default)),
+                         ...Object.keys(PAGE_KEYS)]);
+  assert.ok(keys.length >= 4, keys);
+  for (const k of keys) assert.ok(bound.has(k), `popup shows ${k}, which is not bound`);
+  for (const k of bound) assert.ok(keys.includes(k), `popup does not show ${k}`);
+});
+
