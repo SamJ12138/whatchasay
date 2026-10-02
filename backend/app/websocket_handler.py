@@ -28,6 +28,7 @@ from .config import settings
 from .models import MessageType, SubtitleCue, ConfigUpdate, TranslationCorrection, TranslationResult
 from .translation import get_pipeline, TranslationPipeline
 from .cache import get_translation_memory
+from . import obs
 
 logger = logging.getLogger(__name__)
 
@@ -73,7 +74,7 @@ class ConnectionManager:
         self.active_connections: Dict[str, WebSocket] = {}
         self.connection_info: Dict[str, Dict[str, Any]] = {}
 
-    async def connect(self, websocket: WebSocket) -> str:
+    async def connect(self, websocket: WebSocket, session_id: Optional[str] = None) -> str:
         await websocket.accept()
         conn_id = str(uuid.uuid4())[:8]
         self.active_connections[conn_id] = websocket
@@ -84,6 +85,7 @@ class ConnectionManager:
             "last_activity": datetime.utcnow(),
             # per-connection preferences (never mutate global settings for these)
             "target_languages": None,
+            "session_id": session_id,
         }
         logger.info("Client connected: %s", conn_id)
         return conn_id
@@ -96,16 +98,24 @@ class ConnectionManager:
     async def send_message(self, conn_id: str, message: Dict[str, Any]) -> bool:
         websocket = self.active_connections.get(conn_id)
         if websocket is None:
+            obs.log("ws_reply", "skip", error_type="process", path="/ws", msg_type=message.get("type"),
+                    error_message="connection already gone; reply dropped")
             return False
+        info = self.connection_info.get(conn_id)
+        sid = info.get("session_id") if info else None
+        payload = message.get("payload") if isinstance(message.get("payload"), dict) else {}
         try:
             await websocket.send_text(orjson.dumps(message).decode("utf-8"))
-            info = self.connection_info.get(conn_id)
             if info:
                 info["messages_sent"] += 1
                 info["last_activity"] = datetime.utcnow()
+            obs.log("ws_reply", "success", session_id=sid, path="/ws", msg_type=message.get("type"),
+                    correlation_id=message.get("correlation_id"), cue_id=payload.get("cue_id"))
             return True
         except Exception as e:
             logger.error("Error sending to %s: %s", conn_id, e)
+            obs.log_exc("ws_reply", e, api="process", session_id=sid, path="/ws", msg_type=message.get("type"),
+                        correlation_id=message.get("correlation_id"), degraded="reply dropped; send_message returns False")
             return False
 
     async def broadcast(self, message: Dict[str, Any]) -> int:
@@ -157,6 +167,7 @@ async def deliver_results(
                     await manager.send_message(conn_id, _envelope(MessageType.REVISION, correlation_id, format_result(new_r)))
         except Exception as e:  # pragma: no cover
             logger.warning("Refinement task failed: %s", e)
+            obs.log_exc("refine", e, path="/ws", n=len(candidates), degraded="no revision sent")
         finally:
             for _, _, r in candidates:
                 _inflight_refinements.discard(r.cue_id)
@@ -217,14 +228,25 @@ class MicroBatcher:
     async def _process_batch(self, batch: List[PendingCue], target_languages: List[str]) -> None:
         start = time.time()
         skip_refine = any(p.skip_post_edit for p in batch)
+        # One batch can hold cues from several connections; log under the first
+        # cue's session and list all of them.
+        sessions = sorted({manager.connection_info.get(p.conn_id, {}).get("session_id") or "?" for p in batch})
+        token = obs.session_id_var.set(manager.connection_info.get(batch[0].conn_id, {}).get("session_id")) if batch else None
+        ctx = dict(path="/ws", n_cues=len(batch), targets=target_languages, sessions=sessions,
+                   max_wait_ms=round(max((start - p.received_at) * 1000 for p in batch), 1) if batch else 0)
         try:
             results = await self.pipeline.translate_batch([p.cue for p in batch], target_languages, skip_refine)
             pairs = [(p.conn_id, p.correlation_id, r) for p, r in zip(batch, results)]
             await deliver_results(self.pipeline, pairs, target_languages, skip_refine)
+            obs.log("micro_batch", "success", duration_ms=(time.time() - start) * 1000, **ctx)
         except Exception as e:
             logger.error("Batch processing error: %s", e)
+            obs.log_exc("micro_batch", e, duration_ms=(time.time() - start) * 1000, degraded="error envelope sent to every cue", **ctx)
             for p in batch:
                 await manager.send_message(p.conn_id, _envelope(MessageType.ERROR, p.correlation_id, {"error": str(e)}))
+        finally:
+            if token is not None:
+                obs.session_id_var.reset(token)
         logger.debug("Micro-batch: %d cues in %.0f ms", len(batch), (time.time() - start) * 1000)
 
 
@@ -255,6 +277,7 @@ class WebSocketHandler:
         }
 
     async def handle_connection(self, websocket: WebSocket, conn_id: str) -> None:
+        t0 = time.perf_counter()
         try:
             while True:
                 data = await websocket.receive_text()
@@ -263,10 +286,19 @@ class WebSocketHandler:
                     info["messages_received"] += 1
                     info["last_activity"] = datetime.utcnow()
                 await self._process_message(conn_id, data)
-        except WebSocketDisconnect:
+        except WebSocketDisconnect as e:
             logger.info("Client %s disconnected", conn_id)
+            normal = e.code in (1000, 1001, 1005)
+            info = manager.connection_info.get(conn_id) or {}
+            obs.log("ws_connection", "success" if normal else "fail", duration_ms=(time.perf_counter() - t0) * 1000,
+                    error_type=None if normal else "process",
+                    error_message=None if normal else f"client closed with code {e.code}",
+                    path="/ws", conn_id=conn_id, close_code=e.code,
+                    received=info.get("messages_received"), sent=info.get("messages_sent"))
         except Exception as e:
             logger.error("Connection error for %s: %s", conn_id, e)
+            obs.log_exc("ws_connection", e, duration_ms=(time.perf_counter() - t0) * 1000, path="/ws", conn_id=conn_id,
+                        degraded="connection loop ended by exception")
 
     def _conn_targets(self, payload: Dict[str, Any]) -> List[str]:
         info = manager.connection_info.get(self.conn_id) or {}
@@ -274,29 +306,38 @@ class WebSocketHandler:
 
     async def _process_message(self, conn_id: str, data: str) -> None:
         correlation_id = "unknown"
+        t0 = time.perf_counter()
+        ctx: Dict[str, Any] = {"path": "/ws", "bytes": len(data)}
         try:
             raw = orjson.loads(data)
             msg_type = MessageType(raw.get("type", "cue"))
             correlation_id = raw.get("correlation_id", str(uuid.uuid4())[:8])
             payload = raw.get("payload", {})
+            ctx.update(msg_type=msg_type.value, correlation_id=correlation_id)
 
             if msg_type == MessageType.CUE:
                 await self._handle_cue(conn_id, correlation_id, payload)
+                obs.log("ws_receive", "success", duration_ms=(time.perf_counter() - t0) * 1000, **ctx)
                 return
 
             handler = self.handlers.get(msg_type)
             if handler is None:
+                obs.log("ws_receive", "fail", error_type="input_invalid", error_message=f"no handler for {msg_type}", **ctx)
                 await self._send_error(conn_id, correlation_id, f"Unknown message type: {msg_type}")
                 return
             result = await handler(payload)
+            obs.log("ws_receive", "success", duration_ms=(time.perf_counter() - t0) * 1000, **ctx)
             await manager.send_message(conn_id, _envelope(MessageType.RESULT, correlation_id, result))
 
         except orjson.JSONDecodeError as e:
+            obs.log_exc("ws_receive", e, error_type="parse", **ctx)
             await self._send_error(conn_id, correlation_id, f"Invalid JSON: {e}")
         except ValidationError as e:
+            obs.log_exc("ws_receive", e, error_type="input_invalid", **ctx)
             await self._send_error(conn_id, correlation_id, f"Validation error: {e}")
         except Exception as e:
             logger.exception("Processing error: %s", e)
+            obs.log_exc("ws_receive", e, **ctx)
             await self._send_error(conn_id, correlation_id, f"Error: {e}")
 
     async def _handle_cue(self, conn_id: str, correlation_id: str, payload: Dict) -> None:
@@ -341,9 +382,12 @@ class WebSocketHandler:
                     )
             if cache is not None:
                 cache.clear()  # drop stale memory entries so the correction wins immediately
+            obs.log("tm_store", "success", kind="correction", cue_id=correction.cue_id, source_lang=source_lang,
+                    targets=list(correction.corrected_translation.keys()))
             return {"status": "saved", "cue_id": correction.cue_id, "source_lang": source_lang}
         except Exception as e:
             logger.error("Correction error: %s", e)
+            obs.log_exc("tm_store", e, api="process", kind="correction", degraded="error returned to client in a result envelope")
             return {"status": "error", "error": str(e)}
 
     async def _handle_config(self, payload: Dict) -> Dict:
@@ -355,7 +399,11 @@ class WebSocketHandler:
                 # per-connection, plus keep the global default for HTTP/debug callers
                 if info is not None:
                     info["target_languages"] = list(update.target_languages)
+                before = list(settings.translation.target_languages)
                 settings.translation.target_languages = list(update.target_languages)
+                obs.log("config", "success", path="/ws", scope="global", key="translation.target_languages",
+                        before=before, after=list(update.target_languages),
+                        note="per-connection config message changed the server-wide default")
             if update.use_post_editor is not None:
                 settings.features.use_post_editor = update.use_post_editor
             if update.refiner_enabled is not None:
@@ -395,6 +443,7 @@ class WebSocketHandler:
             }
         except Exception as e:
             logger.error("Config update error: %s", e)
+            obs.log_exc("config", e, path="/ws", degraded="error returned to client in a result envelope")
             return {"status": "error", "error": str(e)}
 
     async def _handle_ping(self, payload: Dict) -> Dict:
@@ -435,6 +484,9 @@ def apply_cloud_keys(keys: Dict[str, str]) -> None:
             changed_mt = True
         elif k == "asr_provider" and v:
             c.asr_provider = v
+    if keys:
+        # names only; values never reach the log
+        obs.log("config", "success", scope="global", key="cloud_keys", names=sorted(keys.keys()), rebuild_cloud_mt=changed_mt)
     if changed_mt:
         from .translation.base_translator import get_base_translator
         from .translation.cloud_translator import make_cloud_engine
@@ -448,7 +500,11 @@ def apply_cloud_keys(keys: Dict[str, str]) -> None:
 
 
 async def websocket_endpoint(websocket: WebSocket) -> None:
-    conn_id = await manager.connect(websocket)
+    client_sid = (websocket.query_params.get("session_id") or "")[:64]
+    sid = client_sid or obs.new_session_id()
+    obs.session_id_var.set(sid)
+    conn_id = await manager.connect(websocket, session_id=sid)
+    obs.log("ws_connection", "start", path="/ws", conn_id=conn_id, session_id_from="client" if client_sid else "backend")
     try:
         pipeline = await get_pipeline()
         handler = WebSocketHandler(pipeline, conn_id)

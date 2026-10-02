@@ -13,18 +13,28 @@ from pydantic import Field
 
 def _detect_cuda() -> bool:
     """True if CTranslate2 or torch can see an NVIDIA GPU."""
+    from . import obs
+
     try:
         import ctranslate2  # noqa
 
         if ctranslate2.get_cuda_device_count() > 0:
+            obs.log("startup", "success", component="cuda_detect", via="ctranslate2")
             return True
-    except Exception:
+    except Exception as e:
+        obs.log_exc("startup", e, event="skip", api="process", component="cuda_detect", via="ctranslate2")
         pass
     try:
         import torch  # noqa
 
-        return bool(torch.cuda.is_available())
-    except Exception:
+        found = bool(torch.cuda.is_available())
+        obs.log("startup", "success" if found else "skip", component="cuda_detect", via="torch",
+                **({} if found else {"error_type": "process", "error_message": "no CUDA device; HY-MT will be skipped",
+                                     "degraded": "device=cpu"}))
+        return found
+    except Exception as e:
+        obs.log_exc("startup", e, event="skip", api="process", component="cuda_detect", via="torch",
+                    degraded="device=cpu; HY-MT will be skipped")
         return False
 
 

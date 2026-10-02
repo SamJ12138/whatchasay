@@ -26,7 +26,10 @@ def prepare() -> None:
         import torch  # noqa
 
         candidates.append(Path(torch.__file__).parent / "lib")
-    except Exception:
+    except Exception as e:
+        from .. import obs
+
+        obs.log_exc("startup", e, event="skip", api="process", component="cuda_dlls", degraded="torch DLL dir not added")
         pass
     # pip "nvidia-*-cu12" wheels put DLLs under site-packages/nvidia/<pkg>/bin
     for p in sys.path:
@@ -43,5 +46,8 @@ def prepare() -> None:
         if d.is_dir():
             try:
                 os.add_dll_directory(str(d))
-            except Exception:
+            except Exception as e:
+                from .. import obs
+
+                obs.log_exc("startup", e, event="skip", api="process", component="cuda_dlls", dir=str(d))
                 pass

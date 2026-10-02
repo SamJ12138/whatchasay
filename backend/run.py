@@ -151,6 +151,9 @@ def run_server(args: argparse.Namespace) -> None:
     def signal_handler(signum, frame):
         logger = logging.getLogger('server')
         logger.info(f"Received signal {signum}, shutting down...")
+        from app import obs
+
+        obs.log("shutdown", "start", component="run.py", reason=f"signal {signum}")
         server.should_exit = True
     
     signal.signal(signal.SIGINT, signal_handler)
@@ -168,15 +171,24 @@ def main() -> None:
     logger = logging.getLogger('main')
     logger.info("Starting Subtitle Translator Backend...")
     
+    from app import obs
+
+    obs.log("startup", "start", component="run.py", host=args.host, port=args.port, debug=args.debug,
+            no_warmup=args.no_warmup, fast_mode=args.fast_mode, log_file=str(obs.log_path()))
     try:
         run_server(args)
     except KeyboardInterrupt:
         logger.info("Shutdown requested")
+        obs.log("shutdown", "success", component="run.py", reason="KeyboardInterrupt")
     except Exception as e:
         logger.error(f"Server error: {e}")
+        obs.log_exc("startup", e, api="process", component="run.py",
+                    missing_module=getattr(e, "name", None) if isinstance(e, ImportError) else None,
+                    degraded="process exits with code 1")
         sys.exit(1)
-    
+
     logger.info("Server stopped")
+    obs.log("shutdown", "success", component="run.py", reason="server stopped")
 
 
 if __name__ == "__main__":

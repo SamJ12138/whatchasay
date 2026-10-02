@@ -8,6 +8,20 @@
  *   and relaying caption events from the offscreen document to the tab
  */
 
+import './obs.js';
+
+const obs = globalThis.STObs;
+obs.init({ context: 'background' });
+
+// Relay failures can repeat for every caption; log the first and then every 100th.
+const relayFails = { count: 0 };
+function logRelayFail(stage, err, extra) {
+  relayFails.count++;
+  if (relayFails.count === 1 || relayFails.count % 100 === 0) {
+    obs.log(stage, 'fail', Object.assign({ error_type: 'process', error_message: (err && err.message) || String(err), failures_so_far: relayFails.count }, extra || {}));
+  }
+}
+
 const SETTINGS_SCHEMA_VERSION = 3;
 
 const DEFAULT_SETTINGS = {
@@ -122,9 +136,11 @@ async function getSettings() {
 
 async function runSettingsMigration() {
   try {
-    await getSettings();
+    const s = await getSettings();
+    obs.setEndpointFromWs(s.serverUrl);
   } catch (error) {
     console.error('Settings migration failed:', error);
+    obs.log('ext_settings', 'fail', { error_type: 'unknown', error_message: error.message || String(error) });
   }
 }
 
@@ -148,10 +164,14 @@ async function loadAsrState() {
   try {
     const r = await chrome.storage.session.get('asrState');
     if (r.asrState) Object.assign(asrState, r.asrState);
-  } catch (_) {}
+  } catch (e) {
+    obs.log('ext_settings', 'fail', { error_type: 'unknown', error_message: 'asrState load: ' + (e.message || e) });
+  }
 }
 async function saveAsrState() {
-  try { await chrome.storage.session.set({ asrState }); } catch (_) {}
+  try { await chrome.storage.session.set({ asrState }); } catch (e) {
+    obs.log('ext_settings', 'fail', { error_type: 'unknown', error_message: 'asrState save: ' + (e.message || e) });
+  }
 }
 loadAsrState();
 
@@ -170,44 +190,74 @@ function sendToOffscreen(msg) {
 }
 
 async function startAsr(tabId, overrides = {}) {
-  const settings = await getSettings();
-  if (asrState.capturing && asrState.tabId && asrState.tabId !== tabId) {
-    await stopAsr();
+  // One session id per capture of a tab; the offscreen document sends it in the /ws/asr handshake.
+  const sessionId = obs.newSessionId('asr-' + tabId);
+  const t0 = performance.now();
+  let step = 'settings';
+  obs.log('ext_capture', 'start', { session_id: sessionId, tab_id: tabId });
+  try {
+    const settings = await getSettings();
+    obs.setEndpointFromWs(settings.serverUrl);
+    if (asrState.capturing && asrState.tabId && asrState.tabId !== tabId) {
+      step = 'stop_previous';
+      await stopAsr();
+    }
+    // Must be called from a user gesture (popup click / command)
+    step = 'getMediaStreamId';
+    const streamId = await chrome.tabCapture.getMediaStreamId({ targetTabId: tabId });
+    step = 'ensureOffscreen';
+    await ensureOffscreen();
+    const sourceLang = overrides.sourceLang || settings.asrSourceLang || 'auto';
+    const targetLangs = overrides.targetLangs || settings.targetLanguages || ['en'];
+    step = 'ASR_START';
+    const res = await sendToOffscreen({
+      type: 'ASR_START',
+      streamId,
+      tabId,
+      sourceLang,
+      targetLangs,
+      engine: settings.asrEngine || 'auto',
+      translationEngine: settings.translationEngine || 'auto',
+      serverUrl: asrUrlFrom(settings.serverUrl),
+      cloudKeys: settings.cloudKeys || {},
+      sessionId,
+    });
+    if (!res || !res.ok) {
+      throw new Error((res && res.error) || 'Failed to start capture');
+    }
+    Object.assign(asrState, { tabId, capturing: true, sourceLang, targetLangs, sessionId });
+    await saveAsrState();
+    chrome.tabs.sendMessage(tabId, { type: 'ASR_STATE', capturing: true, sourceLang, targetLangs, sessionId }, { frameId: 0 })
+      .catch((e) => logRelayFail('ext_relay', e, { session_id: sessionId, msg_type: 'ASR_STATE' }));
+    obs.log('ext_capture', 'success', { session_id: sessionId, duration_ms: performance.now() - t0, tab_id: tabId, source_lang: sourceLang, target_langs: targetLangs });
+    return { ok: true };
+  } catch (e) {
+    const msg = e.message || String(e);
+    obs.log('ext_capture', 'fail', {
+      session_id: sessionId, duration_ms: performance.now() - t0, tab_id: tabId, step,
+      error_type: /timeout/i.test(msg) ? 'timeout' : (step === 'getMediaStreamId' ? 'input_invalid' : 'process'),
+      error_message: msg,
+    });
+    throw e;
   }
-  // Must be called from a user gesture (popup click / command)
-  const streamId = await chrome.tabCapture.getMediaStreamId({ targetTabId: tabId });
-  await ensureOffscreen();
-  const sourceLang = overrides.sourceLang || settings.asrSourceLang || 'auto';
-  const targetLangs = overrides.targetLangs || settings.targetLanguages || ['en'];
-  const res = await sendToOffscreen({
-    type: 'ASR_START',
-    streamId,
-    tabId,
-    sourceLang,
-    targetLangs,
-    engine: settings.asrEngine || 'auto',
-    translationEngine: settings.translationEngine || 'auto',
-    serverUrl: asrUrlFrom(settings.serverUrl),
-    cloudKeys: settings.cloudKeys || {},
-  });
-  if (!res || !res.ok) {
-    throw new Error((res && res.error) || 'Failed to start capture');
-  }
-  Object.assign(asrState, { tabId, capturing: true, sourceLang, targetLangs });
-  await saveAsrState();
-  chrome.tabs.sendMessage(tabId, { type: 'ASR_STATE', capturing: true, sourceLang, targetLangs }, { frameId: 0 }).catch(() => {});
-  return { ok: true };
 }
 
 async function stopAsr() {
-  try { await sendToOffscreen({ type: 'ASR_STOP' }); } catch (_) {}
+  const sessionId = asrState.sessionId || null;
+  try { await sendToOffscreen({ type: 'ASR_STOP' }); } catch (e) {
+    obs.log('ext_capture', 'skip', { session_id: sessionId, error_type: 'process', error_message: 'ASR_STOP not delivered: ' + (e.message || e) });
+  }
   const tabId = asrState.tabId;
-  Object.assign(asrState, { tabId: null, capturing: false });
+  Object.assign(asrState, { tabId: null, capturing: false, sessionId: null });
   await saveAsrState();
-  if (tabId) chrome.tabs.sendMessage(tabId, { type: 'ASR_STATE', capturing: false }, { frameId: 0 }).catch(() => {});
+  if (tabId) chrome.tabs.sendMessage(tabId, { type: 'ASR_STATE', capturing: false }, { frameId: 0 })
+    .catch((e) => logRelayFail('ext_relay', e, { session_id: sessionId, msg_type: 'ASR_STATE' }));
   try {
     if (chrome.offscreen.hasDocument && await chrome.offscreen.hasDocument()) await chrome.offscreen.closeDocument();
-  } catch (_) {}
+  } catch (e) {
+    obs.log('ext_capture', 'skip', { session_id: sessionId, error_type: 'process', error_message: 'closeDocument: ' + (e.message || e) });
+  }
+  obs.log('ext_capture', 'success', { session_id: sessionId, action: 'stop', tab_id: tabId });
   return { ok: true };
 }
 
@@ -234,7 +284,7 @@ chrome.commands.onCommand.addListener(async (command) => {
     try {
       if (asrState.capturing) await stopAsr(); else await startAsr(tab.id);
     } catch (e) {
-      console.error('Live captions toggle failed:', e);
+      console.error('Live captions toggle failed:', e);  // startAsr already logged ext_capture fail
     }
     return;
   }
@@ -242,6 +292,7 @@ chrome.commands.onCommand.addListener(async (command) => {
     await chrome.tabs.sendMessage(tab.id, { type: 'COMMAND', command }, { frameId: 0 });
   } catch (error) {
     console.error('Error sending command:', error);
+    obs.log('ext_relay', 'fail', { error_type: 'process', error_message: error.message || String(error), msg_type: 'COMMAND', command });
   }
 });
 
@@ -263,8 +314,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const { settings: merged } = migrateSettings({ ...current, ...message.settings });
         await chrome.storage.local.set({ settings: merged });
         broadcastToTabs({ type: 'SETTINGS_UPDATED', settings: merged });
+        obs.setEndpointFromWs(merged.serverUrl);
         if (asrState.capturing) {
-          sendToOffscreen({ type: 'ASR_CONFIG', targetLangs: merged.targetLanguages, sourceLang: merged.asrSourceLang, translationEngine: merged.translationEngine, cloudKeys: merged.cloudKeys }).catch(() => {});
+          sendToOffscreen({ type: 'ASR_CONFIG', targetLangs: merged.targetLanguages, sourceLang: merged.asrSourceLang, translationEngine: merged.translationEngine, cloudKeys: merged.cloudKeys })
+            .catch((e) => obs.log('ext_relay', 'fail', { session_id: asrState.sessionId, error_type: 'process', error_message: e.message || String(e), msg_type: 'ASR_CONFIG' }));
         }
         sendResponse({ success: true, settings: merged });
       })();
@@ -293,7 +346,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     // ---- live captions ----
     case 'ASR_START': {
       const tabId = message.tabId || sender.tab?.id;
-      startAsr(tabId, message).then(sendResponse).catch(e => sendResponse({ ok: false, error: e.message || String(e) }));
+      startAsr(tabId, message).then(sendResponse).catch(e => sendResponse({ ok: false, error: e.message || String(e) }));  // failure logged in startAsr
       return true;
     }
     case 'ASR_STOP':
@@ -307,7 +360,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       (async () => {
         asrState.sourceLang = message.sourceLang;
         await saveAsrState();
-        if (asrState.capturing) await sendToOffscreen({ type: 'ASR_CONFIG', sourceLang: message.sourceLang }).catch(() => {});
+        if (asrState.capturing) await sendToOffscreen({ type: 'ASR_CONFIG', sourceLang: message.sourceLang })
+          .catch((e) => obs.log('ext_relay', 'fail', { session_id: asrState.sessionId, error_type: 'process', error_message: e.message || String(e), msg_type: 'ASR_CONFIG' }));
         sendResponse({ ok: true });
       })();
       return true;
@@ -315,9 +369,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       // from the offscreen document -> the captured tab's top frame
       const tabId = message.tabId || asrState.tabId;
       if (message.event && message.event.type === 'status') asrState.lastStatus = message.event;
-      if (tabId) chrome.tabs.sendMessage(tabId, { type: 'ASR_CAPTION', event: message.event }, { frameId: 0 }).catch(() => {});
+      if (tabId) {
+        chrome.tabs.sendMessage(tabId, { type: 'ASR_CAPTION', event: message.event }, { frameId: 0 })
+          .catch((e) => logRelayFail('ext_relay', e, { session_id: asrState.sessionId, msg_type: message.event && message.event.type, hop: 'sw->tab' }));
+      } else {
+        logRelayFail('ext_relay', new Error('no captured tab id; caption event dropped'), { session_id: asrState.sessionId, hop: 'sw->tab' });
+      }
       return false;
     }
+    case 'OBS_BATCH':
+      // log records from content scripts; posted to the backend with ours
+      obs.ingest(message.events);
+      return false;
     case 'TRANSLATOR_PREPARE':
       (async () => {
         await ensureOffscreen();

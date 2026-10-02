@@ -14,7 +14,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
@@ -26,6 +26,7 @@ from .translation import get_pipeline, warmup_pipeline
 from .cache import get_translation_memory, get_translation_cache
 from .websocket_handler import websocket_endpoint, manager, format_result, apply_cloud_keys
 from . import asr as asr_pkg
+from . import obs
 
 logging.basicConfig(
     level=logging.DEBUG if settings.server.debug else logging.INFO,
@@ -41,23 +42,94 @@ async def lifespan(app: FastAPI):
     global _start_time
     _start_time = time.time()
     logger.info("Starting subtitle translator backend (device=%s)...", settings.translation.device)
+    obs.log("startup", "start", component="backend", device=settings.translation.device, log_file=str(obs.log_path()))
+    _log_optional_deps()
+    t0 = time.perf_counter()
     try:
         await warmup_pipeline()
     except Exception as e:
         logger.error("MT warmup failed: %s", e)
+        obs.log_exc("startup", e, component="mt_warmup", degraded="server starts without MT warmup")
     try:
         await asyncio.get_running_loop().run_in_executor(None, asr_pkg.warmup_asr)
     except Exception as e:
         logger.error("ASR warmup failed: %s", e)
+        obs.log_exc("startup", e, component="asr_warmup", degraded="server starts without ASR warmup")
     logger.info("Warmup complete")
+    obs.log("startup", "success", duration_ms=(time.perf_counter() - t0) * 1000, component="backend",
+            mt_engines=list((await get_pipeline()).base_translator.engines.keys()))
     yield
     logger.info("Shutting down...")
+    obs.log("shutdown", "start", component="backend", uptime_s=round(time.time() - _start_time, 1))
     tm = await get_translation_memory()
     await tm.close()
 
 
+def _log_optional_deps() -> None:
+    """Record which optional modules import in this venv (ollama is required in
+    practice because translation/__init__ imports post_editor; llama_cpp is only
+    used by scripts/spike_hymt.py)."""
+    import importlib.util
+
+    for mod in ("ollama", "llama_cpp", "ctranslate2", "sherpa_onnx", "torch", "huggingface_hub"):
+        try:
+            found = importlib.util.find_spec(mod) is not None
+        except Exception:
+            found = False
+        if found:
+            obs.log("dependency", "success", module=mod)
+        else:
+            obs.log("dependency", "skip", error_type="process", error_message=f"module {mod!r} not installed", module=mod)
+
+
+class ObsMiddleware:
+    """Sets the session ContextVar from X-Session-Id and logs every HTTP request
+    as stage 'http' (except POST /obs, which logs its own rejects)."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            return await self.app(scope, receive, send)
+        sid = None
+        for k, v in scope.get("headers") or []:
+            if k == b"x-session-id":
+                sid = v.decode("latin-1")[:64]
+                break
+        token = obs.session_id_var.set(sid)
+        status: Dict[str, int] = {}
+
+        async def send_wrap(message):
+            if message["type"] == "http.response.start":
+                status["code"] = message["status"]
+            await send(message)
+
+        path, method = scope.get("path", ""), scope.get("method", "")
+        t0 = time.perf_counter()
+        try:
+            try:
+                await self.app(scope, receive, send_wrap)
+            except Exception as e:
+                obs.log_exc("http", e, duration_ms=(time.perf_counter() - t0) * 1000, method=method, path=path)
+                raise
+            if path == "/obs":
+                return
+            code = status.get("code", 0)
+            ms = (time.perf_counter() - t0) * 1000
+            if code >= 400:
+                obs.log("http", "fail", duration_ms=ms, error_type="input_invalid" if code < 500 else "unknown",
+                        error_message=f"HTTP {code}", method=method, path=path, status=code)
+            else:
+                obs.log("http", "success", duration_ms=ms, method=method, path=path, status=code)
+        finally:
+            # reset only after the line above is written, so it carries the session
+            obs.session_id_var.reset(token)
+
+
 app = FastAPI(title="Subtitle Translator", description="Real-time local subtitle transcription and translation", version="2.0.0", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+app.add_middleware(ObsMiddleware)
 
 
 # ============================================================================
@@ -102,9 +174,13 @@ async def ws_asr(websocket: WebSocket):
       {type:'error', error}
       {type:'pong'}
     """
+    sid = (websocket.query_params.get("session_id") or "")[:64] or obs.new_session_id()
+    obs.session_id_var.set(sid)  # every task created below inherits it
+    conn_t0 = time.perf_counter()
     await websocket.accept()
     engines = asr_pkg.get_engines()
     if not engines:
+        obs.log("ws_connection", "fail", error_type="process", error_message="no ASR engine available; closing 4000", path="/ws/asr")
         await websocket.send_text(orjson.dumps({"type": "error", "error": "No ASR engine available. Install sherpa-onnx (pip install sherpa-onnx)."}).decode())
         await websocket.close(code=4000)
         return
@@ -114,15 +190,31 @@ async def ws_asr(websocket: WebSocket):
     target_langs = _parse_query_list(q.get("target_langs"), settings.translation.target_languages)
     engine = q.get("engine", "auto")
 
-    session = asr_pkg.create_session(source_lang=source_lang, target_langs=target_langs, engine=engine)
+    try:
+        session = asr_pkg.create_session(source_lang=source_lang, target_langs=target_langs, engine=engine)
+    except Exception as e:
+        obs.log_exc("ws_connection", e, path="/ws/asr", source_lang=source_lang, phase="create_session")
+        raise
     pipeline = await get_pipeline()
     logger.info("ASR WebSocket connected (source=%s targets=%s engine=%s)", source_lang, target_langs, engine)
+    obs.log("ws_connection", "start", path="/ws/asr", source_lang=source_lang, target_langs=target_langs, engine=engine,
+            session_id_from="client" if q.get("session_id") else "backend")
+    recv_summary = obs.Summary("ws_receive", path="/ws/asr")
+    asr_summary = obs.Summary("asr_chunk")
 
     send_lock = asyncio.Lock()
 
     async def send(msg: Dict[str, Any]) -> None:
-        async with send_lock:
-            await websocket.send_text(orjson.dumps(msg).decode("utf-8"))
+        mtype = msg.get("type")
+        try:
+            async with send_lock:
+                await websocket.send_text(orjson.dumps(msg).decode("utf-8"))
+        except Exception as e:
+            obs.log_exc("ws_reply", e, api="process", path="/ws/asr", msg_type=mtype, utterance_id=msg.get("utterance_id"))
+            raise
+        if mtype in ("final", "translation", "revision", "error", "ready", "reset", "lid"):
+            obs.log("ws_reply", "success", path="/ws/asr", msg_type=mtype, utterance_id=msg.get("utterance_id"),
+                    targets=list((msg.get("translations") or {}).keys()) or None)
 
     await send({"type": "ready", "status": {**session.status(), "engines": list(engines.keys())}})
     for m in session.startup_messages():
@@ -146,6 +238,8 @@ async def ws_asr(websocket: WebSocket):
             try:
                 result = await pipeline.translate_cue(cue, [target], skip_post_edit=True)
             except Exception as e:
+                obs.log_exc("translate", e, path="/ws/asr", utterance_id=msg["utterance_id"], target=target,
+                            degraded="error message sent instead of a translation")
                 await send({"type": "error", "error": f"translation failed ({target}): {e}"})
                 return
             results.append(result)
@@ -180,39 +274,68 @@ async def ws_asr(websocket: WebSocket):
                     })
             except Exception as e:  # pragma: no cover
                 logger.debug("refine failed: %s", e)
+                obs.log_exc("refine", e, path="/ws/asr", utterance_id=msg["utterance_id"],
+                            degraded="refine error logged at DEBUG only; fast translation stays")
 
     def _handle_events(msgs: List[Dict[str, Any]]) -> List[asyncio.Task]:
         tasks = []
         for m in msgs:
+            if m.get("type") == "final":
+                obs.log("segment", "success" if m.get("text") else "skip", utterance_id=m.get("utterance_id"),
+                        lang=m.get("lang"), audio_s=round((m.get("t1") or 0) - (m.get("t0") or 0), 2),
+                        text_len=len(m.get("text") or ""), confirmed=m.get("confirmed"))
             tasks.append(asyncio.create_task(send(m)))
             if m.get("type") == "final" and m.get("text"):
                 tasks.append(asyncio.create_task(translate_final(m)))
         return tasks
 
     loop = asyncio.get_running_loop()
+    close_code: Optional[int] = None
     try:
         while True:
             data = await websocket.receive()
             if data.get("type") == "websocket.disconnect":
+                close_code = data.get("code")
                 break
             if data.get("bytes") is not None:
                 raw: bytes = data["bytes"]
                 capture_ts = None
+                if not raw:
+                    obs.log("ws_receive", "skip", error_type="input_invalid", error_message="empty binary frame", path="/ws/asr")
+                elif len(raw) % 2:
+                    obs.log("asr_chunk", "fail", error_type="input_invalid", path="/ws/asr", bytes=len(raw),
+                            error_message="odd byte count; last byte dropped by pcm16_to_float32, frame still decoded")
                 # optional 8-byte float64 header carrying the extension's audio clock
                 if len(raw) >= 8 and (len(raw) - 8) % 2 == 0 and raw[:1] == b"\x00":
                     pass  # reserved; keep raw PCM path simple
                 # feed() is CPU work (~10 ms); run in the default executor so
                 # sends/translations interleave.
-                msgs = await loop.run_in_executor(None, session.feed, raw, capture_ts)
+                f0 = time.perf_counter()
+                try:
+                    msgs = await loop.run_in_executor(None, obs.run_in_context(session.feed, raw, capture_ts))
+                except Exception as e:
+                    obs.log_exc("asr_chunk", e, api="process", duration_ms=(time.perf_counter() - f0) * 1000,
+                                bytes=len(raw), lang=session.lang)
+                    raise
+                feed_ms = (time.perf_counter() - f0) * 1000
+                recv_summary.add(feed_ms, bytes=len(raw))
+                asr_summary.add(feed_ms, events=len(msgs) if msgs else 0)
                 if msgs:
                     _handle_events(msgs)
             elif data.get("text") is not None:
                 try:
                     msg = orjson.loads(data["text"])
-                except Exception:
+                except Exception as e:
+                    obs.log_exc("ws_receive", e, path="/ws/asr", kind="text", error_type="parse")
                     await send({"type": "error", "error": "invalid JSON"})
                     continue
                 mtype = msg.get("type")
+                if mtype in ("config", "stop", "ping"):
+                    obs.log("ws_receive", "success", path="/ws/asr", kind="text", msg_type=mtype,
+                            keys=sorted(k for k in msg.keys() if k != "cloud_keys") + (["cloud_keys"] if "cloud_keys" in msg else []))
+                else:
+                    obs.log("ws_receive", "skip", error_type="input_invalid", path="/ws/asr", kind="text", msg_type=str(mtype)[:32],
+                            error_message="unknown message type ignored without reply")
                 if mtype == "config":
                     if "target_langs" in msg and msg["target_langs"]:
                         session.config.target_langs = list(msg["target_langs"])
@@ -227,13 +350,25 @@ async def ws_asr(websocket: WebSocket):
                     await send({"type": "stopped", "status": session.status()})
                 elif mtype == "ping":
                     await send({"type": "pong", "server_ts": time.time()})
-    except WebSocketDisconnect:
+    except WebSocketDisconnect as e:
         logger.info("ASR WebSocket disconnected")
+        close_code = e.code
     except Exception as e:
         logger.error("ASR WebSocket error: %s", e, exc_info=settings.server.debug)
+        obs.log_exc("ws_connection", e, path="/ws/asr", duration_ms=(time.perf_counter() - conn_t0) * 1000,
+                    degraded="connection loop ended by exception")
     finally:
         session.close()
         logger.info("ASR WebSocket closed: %s", session.status())
+        recv_summary.flush()
+        asr_summary.flush()
+        st = session.status()
+        if close_code is not None:
+            normal = close_code in (1000, 1001, 1005)
+            obs.log("ws_connection", "success" if normal else "fail", duration_ms=(time.perf_counter() - conn_t0) * 1000,
+                    error_type=None if normal else "process",
+                    error_message=None if normal else f"client closed with code {close_code}",
+                    path="/ws/asr", close_code=close_code, frames=asr_summary.total, **st)
 
 
 # ============================================================================
@@ -302,7 +437,8 @@ async def health_check_json():
 
             async with httpx.AsyncClient(timeout=1.0) as c:
                 ollama_available = (await c.get(f"{settings.ollama.base_url}/api/tags")).status_code == 200
-        except Exception:
+        except Exception as e:
+            obs.log_exc("health_probe", e, target="ollama", degraded="reported as ollama_available=false")
             pass
     return HealthResponse(
         status="ok",
@@ -439,6 +575,27 @@ async def clear_cache():
 @app.get("/asr/status")
 async def get_asr_status():
     return asr_pkg.asr_status()
+
+
+@app.post("/obs")
+async def ingest_obs(request: Request):
+    """Extension log records (extension/obs.js). Body: {events:[...]} or [...].
+    Fire-and-forget for the client; appended to this run's log with layer='extension'."""
+    header_sid = request.headers.get("x-session-id")
+    try:
+        body = orjson.loads(await request.body())
+    except Exception as e:
+        obs.log_exc("obs_ingest", e, error_type="parse")
+        return JSONResponse(status_code=400, content={"accepted": 0, "error": "invalid JSON"})
+    events = body.get("events") if isinstance(body, dict) else body
+    if not isinstance(events, list):
+        obs.log("obs_ingest", "fail", error_type="input_invalid", error_message="body has no events list")
+        return JSONResponse(status_code=400, content={"accepted": 0, "error": "expected {events:[...]}"})
+    accepted, rejected = obs.ingest_extension(events[:1000], header_sid)
+    if rejected:
+        obs.log("obs_ingest", "fail", error_type="input_invalid", error_message=f"{rejected} malformed record(s) dropped",
+                accepted=accepted, rejected=rejected)
+    return {"accepted": accepted, "rejected": rejected}
 
 
 @app.get("/tm/export")

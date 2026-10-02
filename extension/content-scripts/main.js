@@ -35,12 +35,26 @@
     lastUtteranceId: null,
     hideTimer: null,
     latencySamples: [],
+    sessionId: null,  // obs session of the offscreen /ws/asr connection
   };
 
   // Components (loaded from other scripts)
   const ws = window.subtitleWS;
   const detector = window.subtitleDetector;
   const overlay = window.subtitleOverlay;
+
+  // Structured log. Only the top frame owns a session (one per tab page load);
+  // records are relayed to the service worker, which posts them to /obs.
+  const obs = window.STObs || { log() {}, init() {}, setSession() {}, newSessionId() { return null; } };
+  obs.init({ context: IS_TOP ? 'content' : 'content-frame', relay: true });
+  if (IS_TOP) obs.setSession(obs.newSessionId('cs'));
+
+  function reqErrorType(error) {
+    const m = (error && error.message) || '';
+    if (/timeout/i.test(m)) return 'timeout';
+    if (/Connection closed/i.test(m)) return 'process';
+    return 'unknown';
+  }
 
   async function init() {
     if (!IS_TOP) {
@@ -84,12 +98,13 @@
       // Ask background whether live captions are already running for this tab
       chrome.runtime.sendMessage({ type: 'ASR_STATUS' }, (st) => {
         void chrome.runtime.lastError;
-        if (st && st.capturing) setLiveState(true, st.sourceLang);
+        if (st && st.capturing) { live.sessionId = st.sessionId || null; setLiveState(true, st.sourceLang); }
       });
 
       console.log('[SubTrans] Initialized, connected:', connected);
     } catch (error) {
       console.error('[SubTrans] Initialization error:', error);
+      obs.log('ext_init', 'fail', { error_type: 'unknown', error_message: error.message || String(error) });
     }
   }
 
@@ -180,7 +195,10 @@
 
     ws.onConnected(() => {
       connected = true;
-      ws.updateConfig(backendConfig()).catch(err => console.error('[SubTrans] Config update failed:', err));
+      ws.updateConfig(backendConfig()).catch(err => {
+        console.error('[SubTrans] Config update failed:', err);
+        obs.log('ext_ws_request', 'fail', { msg_type: 'config', error_type: reqErrorType(err), error_message: err.message || String(err) });
+      });
     });
     ws.onDisconnected(() => { connected = false; });
     ws.onError((error) => console.error('[SubTrans] WebSocket error:', error));
@@ -218,17 +236,23 @@
 
   async function handleNewCue(cue) {
     if (!enabled) return;
-    if (live.active) return; // live captions own the overlay while running
+    if (live.active) {
+      obs.log('ext_caption_detect', 'skip', { cue_id: cue.cueId, error_message: 'live captions own the overlay; cue ignored' });
+      return; // live captions own the overlay while running
+    }
+    obs.log('ext_caption_detect', 'success', { cue_id: cue.cueId, text_len: (cue.text || '').length, method: detector ? detector.getMethod() : null });
 
     const cached = translationCache.get(cue.text);
     if (cached) {
       overlay.showTranslation(cue.cueId, cue.text, cached);
+      obs.log('ext_render', 'success', { cue_id: cue.cueId, from: 'client_cache', targets: Object.keys(cached || {}) });
       return;
     }
     if (pendingTranslations.has(cue.cueId)) return;
 
     if (!connected) {
       overlay.showTranslation(cue.cueId, cue.text, {});
+      obs.log('ext_cue_request', 'skip', { cue_id: cue.cueId, error_type: 'process', error_message: 'backend not connected; source text shown untranslated' });
       return;
     }
 
@@ -236,12 +260,15 @@
     cueTextById.set(cue.cueId, cue.text);
     if (cueTextById.size > 500) cueTextById.delete(cueTextById.keys().next().value);
 
+    const reqT0 = performance.now();
     try {
       const sentAt = performance.now();
       const result = await ws.translateCue(cue, {
         targetLanguages: targetLanguages(),
         skipPostEdit: !settings.refinerEnabled,
       });
+      obs.log('ext_cue_request', 'success', { duration_ms: performance.now() - reqT0, cue_id: cue.cueId, server_cue_id: result.cue_id,
+        server_ms: result.processing_time_ms, from_cache: result.from_cache, server_error: result.notes && result.notes.error ? String(result.notes.error).slice(0, 200) : undefined });
       if (result.cue_id && result.cue_id !== cue.cueId) cueTextById.set(result.cue_id, cue.text);
       translationCache.set(cue.text, result.translations);
       if (translationCache.size > 500) translationCache.delete(translationCache.keys().next().value);
@@ -251,8 +278,10 @@
         overlay.currentCues.set(result.cue_id, overlay.currentCues.get(cue.cueId));
       }
       recordLatency(performance.now() - sentAt);
+      obs.log('ext_render', 'success', { duration_ms: performance.now() - reqT0, cue_id: cue.cueId, from: 'backend', targets: Object.keys(result.translations || {}) });
     } catch (error) {
       console.error('[SubTrans] Translation failed:', error);
+      obs.log('ext_cue_request', 'fail', { duration_ms: performance.now() - reqT0, cue_id: cue.cueId, error_type: reqErrorType(error), error_message: error.message || String(error), degraded: 'source text shown untranslated' });
       overlay.showTranslation(cue.cueId, cue.text, {});
     } finally {
       pendingTranslations.delete(cue.cueId);
@@ -279,8 +308,10 @@
         updated[lang] = { lines: [text], single_line: text, display_text: text };
       }
       translationCache.set(correction.sourceText, updated);
+      obs.log('ext_ws_request', 'success', { msg_type: 'correction', cue_id: correction.cueId });
     } catch (error) {
       console.error('[SubTrans] Correction submission failed:', error);
+      obs.log('ext_ws_request', 'fail', { msg_type: 'correction', cue_id: correction.cueId, error_type: reqErrorType(error), error_message: error.message || String(error) });
     }
   }
 
@@ -331,6 +362,8 @@
         }
         overlay.showTranslation(cueId, ev.text, {}, { sourceLang: ev.lang });
         if (ev.server_ts) recordLatency((Date.now() / 1000 - ev.server_ts) * 1000, 'final');
+        obs.log('ext_render', 'success', { kind: 'final', utterance_id: ev.utterance_id, lang: ev.lang, text_len: (ev.text || '').length,
+          session_id: live.sessionId || undefined, server_to_glass_ms: ev.server_ts ? Math.round(Date.now() - ev.server_ts * 1000) : null });
         scheduleLiveHide(cueId, 8000);
         break;
       }
@@ -342,6 +375,9 @@
         const merged = Object.assign({}, existing ? existing.translations : {}, ev.translations || {});
         overlay.showTranslation(cueId, existing ? existing.original : ev.source_text, merged, { revised: ev.revision > 1 || !!existing, sourceLang: ev.source_lang });
         if (ev.mt_ms !== undefined && !(ev.targets_pending > 0)) recordLatency(ev.mt_ms, 'mt');
+        obs.log('ext_render', 'success', { kind: ev.type, utterance_id: ev.utterance_id, revision: ev.revision, engine: ev.engine || 'backend',
+          targets: Object.keys(ev.translations || {}), mt_ms: ev.mt_ms, session_id: live.sessionId || undefined,
+          server_to_glass_ms: ev.server_ts ? Math.round(Date.now() - ev.server_ts * 1000) : null, cue_on_screen: !!existing });
         scheduleLiveHide(cueId, 8000);
         break;
       }
@@ -362,6 +398,7 @@
         break;
       case 'error':
         overlay.showNotice('Live captions error: ' + (ev.error || 'unknown'), 'warn', 8000);
+        obs.log('ext_render', 'fail', { kind: 'error_notice', session_id: live.sessionId || undefined, error_type: 'process', error_message: String(ev.error || 'unknown').slice(0, 300) });
         break;
       case 'ready':
       case 'pong':
@@ -445,6 +482,7 @@
 
       // ---- live captions ----
       case 'ASR_STATE':
+        live.sessionId = message.capturing ? (message.sessionId || null) : null;
         setLiveState(!!message.capturing, message.sourceLang);
         sendResponse({ success: true });
         break;
@@ -512,7 +550,10 @@
   function applySettings() {
     applyOverlaySettings();
     if (connected) {
-      ws.updateConfig(backendConfig()).catch(err => console.error('[SubTrans] Config update failed:', err));
+      ws.updateConfig(backendConfig()).catch(err => {
+        console.error('[SubTrans] Config update failed:', err);
+        obs.log('ext_ws_request', 'fail', { msg_type: 'config', error_type: reqErrorType(err), error_message: err.message || String(err) });
+      });
     }
     if (settings.serverUrl && settings.serverUrl !== ws.serverUrl) {
       ws.disconnect();

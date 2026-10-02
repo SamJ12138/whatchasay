@@ -28,8 +28,12 @@ from pathlib import Path
 from typing import Dict, List, Optional, Protocol, Tuple
 
 from ..config import settings, get_opus_route
+from .. import obs
 
 logger = logging.getLogger(__name__)
+
+# llama-server is a local child process: its HTTP errors are process failures.
+_ENGINE_API = {"hymt": "process", "opus-ct2": "process", "cloud": "external_api"}
 
 try:
     import ctranslate2  # type: ignore
@@ -154,10 +158,14 @@ class OpusCT2Engine:
             if not route:
                 continue
             for _, _, hf_name in route:
+                t0 = time.perf_counter()
                 try:
                     self._ensure(hf_name)
+                    obs.log("startup", "success", duration_ms=(time.perf_counter() - t0) * 1000, component="opus_model", model=hf_name)
                 except Exception as e:
                     logger.warning("OPUS warmup failed for %s: %s", hf_name, e)
+                    obs.log_exc("startup", e, api="process", duration_ms=(time.perf_counter() - t0) * 1000,
+                                component="opus_model", model=hf_name, degraded="model loads lazily on first use")
 
     def status(self) -> dict:
         return {"engine": self.name, "available": CT2_AVAILABLE, "loaded": list(self._models.keys()), "device": self.device}
@@ -199,15 +207,22 @@ class BaseTranslator:
                         self.engines["hymt"] = HyMTEngine()
                     else:
                         logger.info("HY-MT engine skipped (llama-cpp: %s, device: %s)", LLAMA_AVAILABLE, self.device)
+                        obs.log("startup", "skip", error_type="process", component="mt_engine", engine="hymt",
+                                error_message=f"HY-MT skipped (llama-server available: {LLAMA_AVAILABLE}, device: {self.device})")
                 elif name == "cloud":
                     from .cloud_translator import make_cloud_engine
 
                     eng = make_cloud_engine()
                     if eng is not None:
                         self.engines["cloud"] = eng
+                elif name == "opus" and not CT2_AVAILABLE:
+                    obs.log("startup", "skip", error_type="process", component="mt_engine", engine="opus",
+                            error_message="ctranslate2 not importable")
             except Exception as e:
                 logger.warning("MT engine %s unavailable: %s", name, e)
+                obs.log_exc("startup", e, api="process", component="mt_engine", engine=name, degraded="engine not registered")
         logger.info("MT engines: %s", list(self.engines.keys()))
+        obs.log("startup", "success", component="mt_engines", engines=list(self.engines.keys()), order=list(order))
 
     def add_engine(self, name: str, engine: MTEngine) -> None:
         self.engines[name] = engine
@@ -243,23 +258,36 @@ class BaseTranslator:
             return []
         if source_lang == target_lang:
             return list(texts)
+        ctx = dict(src=source_lang, tgt=target_lang, n=len(texts), chars=sum(len(t) for t in texts))
         engine = self.pick(source_lang, target_lang, prefer)
         if engine is None:
             logger.warning("No translation engine for %s->%s", source_lang, target_lang)
+            obs.log("mt_call", "skip", error_type="input_invalid", engine=None,
+                    error_message=f"no engine supports {source_lang}->{target_lang}",
+                    degraded="input text returned as the translation", **ctx)
             return list(texts)
 
         lock = self._engine_locks.setdefault(engine.name, self._make_gate(engine))
 
         def _run():
+            w0 = time.perf_counter()
             with lock:
+                wait_ms = (time.perf_counter() - w0) * 1000
                 t0 = time.time()
-                out = engine.translate_batch_sync(list(texts), source_lang, target_lang)
+                with obs.span("mt_call", api=_ENGINE_API.get(engine.name, "unknown"), engine=engine.name,
+                              gate_wait_ms=round(wait_ms, 1), **ctx) as sp:
+                    out = engine.translate_batch_sync(list(texts), source_lang, target_lang)
+                    empty = sum(1 for o in out if not (o or "").strip())
+                    same = sum(1 for i, o in zip(texts, out) if (o or "").strip() == i.strip())
+                    sp.set(empty_out=empty, equals_source=same)
+                    if empty:
+                        sp.fail("parse", f"{empty} empty translation(s) returned by {engine.name}; passed on as-is")
                 logger.debug("MT %s %s->%s x%d in %.0f ms", engine.name, source_lang, target_lang, len(texts), (time.time() - t0) * 1000)
                 return out
 
         loop = asyncio.get_running_loop()
         try:
-            return await loop.run_in_executor(None, _run)
+            return await loop.run_in_executor(None, obs.run_in_context(_run))
         except Exception as e:
             logger.error("MT engine %s failed for %s->%s: %s", engine.name, source_lang, target_lang, e)
             # Try the next engine once before giving up
@@ -270,8 +298,17 @@ class BaseTranslator:
                     fallback = cand
                     break
             if fallback is None:
+                obs.log("mt_call", "skip", error_type=obs.classify(e, _ENGINE_API.get(engine.name, "unknown")),
+                        engine=None, failed_engine=engine.name, error_message=f"{engine.name} failed and no fallback engine",
+                        degraded="input text returned as the translation", **ctx)
                 return list(texts)
-            return await loop.run_in_executor(None, lambda: fallback.translate_batch_sync(list(texts), source_lang, target_lang))
+
+            def _fallback():
+                with obs.span("mt_call", api=_ENGINE_API.get(fallback.name, "unknown"), engine=fallback.name,
+                              fallback_for=engine.name, **ctx):
+                    return fallback.translate_batch_sync(list(texts), source_lang, target_lang)
+
+            return await loop.run_in_executor(None, obs.run_in_context(_fallback))
 
     def status(self) -> dict:
         return {name: eng.status() for name, eng in self.engines.items()}

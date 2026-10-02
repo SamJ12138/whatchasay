@@ -112,3 +112,22 @@ Browser: load `extension/` unpacked → YouTube video without captions → popup
 - Tests rewritten (old suite was 49/94 red): 53 tests incl. fake-engine pipeline, LID-switch logic, real Zipformer streaming, live integration.
 - Docs: README, docs/SETUP.md, launchers (no Ollama, GPU wheel install), this DEVLOG.
 - Follow-up: added CPU en→bn route (community OPUS model) so Bengali output does not require the GPU; zh→bn pivots through English on CPU.
+
+### 2026-10-01 — git baseline + observability (Phase 1: logging only, no behaviour change)
+- Project is now a git repo (`main`). `.gitignore` excludes venv, models, llama.cpp binaries, `backend/data/` (real TM
+  data), logs, archives; `scripts/check_large_files.py` guards against >10 MB / data files. Baseline commit `fffcdda`.
+  What is left out and how to get it: `docs/excluded-from-git.md`.
+- `backend/app/obs.py`: one JSON line per event in `backend/logs/run_<run_id>.jsonl` (ts, run_id, session_id, layer,
+  stage, event, duration_ms, error_type, error_message, context). Session id comes from the extension (`session_id`
+  WS query param, `X-Session-Id` header) and is carried by a ContextVar into executor threads.
+- Instrumented backend (startup, http, ws_connection/receive/reply, asr_chunk + ws_receive summaries per 100 frames,
+  lid, segment, micro_batch, translate, lang_detect, tm_lookup/store, mt_call, refine, config) and the llama-server
+  lifecycle (`translator_process`: spawn/ready/restart with reason/exit code via a watcher thread).
+- `extension/obs.js`: same record shape to `console.debug('[ST-OBS]')`, batched every 2 s to the new `POST /obs`
+  (content scripts relay through the service worker). Wired into background, offscreen, content scripts, popup, options.
+- `backend/scripts/failure_report.py`: stage × error_type, per-stage p50/p95, per-layer and per-session summaries.
+- Stage map: `docs/pipeline-stages.md`. Swallowed/degraded paths, new findings, PROJECT_REPORT corrections:
+  `docs/observations.md` (notably: llama-server crash race → silent OPUS fallback; "It is raining again." detected as
+  Tagalog → untranslated and stored; first llama-server spawn pays 2.5 s of `import torch`).
+- Verified: 49 pass / 5 skip (server down), 54 pass (server up); e2e on the three sample WAVs; caption path in headless
+  Playwright Chromium with the unpacked extension. Tests now write obs logs to `backend/logs/pytest/`.

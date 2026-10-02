@@ -57,14 +57,19 @@ class SubtitleWebSocket {
     }
 
     this.connecting = true;
+    const obs = window.STObs;
+    const t0 = performance.now();
+    let opened = false;
 
     return new Promise((resolve, reject) => {
       try {
         console.log('[WS] Connecting to', this.serverUrl);
-        this.ws = new WebSocket(this.serverUrl);
+        this.ws = new WebSocket(this._urlWithSession(this.serverUrl));
 
         this.ws.onopen = () => {
           console.log('[WS] Connected');
+          opened = true;
+          if (obs) obs.log('ext_ws', 'success', { duration_ms: performance.now() - t0, path: '/ws', attempt: this.reconnectAttempts, queued: this.messageQueue.length });
           this.connected = true;
           this.connecting = false;
           this.reconnectAttempts = 0;
@@ -83,6 +88,13 @@ class SubtitleWebSocket {
 
         this.ws.onclose = (event) => {
           console.log('[WS] Disconnected:', event.code, event.reason);
+          if (obs && opened) {
+            const normal = event.code === 1000 || event.code === 1001 || event.code === 1005;
+            obs.log('ext_ws', normal ? 'success' : 'fail', {
+              action: 'close', path: '/ws', close_code: event.code, pending_rejected: this.pendingRequests.size,
+              error_type: normal ? null : 'process', error_message: normal ? null : 'socket closed with code ' + event.code,
+            });
+          }
           this.connected = false;
           this.connecting = false;
 
@@ -102,6 +114,7 @@ class SubtitleWebSocket {
 
         this.ws.onerror = (error) => {
           console.error('[WS] Error:', error);
+          if (obs) obs.log('ext_ws', 'fail', { duration_ms: performance.now() - t0, path: '/ws', opened, attempt: this.reconnectAttempts, error_type: 'process', error_message: opened ? 'socket error' : 'cannot connect to ' + this.serverUrl });
           this.connecting = false;
 
           if (this.onErrorCallback) {
@@ -117,10 +130,18 @@ class SubtitleWebSocket {
 
       } catch (error) {
         console.error('[WS] Connection error:', error);
+        if (obs) obs.log('ext_ws', 'fail', { path: '/ws', error_type: 'input_invalid', error_message: 'WebSocket constructor: ' + (error.message || error) });
         this.connecting = false;
         reject(error);
       }
     });
+  }
+
+  /** Append the tab's obs session id to the handshake (browsers cannot set WS headers). */
+  _urlWithSession(url) {
+    const sid = window.STObs && window.STObs.getSession();
+    if (!sid) return url;
+    return url + (url.includes('?') ? '&' : '?') + 'session_id=' + encodeURIComponent(sid);
   }
 
   /**
@@ -317,13 +338,16 @@ class SubtitleWebSocket {
    * Send a message through WebSocket.
    */
   _sendMessage(message) {
+    const obs = window.STObs;
     if (!this.connected) {
       // Queue message for later
       if (this.messageQueue.length < this.maxQueueSize) {
         this.messageQueue.push(message);
         console.log('[WS] Message queued (offline)');
+        if (obs) obs.log('ext_ws_send', 'skip', { error_type: 'process', error_message: 'offline; message queued', msg_type: message.type, queue: this.messageQueue.length });
       } else {
         console.warn('[WS] Message queue full, dropping message');
+        if (obs) obs.log('ext_ws_send', 'fail', { error_type: 'process', error_message: 'offline queue full (' + this.maxQueueSize + '); message dropped', msg_type: message.type });
       }
       return;
     }
@@ -333,6 +357,7 @@ class SubtitleWebSocket {
       this.stats.messagesSent++;
     } catch (error) {
       console.error('[WS] Send error:', error);
+      if (obs) obs.log('ext_ws_send', 'fail', { error_type: 'process', error_message: error.message || String(error), msg_type: message.type, requeued: this.messageQueue.length < this.maxQueueSize });
       // Queue for retry
       if (this.messageQueue.length < this.maxQueueSize) {
         this.messageQueue.push(message);
@@ -372,6 +397,7 @@ class SubtitleWebSocket {
 
     } catch (error) {
       console.error('[WS] Message parse error:', error);
+      if (window.STObs) window.STObs.log('ext_ws_receive', 'fail', { error_type: 'parse', error_message: error.message || String(error), path: '/ws' });
     }
   }
 
@@ -391,8 +417,11 @@ class SubtitleWebSocket {
    * Schedule reconnection attempt.
    */
   _scheduleReconnect() {
+    const obs = window.STObs;
     if (this.reconnectAttempts >= this.maxReconnectAttempts) {
       console.log('[WS] Max reconnect attempts reached');
+      // disconnect() also sets attempts to max; only a real give-up is a failure
+      if (obs && this.ws) obs.log('ext_ws', 'fail', { action: 'give_up', path: '/ws', attempts: this.reconnectAttempts, error_type: 'process', error_message: 'max reconnect attempts reached; no further retries on this page' });
       return;
     }
 
@@ -400,11 +429,12 @@ class SubtitleWebSocket {
     const delay = Math.min(this.reconnectDelay * Math.pow(1.5, this.reconnectAttempts - 1), this.maxReconnectDelay);
 
     console.log(`[WS] Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts})`);
+    if (obs) obs.log('ext_ws', 'start', { action: 'reconnect', path: '/ws', attempt: this.reconnectAttempts, delay_ms: delay });
 
     setTimeout(() => {
       if (!this.connected && !this.connecting) {
         this.connect().catch(error => {
-          console.error('[WS] Reconnect failed:', error);
+          console.error('[WS] Reconnect failed:', error);  // logged by onerror
         });
       }
     }, delay);

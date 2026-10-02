@@ -9,6 +9,8 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 # Run from the backend dir so relative data/ paths resolve like the server does.
 os.chdir(ROOT)
+# Keep test-run obs logs apart from real server runs (backend/logs/ is gitignored).
+os.environ.setdefault("SUBTITLE_OBS_DIR", str(ROOT / "logs" / "pytest"))
 
 MODELS_DIR = ROOT / "data" / "models" / "asr"
 

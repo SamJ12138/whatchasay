@@ -39,12 +39,26 @@ const FRAME_MS = 40;
 const SILENCE_RMS = 0.002;
 const SILENCE_WARN_FRAMES = Math.round(10000 / FRAME_MS); // 10 s
 
+const obs = globalThis.STObs;
+obs.init({ context: 'offscreen' });
+// Per-frame stage: log one summary line per 100 frames sent, and per 100 dropped.
+const frameStats = { sent: 0, sentBytes: 0, dropped: 0, relayFails: 0 };
+
 function log(...args) {
   console.log('[Offscreen]', ...args);
 }
 
 function emit(event) {
-  chrome.runtime.sendMessage({ type: 'ASR_EVENT', tabId: state.tabId, event }).catch(() => {});
+  chrome.runtime.sendMessage({ type: 'ASR_EVENT', tabId: state.tabId, event }).catch((e) => {
+    frameStats.relayFails++;
+    if (frameStats.relayFails === 1 || frameStats.relayFails % 100 === 0) {
+      obs.log('ext_relay', 'fail', { error_type: 'process', error_message: e.message || String(e), hop: 'offscreen->sw', msg_type: event && event.type, failures_so_far: frameStats.relayFails });
+    }
+  });
+}
+
+function wsErrorType(msg) {
+  return /timeout/i.test(msg) ? 'timeout' : 'process';
 }
 
 // ---------------------------------------------------------------------------
@@ -64,7 +78,21 @@ async function startCapture(msg) {
   state.silentFrames = 0;
   state.silenceWarned = false;
   state.latencySamples = [];
+  obs.setSession(msg.sessionId || obs.newSessionId('asr-' + msg.tabId));
+  obs.setEndpointFromWs(state.serverUrl);
+  Object.assign(frameStats, { sent: 0, sentBytes: 0, dropped: 0, relayFails: 0 });
+  const t0 = performance.now();
+  let step = 'getUserMedia';
+  try {
+    await startCaptureSteps(msg, (s) => { step = s; });
+  } catch (e) {
+    obs.log('ext_capture', 'fail', { duration_ms: performance.now() - t0, step, error_type: step === 'connectWs' ? wsErrorType(e.message || '') : 'process', error_message: e.message || String(e) });
+    throw e;
+  }
+  obs.log('ext_capture', 'success', { duration_ms: performance.now() - t0, step: 'offscreen', tab_id: state.tabId });
+}
 
+async function startCaptureSteps(msg, setStep) {
   // 1. tab audio stream
   state.stream = await navigator.mediaDevices.getUserMedia({
     audio: {
@@ -77,6 +105,7 @@ async function startCapture(msg) {
   });
 
   // 2. keep the user hearing the tab (capture mutes it otherwise), native rate
+  setStep('audioGraph');
   state.playbackCtx = new AudioContext();
   state.playbackCtx.createMediaStreamSource(state.stream).connect(state.playbackCtx.destination);
 
@@ -92,6 +121,7 @@ async function startCapture(msg) {
   state.captureCtx.createMediaStreamSource(state.stream).connect(state.workletNode);
 
   // 4. backend
+  setStep('connectWs');
   await connectWs(msg.cloudKeys);
   state.capturing = true;
   emit({ type: 'status', capturing: true, connected: true, sourceLang: state.sourceLang, targetLangs: state.targetLangs });
@@ -105,6 +135,7 @@ function onPcmFrame(e) {
     state.silentFrames++;
     if (!state.silenceWarned && state.silentFrames >= SILENCE_WARN_FRAMES) {
       state.silenceWarned = true;
+      obs.log('ext_capture', 'fail', { error_type: 'input_invalid', error_message: 'no audio above RMS ' + SILENCE_RMS + ' for 10 s', warning: 'no-audio' });
       emit({ type: 'status', warning: 'no-audio', message: 'No audio is reaching the capture. Is the video playing? DRM-protected sites (Netflix, Disney+) block tab audio capture.' });
     }
   } else {
@@ -115,25 +146,43 @@ function onPcmFrame(e) {
   if (state.ws && state.ws.readyState === WebSocket.OPEN) {
     state.ws.send(pcm);
     state.framesSent++;
+    frameStats.sent++;
+    frameStats.sentBytes += pcm.byteLength || 0;
+    if (frameStats.sent % 100 === 0) {
+      obs.log('ext_ws_send', 'success', { summary: true, count: 100, total: frameStats.sent, bytes: frameStats.sentBytes, buffered_amount: state.ws.bufferedAmount });
+      frameStats.sentBytes = 0;
+    }
+  } else {
+    // Frame dropped: socket not open (connecting / reconnecting / closed).
+    frameStats.dropped++;
+    if (frameStats.dropped === 1 || frameStats.dropped % 100 === 0) {
+      obs.log('ext_ws_send', 'skip', { error_type: 'process', error_message: 'socket not open; audio frame dropped', dropped_so_far: frameStats.dropped, ws_state: state.ws ? state.ws.readyState : null });
+    }
   }
 }
 
 async function stopCapture() {
   state.capturing = false;
-  try { if (state.ws && state.ws.readyState === WebSocket.OPEN) state.ws.send(JSON.stringify({ type: 'stop' })); } catch (_) {}
+  const errs = [];
+  try { if (state.ws && state.ws.readyState === WebSocket.OPEN) state.ws.send(JSON.stringify({ type: 'stop' })); } catch (e) { errs.push('stop msg: ' + e.message); }
   await new Promise(r => setTimeout(r, 250));
-  try { if (state.ws) state.ws.close(); } catch (_) {}
+  try { if (state.ws) state.ws.close(); } catch (e) { errs.push('ws close: ' + e.message); }
   state.ws = null;
-  try { if (state.workletNode) state.workletNode.disconnect(); } catch (_) {}
+  try { if (state.workletNode) state.workletNode.disconnect(); } catch (e) { errs.push('worklet: ' + e.message); }
   state.workletNode = null;
-  try { if (state.captureCtx) await state.captureCtx.close(); } catch (_) {}
-  try { if (state.playbackCtx) await state.playbackCtx.close(); } catch (_) {}
+  try { if (state.captureCtx) await state.captureCtx.close(); } catch (e) { errs.push('captureCtx: ' + e.message); }
+  try { if (state.playbackCtx) await state.playbackCtx.close(); } catch (e) { errs.push('playbackCtx: ' + e.message); }
   state.captureCtx = null;
   state.playbackCtx = null;
   if (state.stream) state.stream.getTracks().forEach(t => t.stop());
   state.stream = null;
   emit({ type: 'status', capturing: false, connected: false });
   log('capture stopped');
+  obs.log('ext_capture', errs.length ? 'fail' : 'success', {
+    action: 'stop', frames_sent: frameStats.sent, frames_dropped: frameStats.dropped,
+    error_type: errs.length ? 'unknown' : null, error_message: errs.length ? errs.join('; ') : null,
+  });
+  obs.flush();
 }
 
 // ---------------------------------------------------------------------------
@@ -142,36 +191,63 @@ async function stopCapture() {
 
 function connectWs(cloudKeys) {
   return new Promise((resolve, reject) => {
-    const url = `${state.serverUrl}?source_lang=${encodeURIComponent(state.sourceLang)}&target_langs=${encodeURIComponent(state.targetLangs.join(','))}`;
+    const sid = obs.getSession();
+    const url = `${state.serverUrl}?source_lang=${encodeURIComponent(state.sourceLang)}&target_langs=${encodeURIComponent(state.targetLangs.join(','))}` +
+      (sid ? `&session_id=${encodeURIComponent(sid)}` : '');
+    const t0 = performance.now();
     const ws = new WebSocket(url);
     ws.binaryType = 'arraybuffer';
     let opened = false;
+    let settled = false;
     ws.onopen = () => {
       opened = true;
+      settled = true;
+      obs.log('ext_ws', 'success', { duration_ms: performance.now() - t0, path: '/ws/asr' });
       if (cloudKeys && Object.keys(cloudKeys).length) {
         ws.send(JSON.stringify({ type: 'config', cloud_keys: cloudKeys }));
       }
       resolve();
     };
     ws.onerror = (err) => {
+      if (!opened && !settled) {
+        settled = true;
+        obs.log('ext_ws', 'fail', { duration_ms: performance.now() - t0, path: '/ws/asr', error_type: 'process', error_message: 'Cannot connect to the backend at ' + state.serverUrl });
+      }
       if (!opened) reject(new Error('Cannot connect to the backend at ' + state.serverUrl));
     };
     ws.onclose = (ev) => {
+      if (opened) {
+        const normal = ev.code === 1000 || ev.code === 1001 || ev.code === 1005;
+        obs.log('ext_ws', normal ? 'success' : 'fail', { action: 'close', path: '/ws/asr', close_code: ev.code, capturing: state.capturing, error_type: normal ? null : 'process', error_message: normal ? null : 'socket closed with code ' + ev.code });
+      }
       if (state.capturing) {
         emit({ type: 'status', connected: false, warning: 'disconnected', message: `Backend disconnected (${ev.code}).` });
         // retry once after a short delay
-        setTimeout(() => { if (state.capturing) connectWs(cloudKeys).catch(() => {}); }, 1500);
+        obs.log('ext_ws', 'start', { action: 'reconnect', path: '/ws/asr', delay_ms: 1500, after_close_code: ev.code });
+        setTimeout(() => { if (state.capturing) connectWs(cloudKeys).catch(() => {}); }, 1500);  // connect failure logged above
       }
     };
     ws.onmessage = (ev) => handleServerMessage(ev.data);
     state.ws = ws;
-    setTimeout(() => { if (!opened) { try { ws.close(); } catch (_) {} reject(new Error('Backend connection timeout')); } }, 8000);
+    setTimeout(() => {
+      if (!opened) {
+        if (!settled) {
+          settled = true;
+          obs.log('ext_ws', 'fail', { duration_ms: performance.now() - t0, path: '/ws/asr', error_type: 'timeout', error_message: 'Backend connection timeout (8 s)' });
+        }
+        try { ws.close(); } catch (_) {}
+        reject(new Error('Backend connection timeout'));
+      }
+    }, 8000);
   });
 }
 
 async function handleServerMessage(data) {
   let msg;
-  try { msg = JSON.parse(data); } catch (_) { return; }
+  try { msg = JSON.parse(data); } catch (e) {
+    obs.log('ext_ws_receive', 'fail', { error_type: 'parse', error_message: e.message, bytes: data && data.length });
+    return;
+  }
   switch (msg.type) {
     case 'partial':
     case 'lid':
@@ -199,6 +275,7 @@ async function handleServerMessage(data) {
       emit({ ...msg });
       break;
     case 'error':
+      obs.log('ext_ws_receive', 'fail', { error_type: 'process', error_message: 'backend error: ' + msg.error, path: '/ws/asr' });
       emit({ type: 'error', error: msg.error });
       break;
     default:
@@ -218,6 +295,7 @@ async function translatorFor(src, tgt) {
     const avail = await Translator.availability({ sourceLanguage: src, targetLanguage: tgt });
     if (avail !== 'available') {
       log(`Translator ${key} is ${avail}; not usable here (needs a user gesture to download)`);
+      obs.log('ext_translate_ondevice', 'skip', { error_type: 'process', error_message: `Translator ${key} is ${avail}`, pair: key });
       state.translators.set(key, null);
       return null;
     }
@@ -226,6 +304,7 @@ async function translatorFor(src, tgt) {
     return t;
   } catch (e) {
     log('Translator create failed', key, e);
+    obs.log('ext_translate_ondevice', 'fail', { error_type: 'process', error_message: 'Translator create: ' + (e.message || e), pair: key });
     state.translators.set(key, null);
     return null;
   }
@@ -246,11 +325,14 @@ async function translateOnDevice(finalMsg) {
       translations[tgt] = { lines: [text], single_line: text, display_text: text };
     } catch (e) {
       log('on-device translate failed', e);
+      obs.log('ext_translate_ondevice', 'fail', { duration_ms: performance.now() - t0, error_type: 'process', error_message: e.message || String(e), pair: `${src}>${tgt}`, utterance_id: finalMsg.utterance_id });
       state.chromeTranslatorOk = false;
       return false;
     }
   }
   state.chromeTranslatorOk = true;
+  obs.log('ext_translate_ondevice', 'success', { duration_ms: performance.now() - t0, targets, utterance_id: finalMsg.utterance_id,
+    duplicate_with_backend: state.translationEngine !== 'chrome' });
   emit({
     type: 'translation',
     engine: 'chrome',
@@ -326,6 +408,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       }
     } catch (e) {
       log('error', e);
+      if (msg.type !== 'ASR_START') {  // startCapture logs its own failure
+        obs.log('ext_capture', 'fail', { error_type: 'unknown', error_message: e.message || String(e), msg_type: msg.type, where: 'offscreen router' });
+      }
       emit({ type: 'error', error: e.message || String(e) });
       sendResponse({ ok: false, error: e.message || String(e) });
     }

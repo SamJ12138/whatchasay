@@ -6,6 +6,10 @@
  * All keys must match background.js DEFAULT_SETTINGS exactly
  */
 
+// Structured log (extension/obs.js): one session per options-page load; HTTP calls carry X-Session-Id.
+const obs = window.STObs;
+obs.init({ context: 'options', sessionId: obs.newSessionId('opt') });
+
 // Schema version for migration
 const SETTINGS_SCHEMA_VERSION = 3;
 
@@ -277,6 +281,7 @@ async function loadSettings() {
 
   } catch (error) {
     console.error('[Options] Failed to load settings:', error);
+    obs.log('ext_settings', 'fail', { error_type: 'unknown', error_message: 'load: ' + (error.message || error) });
     showStatus('Failed to load settings', 'error');
   }
 }
@@ -357,6 +362,7 @@ async function saveSettings() {
 
   } catch (error) {
     console.error('[Options] Failed to save settings:', error);
+    obs.log('ext_settings', 'fail', { error_type: 'unknown', error_message: 'save: ' + (error.message || error) });
     showStatus('Failed to save settings', 'error');
   }
 }
@@ -450,12 +456,15 @@ function updatePreview(settings) {
  * Check backend connection status
  */
 async function checkConnection(host, port) {
+  const t0 = performance.now();
+  obs.setEndpointFromWs(`ws://${host}:${port}/ws`);
   try {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 3000);
 
     const response = await fetch(`http://${host}:${port}/health/json`, {
       method: 'GET',
+      headers: obs.headers(),
       signal: controller.signal
     });
 
@@ -477,7 +486,10 @@ async function checkConnection(host, port) {
     } else {
       throw new Error('Server returned error');
     }
+    obs.log('ext_http', 'success', { duration_ms: performance.now() - t0, path: '/health/json', status: response.status });
   } catch (error) {
+    obs.log('ext_http', 'fail', { duration_ms: performance.now() - t0, path: '/health/json',
+      error_type: error.name === 'AbortError' ? 'timeout' : 'process', error_message: error.message || String(error) });
     if (elements.connectionStatus) {
       elements.connectionStatus.innerHTML = `
         <span style="color: #ff6b6b;">Disconnected</span> -
@@ -497,7 +509,7 @@ async function exportCorrections() {
     const host = elements.serverHost?.value || 'localhost';
     const port = elements.serverPort?.value || 8765;
 
-    const response = await fetch(`http://${host}:${port}/stats`);
+    const response = await fetch(`http://${host}:${port}/stats`, { headers: obs.headers() });
     if (!response.ok) throw new Error('Failed to fetch stats');
 
     const stats = await response.json();
@@ -514,6 +526,7 @@ async function exportCorrections() {
     showStatus('Corrections exported successfully!', 'success');
   } catch (error) {
     console.error('Export failed:', error);
+    obs.log('ext_http', 'fail', { path: '/stats', error_type: 'process', error_message: error.message || String(error) });
     showStatus('Failed to export - is the backend running?', 'error');
   }
 }
@@ -531,7 +544,8 @@ async function clearCache() {
     const port = elements.serverPort?.value || 8765;
 
     const response = await fetch(`http://${host}:${port}/cache/clear`, {
-      method: 'POST'
+      method: 'POST',
+      headers: obs.headers()
     });
 
     if (response.ok) {
@@ -542,6 +556,7 @@ async function clearCache() {
     }
   } catch (error) {
     console.error('Clear cache failed:', error);
+    obs.log('ext_http', 'fail', { path: '/cache/clear', error_type: 'process', error_message: error.message || String(error) });
     showStatus('Failed to clear cache - is the backend running?', 'error');
   }
 }

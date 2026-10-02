@@ -22,6 +22,7 @@ from typing import Any, Dict, List, Optional
 import httpx
 
 from ..config import settings, get_language_display_name, get_max_chars_for_language
+from .. import obs
 
 logger = logging.getLogger(__name__)
 
@@ -53,12 +54,18 @@ def _parse(text: str, n: int, langs: List[str]) -> List[Dict[str, str]]:
     start, end = text.find("["), text.rfind("]") + 1
     out: List[Dict[str, str]] = [{} for _ in range(n)]
     if start < 0 or end <= start:
+        obs.log("refine", "fail", error_type="parse", error_message="no JSON array in refiner output",
+                output_len=len(text), degraded="treated as 'no change'")
         return out
     try:
         data = json.loads(text[start:end])
-    except json.JSONDecodeError:
+    except json.JSONDecodeError as e:
+        obs.log("refine", "fail", error_type="parse", error_message=f"refiner output is not valid JSON: {e}",
+                output_len=len(text), degraded="treated as 'no change'")
         return out
     if not isinstance(data, list):
+        obs.log("refine", "fail", error_type="parse", error_message=f"refiner JSON is {type(data).__name__}, not a list",
+                degraded="treated as 'no change'")
         return out
     for i, obj in enumerate(data[:n]):
         if isinstance(obj, dict):

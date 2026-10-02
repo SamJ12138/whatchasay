@@ -36,8 +36,15 @@ from typing import List, Optional
 import httpx
 
 from ..config import settings, get_language_display_name
+from .. import obs
 
 logger = logging.getLogger(__name__)
+STAGE = "translator_process"
+
+
+def _plog(event: str, **kw) -> None:
+    """translator_process lines belong to the subprocess layer and to no tab session."""
+    obs.log(STAGE, event, layer="subprocess", session_id="-", **kw)
 
 LLAMA_RELEASE = "b10909"
 LLAMA_ZIP_URL = f"https://github.com/ggml-org/llama.cpp/releases/download/{LLAMA_RELEASE}/llama-{LLAMA_RELEASE}-bin-win-cuda-12.4-x64.zip"
@@ -78,7 +85,8 @@ def _cuda_dll_dirs() -> List[str]:
         import torch
 
         dirs.append(str(Path(torch.__file__).parent / "lib"))
-    except Exception:
+    except Exception as e:
+        _plog("skip", error_type="process", error_message=f"torch CUDA DLL dir not added to PATH: {e}", action="cuda_dlls")
         pass
     cuda_path = os.environ.get("CUDA_PATH")
     if cuda_path:
@@ -97,13 +105,21 @@ def ensure_llama_server() -> Path:
     LLAMA_BIN_DIR.mkdir(parents=True, exist_ok=True)
     archive = LLAMA_BIN_DIR / "llama.zip"
     logger.info("Downloading llama.cpp %s (CUDA build) ...", LLAMA_RELEASE)
-    urllib.request.urlretrieve(LLAMA_ZIP_URL, archive)
-    with zipfile.ZipFile(archive) as zf:
-        zf.extractall(LLAMA_BIN_DIR)
-    archive.unlink(missing_ok=True)
-    (LLAMA_BIN_DIR / "VERSION.txt").write_text(LLAMA_RELEASE)
-    if not LLAMA_SERVER.exists():
-        raise RuntimeError("llama-server binary missing after extraction")
+    _plog("start", action="download", release=LLAMA_RELEASE)
+    t0 = time.perf_counter()
+    try:
+        urllib.request.urlretrieve(LLAMA_ZIP_URL, archive)
+        with zipfile.ZipFile(archive) as zf:
+            zf.extractall(LLAMA_BIN_DIR)
+        archive.unlink(missing_ok=True)
+        (LLAMA_BIN_DIR / "VERSION.txt").write_text(LLAMA_RELEASE)
+        if not LLAMA_SERVER.exists():
+            raise RuntimeError("llama-server binary missing after extraction")
+    except Exception as e:
+        _plog("fail", duration_ms=(time.perf_counter() - t0) * 1000, error_type=obs.classify(e),
+              error_message=str(e), action="download")
+        raise
+    _plog("success", duration_ms=(time.perf_counter() - t0) * 1000, action="download")
     return LLAMA_SERVER
 
 
@@ -128,6 +144,8 @@ class HyMTEngine:
         self._lock = threading.Lock()
         self._load_error: Optional[str] = None
         self.stats = {"calls": 0, "total_ms": 0.0}
+        self._spawns = 0
+        self._stopping: set = set()  # pids the backend itself is stopping
         atexit.register(self.shutdown)
 
     # -- process management ------------------------------------------------
@@ -145,6 +163,40 @@ class HyMTEngine:
     def _start(self) -> None:
         if self._proc is not None and self._proc.poll() is None:
             return
+        if self._proc is not None:
+            action, reason = "restart", f"previous child (pid {self._proc.pid}) exited with code {self._proc.returncode}"
+        elif self._spawns:
+            action, reason = "restart", "previous start failed"
+        else:
+            action, reason = "spawn", "first use"
+        self._spawns += 1
+        _plog("start", action=action, reason=reason, spawn_no=self._spawns)
+        try:
+            self._start_child()
+        except Exception as e:
+            proc = self._proc
+            code = proc.returncode if proc is not None else None
+            msg = str(e)
+            if "exited early" in msg:
+                _plog("fail", error_type="process", error_message=msg, action="early_exit", exit_code=code, port=self._port)
+            elif "did not become healthy" in msg:
+                _plog("fail", error_type="timeout", error_message=msg, action="health_timeout", port=self._port)
+            else:
+                _plog("fail", error_type=obs.classify(e, "process"), error_message=msg, action=action)
+            raise
+
+    def _watch(self, proc: subprocess.Popen, t_spawn: float) -> None:
+        """Waiter thread (observation only): record the child's exit code."""
+        try:
+            code = proc.wait()
+        except Exception:
+            return
+        if proc.pid in self._stopping:
+            return  # shutdown() logs the exit it asked for
+        _plog("fail", error_type="process", error_message=f"llama-server exited on its own with code {code}",
+              action="exit", exit_code=code, pid=proc.pid, lived_s=round(time.time() - t_spawn, 1))
+
+    def _start_child(self) -> None:
         server = ensure_llama_server()
         model = self._ensure_model()
         self._port = _free_port()
@@ -159,42 +211,62 @@ class HyMTEngine:
         creation = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
         t0 = time.time()
         self._proc = subprocess.Popen(cmd, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=creation)
+        threading.Thread(target=self._watch, args=(self._proc, t0), name="llama-server-watch", daemon=True).start()
         self._client = httpx.Client(base_url=f"http://127.0.0.1:{self._port}", timeout=20.0)
         deadline = time.time() + 120
+        polls = 0
+        last_poll_error = None
         while time.time() < deadline:
             if self._proc.poll() is not None:
                 raise RuntimeError(f"llama-server exited early with code {self._proc.returncode}")
+            polls += 1
             try:
                 r = self._client.get("/health", timeout=1.0)
                 if r.status_code == 200 and r.json().get("status") == "ok":
                     break
-            except Exception:
+                last_poll_error = f"HTTP {r.status_code}"
+            except Exception as e:
+                last_poll_error = type(e).__name__  # expected while the model loads
                 pass
             time.sleep(0.25)
         else:
             raise RuntimeError("llama-server did not become healthy in time")
         logger.info("HY-MT1.5-1.8B ready via llama-server on port %d (%.1fs)", self._port, time.time() - t0)
+        _plog("success", duration_ms=(time.time() - t0) * 1000, action="ready", port=self._port, pid=self._proc.pid,
+              health_polls=polls, last_poll_error=last_poll_error, model=model.name, slots=self.parallel)
 
     def shutdown(self) -> None:
         proc, self._proc = self._proc, None
         if proc is not None and proc.poll() is None:
+            self._stopping.add(proc.pid)
+            _plog("start", action="stop", pid=proc.pid, reason="backend shutdown")
             try:
                 proc.terminate()
                 proc.wait(timeout=5)
-            except Exception:
+            except Exception as e:
+                _plog("fail", error_type=obs.classify(e, "process"), error_message=f"terminate failed, killing: {e}",
+                      action="stop", pid=proc.pid)
                 try:
                     proc.kill()
-                except Exception:
+                except Exception as e2:
+                    _plog("fail", error_type="process", error_message=f"kill failed: {e2}", action="stop", pid=proc.pid)
                     pass
+            if proc.returncode is not None:
+                _plog("success", action="exit", exit_code=proc.returncode, pid=proc.pid, reason="stopped by backend")
 
     def warmup(self) -> None:
+        t0 = time.perf_counter()
         try:
             with self._lock:
                 self._start()
             self.translate_batch_sync(["Hello"], "en", "zh")
+            _plog("success", duration_ms=(time.perf_counter() - t0) * 1000, action="warmup")
         except Exception as e:
             self._load_error = str(e)
             logger.warning("HY-MT warmup failed: %s", e)
+            _plog("fail", duration_ms=(time.perf_counter() - t0) * 1000, error_type=obs.classify(e, "process"),
+                  error_message=str(e), action="warmup",
+                  degraded="HY-MT disabled for the rest of this process (supports() returns False)")
 
     # -- MTEngine ------------------------------------------------------------
 
@@ -220,7 +292,11 @@ class HyMTEngine:
         result = r.json()["choices"][0]["message"]["content"].strip()
         # Defensive: keep the first line if the model adds commentary
         if "\n" in result and len(result) < 300:
+            dropped = result.count("\n")
             result = result.split("\n")[0].strip()
+            obs.log("mt_call", "skip", error_type="parse", engine=self.name, src=source_lang, tgt=target_lang,
+                    error_message=f"multi-line output truncated to the first line ({dropped} line break(s) dropped)",
+                    degraded="later lines discarded")
         return result
 
     def translate_batch_sync(self, texts: List[str], source_lang: str, target_lang: str) -> List[str]:

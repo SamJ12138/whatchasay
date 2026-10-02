@@ -26,6 +26,7 @@ from .base_translator import BaseTranslator, get_base_translator, warmup_models
 from .line_breaker import format_subtitle_lines
 from ..cache.memory_cache import get_translation_cache, TranslationCache
 from ..cache.translation_memory import get_translation_memory, TranslationMemory
+from .. import obs
 
 logger = logging.getLogger(__name__)
 
@@ -104,12 +105,15 @@ class TranslationPipeline:
         target_languages = list(target_languages or settings.translation.target_languages)
         start = time.time()
         self.stats.total_requests += len(cues)
+        tally = {"cache_hits": 0, "tm_hits": 0, "mt_items": 0, "passthrough": 0}
+        failed: Optional[Exception] = None
         async with self._semaphore:
             try:
-                results = await self._process_batch(cues, target_languages)
+                results = await self._process_batch(cues, target_languages, tally)
             except Exception as e:
                 logger.exception("Pipeline error: %s", e)
                 self.stats.errors += len(cues)
+                failed = e
                 results = [self._create_error_result(c, str(e), target_languages) for c in cues]
         elapsed = (time.time() - start) * 1000
         per = elapsed / max(len(results), 1)
@@ -117,13 +121,27 @@ class TranslationPipeline:
             r.processing_time_ms = per
             self.stats.record(per)
         logger.info("Translate: %d cue(s) in %.0f ms (%.0f ms/cue) langs=%s", len(cues), elapsed, per, ",".join(target_languages))
+        ctx = dict(
+            n_cues=len(cues), targets=target_languages,
+            source_langs=sorted({r.source_lang for r in results}),
+            cue_ids=[r.cue_id for r in results][:20],
+            text_len=sum(len(c.text or "") for c in cues),
+            **tally,
+        )
+        if failed is not None:
+            obs.log_exc("translate", failed, api="process", duration_ms=elapsed,
+                        degraded="source text returned as the translation for every target", **ctx)
+        else:
+            obs.log("translate", "success", duration_ms=elapsed, **ctx)
         return results
 
     # -------------------------------------------------------------- internals
 
-    async def _process_batch(self, cues: List[SubtitleCue], target_languages: List[str]) -> List[TranslationResult]:
+    async def _process_batch(self, cues: List[SubtitleCue], target_languages: List[str],
+                             tally: Optional[Dict[str, int]] = None) -> List[TranslationResult]:
         results: List[Optional[TranslationResult]] = [None] * len(cues)
         cache_key = tuple(sorted(target_languages))
+        tally = tally if tally is not None else {}
 
         # 1. normalize + language + memory cache
         work: List[Dict[str, Any]] = []
@@ -131,12 +149,21 @@ class TranslationPipeline:
             normalized = self.normalizer.normalize(cue.text)
             if not normalized.should_translate:
                 results[i] = self._create_passthrough_result(cue.generate_cue_id(), cue.text, normalized, target_languages)
+                tally["passthrough"] = tally.get("passthrough", 0) + 1
+                obs.log("normalize", "skip", error_message="not translated (music / sound effect / empty)",
+                        is_music=normalized.is_music, is_sound_effect=normalized.is_sound_effect, text_len=len(cue.text or ""))
                 continue
             text = normalized.text
-            source_lang = cue.source_lang or detect_language(text)[0]
+            if cue.source_lang:
+                source_lang = cue.source_lang
+            else:
+                with obs.span("lang_detect", text_len=len(text)) as sp:
+                    source_lang, conf = detect_language(text)
+                    sp.set(lang=source_lang, confidence=round(float(conf), 2))
             cached = self._memory_cache.get(text, source_lang, cache_key)
             if cached:
                 self.stats.cache_hits += 1
+                tally["cache_hits"] = tally.get("cache_hits", 0) + 1
                 results[i] = self._create_result(cue.generate_cue_id(), text, source_lang, cached, from_cache=True)
                 continue
             work.append({"i": i, "cue": cue, "text": text, "lang": source_lang, "trans": {}})
@@ -149,9 +176,15 @@ class TranslationPipeline:
             for tgt in target_languages:
                 if tgt == w["lang"]:
                     continue
-                tm = await self._translation_memory.get(w["text"], w["lang"], tgt)
+                with obs.span("tm_lookup", api="process", src=w["lang"], tgt=tgt, text_len=len(w["text"])) as sp:
+                    tm = await self._translation_memory.get(w["text"], w["lang"], tgt)
+                    sp.set(hit=bool(tm))
+                    if tm:
+                        sp.set(user_corrected=tm.get("is_user_corrected"), quality=tm.get("quality_score"),
+                               equals_source=tm["translation"].strip() == w["text"].strip())
                 if tm:
                     self.stats.tm_hits += 1
+                    tally["tm_hits"] = tally.get("tm_hits", 0) + 1
                     w["trans"][tgt] = {"translation": tm["translation"], "lines": tm.get("lines") or tm.get("formatted_lines") or [], "from_tm": True}
 
         # 3. group remaining by (src, tgt) and batch-translate
@@ -164,10 +197,13 @@ class TranslationPipeline:
         async def _run_group(src: str, tgt: str, items: List[Dict[str, Any]]):
             texts = [it["text"] for it in items]
             self.stats.translations += len(texts)
+            tally["mt_items"] = tally.get("mt_items", 0) + len(texts)
             try:
                 outs = await self.base_translator.translate_batch(texts, src, tgt, fast=True)
             except Exception as e:
                 logger.error("MT failed %s->%s: %s", src, tgt, e)
+                obs.log_exc("translate", e, src=src, tgt=tgt, n=len(texts), phase="mt_group",
+                            degraded="source text used as the translation and stored in the TM")
                 outs = texts
             for it, out in zip(items, outs):
                 it["trans"][tgt] = {"translation": out, "lines": None, "from_tm": False}
@@ -191,10 +227,12 @@ class TranslationPipeline:
                     lines, single = format_subtitle_lines(trans_text, tgt)
                 translations[tgt] = {"lines": lines, "single_line": single, "translation": trans_text}
                 if entry and not entry.get("from_tm"):
-                    asyncio.create_task(self._translation_memory.set(
+                    equals_source = trans_text.strip() == text.strip()
+                    asyncio.create_task(obs.traced("tm_store", self._translation_memory.set(
                         source_text=text, source_lang=src, target_lang=tgt,
                         translation=trans_text, formatted_lines=lines, quality_score=QUALITY_BASE,
-                    ))
+                    ), api="process", kind="machine", src=src, tgt=tgt, quality=QUALITY_BASE, equals_source=equals_source,
+                        **({"degraded": "untranslated source stored as a translation"} if equals_source else {})))
             self._memory_cache.set(text, src, cache_key, translations)
             results[i] = self._create_result(cue.generate_cue_id(), text, src, translations, from_cache=False)
             self._context_window.append(text)
@@ -226,6 +264,8 @@ class TranslationPipeline:
 
         refiner = get_refiner()
         if refiner is None:
+            obs.log("refine", "skip", error_type="input_invalid", provider=settings.refiner.provider,
+                    error_message="refiner enabled but no provider could be built (missing key?)")
             return []
         langs = [t for t in target_languages if t not in settings.refiner.skip_languages]
         items = [
@@ -240,6 +280,8 @@ class TranslationPipeline:
         items = [it for it in items if it["base_translations"]]
         if not items:
             return []
+        r0 = time.time()
+        rctx = dict(provider=settings.refiner.provider, n=len(items), langs=langs)
         try:
             refined = await asyncio.wait_for(
                 refiner.refine(items, langs, prev_cues=self._context_window[-3:]),
@@ -247,9 +289,12 @@ class TranslationPipeline:
             )
         except asyncio.TimeoutError:
             logger.info("Refiner missed the %.1fs deadline; keeping fast output", deadline_s or settings.refiner.deadline_s)
+            obs.log("refine", "fail", duration_ms=(time.time() - r0) * 1000, error_type="timeout",
+                    error_message=f"missed the {deadline_s or settings.refiner.deadline_s}s deadline", degraded="fast output kept", **rctx)
             return []
         except Exception as e:
             logger.warning("Refiner failed: %s", e)
+            obs.log_exc("refine", e, duration_ms=(time.time() - r0) * 1000, degraded="fast output kept", **rctx)
             return []
 
         changed: List[TranslationResult] = []
@@ -265,16 +310,17 @@ class TranslationPipeline:
                 lines, single = format_subtitle_lines(text, lang)
                 translations[lang] = {"lines": lines, "single_line": single, "translation": single}
                 updated = True
-                asyncio.create_task(self._translation_memory.set(
+                asyncio.create_task(obs.traced("tm_store", self._translation_memory.set(
                     source_text=r.source_text, source_lang=r.source_lang, target_lang=lang,
                     translation=single, formatted_lines=lines, quality_score=QUALITY_REFINED,
-                ))
+                ), api="process", kind="refined", src=r.source_lang, tgt=lang, quality=QUALITY_REFINED))
             if updated:
                 self._memory_cache.set(r.source_text, r.source_lang, cache_key, translations)
                 new_r = self._create_result(r.cue_id, r.source_text, r.source_lang, translations, from_cache=False, post_edited=True)
                 new_r.revision = 2
                 changed.append(new_r)
         self.stats.refinements += len(changed)
+        obs.log("refine", "success", duration_ms=(time.time() - r0) * 1000, changed=len(changed), **rctx)
         return changed
 
     # ---------------------------------------------------------------- helpers

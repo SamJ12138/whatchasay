@@ -12,6 +12,8 @@ from functools import lru_cache
 from langdetect import detect, detect_langs, DetectorFactory
 from langdetect.lang_detect_exception import LangDetectException
 
+from .. import obs
+
 # Set seed for reproducibility
 DetectorFactory.seed = 42
 
@@ -120,7 +122,9 @@ class LanguageDetector:
                 
         except LangDetectException as e:
             logger.debug(f"Language detection failed: {e}")
-        
+            obs.log("lang_detect", "fail", error_type="input_invalid", error_message=f"langdetect: {e}",
+                    text_len=len(text), degraded=f"defaulted to {self.default_source_lang!r} (confidence 0.5)")
+
         return self.default_source_lang, 0.5
     
     def _detect_by_script(self, text: str) -> Optional[str]:
@@ -169,7 +173,9 @@ class LanguageDetector:
         try:
             lang = detect(text)
             return self._normalize_lang_code(lang), 0.6
-        except LangDetectException:
+        except LangDetectException as e:
+            obs.log("lang_detect", "fail", error_type="input_invalid", error_message=f"langdetect (short text): {e}",
+                    text_len=len(text), degraded="falls back to ASCII heuristic / default language")
             pass
         
         # Default to English for Latin script

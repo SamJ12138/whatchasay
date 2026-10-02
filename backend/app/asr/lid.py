@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Iterable, Optional
 
 from .engine import SAMPLE_RATE
+from .. import obs
 
 logger = logging.getLogger(__name__)
 
@@ -81,5 +82,7 @@ class SpokenLanguageId:
         lang = (lang or "").lower()
         if allowed is not None and lang not in set(allowed):
             logger.info("LID returned %r which is outside %s", lang, list(allowed))
+            obs.log("lid", "skip", error_type="input_invalid", detected=lang, allowed=list(allowed),
+                    error_message=f"LID result {lang!r} outside allowed languages; returned None")
             return None
         return lang or None

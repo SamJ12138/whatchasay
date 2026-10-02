@@ -6,6 +6,9 @@
  * extension page.
  */
 
+const obs = window.STObs;
+obs.init({ context: 'popup', sessionId: obs.newSessionId('popup') });
+
 document.addEventListener('DOMContentLoaded', async () => {
   const $ = (id) => document.getElementById(id);
   const connectionStatus = $('connection-status');
@@ -120,6 +123,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         ready++;
       } catch (e) {
         failed.push(`${src}→${tgt}`);
+        obs.log('ext_translate_ondevice', 'fail', { action: 'prepare', pair: `${src}>${tgt}`, error_type: 'process', error_message: e.message || String(e) });
       }
     }
     liveStatus.textContent = `On-device translation ready for ${ready}/${pairs.length} pairs` + (failed.length ? ` (unavailable: ${failed.join(', ')})` : '');

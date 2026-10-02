@@ -16,6 +16,7 @@ from typing import Dict, List, Optional
 import numpy as np
 
 from ..config import settings
+from .. import obs
 from .engine import AsrEvent, AsrSession, StreamingASREngine, SAMPLE_RATE
 from .session import SessionConfig, StreamingASRSession
 from .sherpa_engine import SherpaZipformerEngine, SHERPA_AVAILABLE
@@ -49,6 +50,8 @@ def get_engines() -> Dict[str, StreamingASREngine]:
                 _engines["cloud"] = cloud
         except Exception as e:  # pragma: no cover
             logger.debug("Cloud ASR engine not available: %s", e)
+            obs.log_exc("startup", e, event="skip", component="asr_engine", engine="cloud",
+                        degraded="advertised cloud ASR engine not registered (logged at DEBUG only)")
         try:
             from .whisper_engine import WhisperAccuracyEngine, WHISPER_AVAILABLE
 
@@ -56,6 +59,12 @@ def get_engines() -> Dict[str, StreamingASREngine]:
                 _engines["whisper"] = WhisperAccuracyEngine()
         except Exception as e:  # pragma: no cover
             logger.debug("Whisper engine not available: %s", e)
+            obs.log_exc("startup", e, event="skip", component="asr_engine", engine="whisper",
+                        degraded="advertised accuracy-mode Whisper engine not registered (logged at DEBUG only)")
+        if not SHERPA_AVAILABLE:
+            obs.log("startup", "skip", error_type="process", component="asr_engine", engine="sherpa-zipformer",
+                    error_message="sherpa_onnx not importable")
+        obs.log("startup", "success", component="asr_engines", engines=list(_engines.keys()))
     return _engines
 
 

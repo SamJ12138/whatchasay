@@ -34,6 +34,7 @@ from typing import Callable, Dict, List, Optional
 import numpy as np
 
 from .engine import AsrEvent, AsrSession, SAMPLE_RATE, StreamingASREngine, pcm16_to_float32
+from .. import obs
 
 logger = logging.getLogger(__name__)
 
@@ -184,12 +185,15 @@ class StreamingASRSession:
             return []
 
         lang = None
+        buffered_s = round(self._lid_buffer_samples / SAMPLE_RATE, 2)
         if self.lid_identify is not None:
             t0 = time.time()
             try:
                 lang = self.lid_identify(np.concatenate(self._lid_buffer), self.config.allowed_langs)
             except Exception as e:  # pragma: no cover
                 logger.warning("LID failed: %s", e)
+                obs.log_exc("lid", e, api="process", duration_ms=(time.time() - t0) * 1000, attempt=self._lid_attempts + 1,
+                            buffered_s=buffered_s, degraded="treated as undecided")
             self.stats["lid_ms"] = round((time.time() - t0) * 1000)
         self._lid_attempts += 1
 
@@ -199,14 +203,22 @@ class StreamingASRSession:
                 self._lid_done = True
                 self._reset_lid_buffer()
                 logger.info("LID undecided; keeping provisional language %s", self.lang)
+                obs.log("lid", "skip", duration_ms=self.stats["lid_ms"], error_type="input_invalid",
+                        error_message="LID undecided (no result inside allowed languages)", attempt=self._lid_attempts,
+                        buffered_s=buffered_s, degraded=f"provisional language {self.lang!r} kept and reported as confirmed")
                 return [{"type": "lid", "lang": self.lang, "source": "auto", "confirmed": True, "lid_ms": self.stats["lid_ms"]}]
             # collect a bit more speech and try once more
+            obs.log("lid", "skip", duration_ms=self.stats["lid_ms"], error_type="input_invalid",
+                    error_message="LID undecided; collecting more speech for one more attempt",
+                    attempt=self._lid_attempts, buffered_s=buffered_s)
             self._lid_voiced_samples = int(SAMPLE_RATE * self.config.lid_window_s * 0.4)
             return []
 
         self._lid_done = True
         self.lang_confirmed = True
         out: List[dict] = []
+        obs.log("lid", "success", duration_ms=self.stats["lid_ms"], lang=lang, provisional=self.lang,
+                switched=lang != self.lang, attempt=self._lid_attempts, buffered_s=buffered_s)
         if lang != self.lang:
             # Wrong provisional guess: swap recognizer, tell UI to drop provisional captions,
             # and replay the buffered audio so the first words are not lost.

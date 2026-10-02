@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from .engine import AsrEvent, SAMPLE_RATE, pcm16_to_float32
+from .. import obs
 
 logger = logging.getLogger(__name__)
 
@@ -267,10 +268,17 @@ class SherpaZipformerEngine:
     def warmup(self, langs: List[str]) -> None:
         for lang in langs:
             if self.supports(lang):
+                t0 = time.perf_counter()
                 try:
                     self.get_recognizer(lang)
+                    obs.log("startup", "success", duration_ms=(time.perf_counter() - t0) * 1000, component="asr_model", lang=lang)
                 except Exception as e:  # pragma: no cover
                     logger.warning("ASR warmup failed for %s: %s", lang, e)
+                    obs.log_exc("startup", e, api="process", duration_ms=(time.perf_counter() - t0) * 1000,
+                                component="asr_model", lang=lang, degraded="recognizer loads on first session instead")
+            else:
+                obs.log("startup", "skip", error_type="input_invalid", component="asr_model", lang=lang,
+                        error_message=f"no streaming model for {lang!r}")
 
     def start_session(self, lang: str) -> SherpaSession:
         if not self.supports(lang):
