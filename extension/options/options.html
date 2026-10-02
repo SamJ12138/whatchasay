@@ -1,0 +1,691 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Subtitle Translator - Options</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+    
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+      color: #e8e8e8;
+      min-height: 100vh;
+      padding: 40px 20px;
+    }
+    
+    .container {
+      max-width: 800px;
+      margin: 0 auto;
+    }
+    
+    h1 {
+      text-align: center;
+      margin-bottom: 10px;
+      font-size: 28px;
+      color: #fff;
+    }
+    
+    .subtitle {
+      text-align: center;
+      color: #888;
+      margin-bottom: 40px;
+    }
+    
+    .section {
+      background: rgba(255, 255, 255, 0.05);
+      border-radius: 12px;
+      padding: 24px;
+      margin-bottom: 20px;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+    }
+    
+    .section-title {
+      font-size: 18px;
+      font-weight: 600;
+      margin-bottom: 20px;
+      color: #4facfe;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    
+    .section-title::before {
+      content: '';
+      width: 4px;
+      height: 20px;
+      background: linear-gradient(180deg, #4facfe 0%, #00f2fe 100%);
+      border-radius: 2px;
+    }
+    
+    .form-group {
+      margin-bottom: 20px;
+    }
+    
+    .form-group:last-child {
+      margin-bottom: 0;
+    }
+    
+    label {
+      display: block;
+      margin-bottom: 8px;
+      font-size: 14px;
+      color: #ccc;
+    }
+    
+    input[type="text"],
+    input[type="number"],
+    select {
+      width: 100%;
+      padding: 12px 16px;
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      border-radius: 8px;
+      background: rgba(0, 0, 0, 0.3);
+      color: #fff;
+      font-size: 14px;
+      transition: border-color 0.2s, box-shadow 0.2s;
+    }
+    
+    input[type="text"]:focus,
+    input[type="number"]:focus,
+    select:focus {
+      outline: none;
+      border-color: #4facfe;
+      box-shadow: 0 0 0 3px rgba(79, 172, 254, 0.2);
+    }
+    
+    .inline-group {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 20px;
+    }
+    
+    .toggle-group {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 0;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    }
+    
+    .toggle-group:last-child {
+      border-bottom: none;
+    }
+    
+    .toggle-label {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    
+    .toggle-label span:first-child {
+      font-size: 14px;
+      color: #fff;
+    }
+    
+    .toggle-label span:last-child {
+      font-size: 12px;
+      color: #888;
+    }
+    
+    .toggle {
+      position: relative;
+      width: 48px;
+      height: 26px;
+      cursor: pointer;
+    }
+    
+    .toggle input {
+      display: none;
+    }
+    
+    .toggle-slider {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(255, 255, 255, 0.2);
+      border-radius: 26px;
+      transition: background 0.3s;
+    }
+    
+    .toggle-slider::before {
+      content: '';
+      position: absolute;
+      width: 20px;
+      height: 20px;
+      left: 3px;
+      bottom: 3px;
+      background: #fff;
+      border-radius: 50%;
+      transition: transform 0.3s;
+    }
+    
+    .toggle input:checked + .toggle-slider {
+      background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+    }
+    
+    .toggle input:checked + .toggle-slider::before {
+      transform: translateX(22px);
+    }
+    
+    .range-group {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+    
+    input[type="range"] {
+      flex: 1;
+      -webkit-appearance: none;
+      height: 6px;
+      background: rgba(255, 255, 255, 0.2);
+      border-radius: 3px;
+      outline: none;
+    }
+    
+    input[type="range"]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 18px;
+      height: 18px;
+      background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+      border-radius: 50%;
+      cursor: pointer;
+      transition: transform 0.2s;
+    }
+    
+    input[type="range"]::-webkit-slider-thumb:hover {
+      transform: scale(1.1);
+    }
+    
+    .range-value {
+      min-width: 50px;
+      text-align: center;
+      font-size: 14px;
+      color: #4facfe;
+      font-weight: 600;
+    }
+    
+    .color-picker {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    
+    .color-option {
+      position: relative;
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
+      cursor: pointer;
+      transition: transform 0.2s, box-shadow 0.2s;
+    }
+    
+    .color-option:hover {
+      transform: scale(1.1);
+    }
+    
+    .color-option.selected {
+      box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.5);
+    }
+    
+    .color-option input {
+      display: none;
+    }
+    
+    .button-group {
+      display: flex;
+      gap: 12px;
+      justify-content: flex-end;
+      margin-top: 30px;
+    }
+    
+    button {
+      padding: 12px 24px;
+      border: none;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: transform 0.2s, opacity 0.2s;
+    }
+    
+    button:hover {
+      transform: translateY(-2px);
+    }
+    
+    button:active {
+      transform: translateY(0);
+    }
+    
+    .btn-primary {
+      background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+      color: #fff;
+    }
+    
+    .btn-secondary {
+      background: rgba(255, 255, 255, 0.1);
+      color: #fff;
+      border: 1px solid rgba(255, 255, 255, 0.2);
+    }
+    
+    .btn-danger {
+      background: rgba(255, 77, 77, 0.2);
+      color: #ff6b6b;
+      border: 1px solid rgba(255, 77, 77, 0.3);
+    }
+    
+    .status-bar {
+      position: fixed;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%) translateY(100px);
+      padding: 12px 24px;
+      background: rgba(0, 0, 0, 0.9);
+      border-radius: 8px;
+      font-size: 14px;
+      transition: transform 0.3s ease;
+      z-index: 1000;
+    }
+    
+    .status-bar.show {
+      transform: translateX(-50%) translateY(0);
+    }
+    
+    .status-bar.success {
+      border: 1px solid #4caf50;
+      color: #4caf50;
+    }
+    
+    .status-bar.error {
+      border: 1px solid #f44336;
+      color: #f44336;
+    }
+    
+    .keyboard-shortcuts {
+      display: grid;
+      gap: 12px;
+    }
+    
+    .shortcut-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 10px 0;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    }
+    
+    .shortcut-item:last-child {
+      border-bottom: none;
+    }
+    
+    .shortcut-key {
+      display: flex;
+      gap: 6px;
+    }
+    
+    kbd {
+      background: rgba(255, 255, 255, 0.1);
+      padding: 4px 10px;
+      border-radius: 4px;
+      font-family: monospace;
+      font-size: 12px;
+      border: 1px solid rgba(255, 255, 255, 0.2);
+    }
+    
+    .preview-box {
+      background: #000;
+      border-radius: 8px;
+      padding: 40px 20px;
+      text-align: center;
+      margin-top: 16px;
+    }
+    
+    .preview-original {
+      color: #fff;
+      font-size: 18px;
+      margin-top: 12px;
+    }
+    
+    .preview-translation {
+      margin-bottom: 8px;
+    }
+    
+    .preview-primary {
+      color: #4facfe;
+    }
+
+    .preview-secondary {
+      color: #ffcc00;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>🌐 Subtitle Translator</h1>
+    <p class="subtitle">Configure your local translation overlay</p>
+    
+    <!-- Connection Settings -->
+    <div class="section">
+      <h2 class="section-title">Connection</h2>
+      <div class="inline-group">
+        <div class="form-group">
+          <label for="serverHost">Backend Server Host</label>
+          <input type="text" id="serverHost" placeholder="localhost">
+        </div>
+        <div class="form-group">
+          <label for="serverPort">Port</label>
+          <input type="number" id="serverPort" placeholder="8765">
+        </div>
+      </div>
+      <div class="form-group">
+        <label>Connection Status</label>
+        <div id="connectionStatus" style="padding: 10px; border-radius: 6px; background: rgba(255, 77, 77, 0.2); color: #ff6b6b;">
+          Disconnected - Start the backend server
+        </div>
+      </div>
+    </div>
+    
+    <!-- Translation Settings -->
+    <div class="section">
+      <h2 class="section-title">Translation</h2>
+      <div class="toggle-group">
+        <div class="toggle-label">
+          <span>Refine with AI (second pass)</span>
+          <span>Fast translation shows first; an LLM may replace it within ~0.8 s. Off = lowest latency. Skipped for Bengali locally.</span>
+        </div>
+        <label class="toggle">
+          <input type="checkbox" id="refinerEnabled">
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+      <div class="form-group">
+        <label>Refiner provider</label>
+        <select id="refinerProvider">
+          <option value="ollama">Local Ollama (needs Ollama + a small model, e.g. qwen3:4b)</option>
+          <option value="groq">Groq API (fast, key below)</option>
+          <option value="gemini">Gemini 2.5 Flash-Lite (key below)</option>
+        </select>
+      </div>
+      <div class="toggle-group">
+        <div class="toggle-label">
+          <span>Strict Meaning Lock</span>
+          <span>Prioritize accuracy over naturalness</span>
+        </div>
+        <label class="toggle">
+          <input type="checkbox" id="strictMeaning" checked>
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+    </div>
+
+    <!-- Live Captions -->
+    <div class="section">
+      <h2 class="section-title">Live Captions (videos without subtitles)</h2>
+      <p style="font-size: 12px; color: #999; margin-bottom: 12px;">
+        Tab audio is transcribed locally with streaming models (English, Chinese, Bengali) and translated in under a second.
+        Start it from the extension popup or with <kbd>Alt</kbd>+<kbd>L</kbd>.
+      </p>
+      <div class="form-group">
+        <label>Spoken language</label>
+        <select id="asrSourceLang">
+          <option value="auto">Auto-detect (starts immediately, confirms after a few seconds)</option>
+          <option value="en">English</option>
+          <option value="zh">Chinese</option>
+          <option value="bn">Bengali</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Recognition engine</label>
+        <select id="asrEngine">
+          <option value="auto">Auto (local streaming, cloud if configured)</option>
+          <option value="sherpa-zipformer">Local streaming (Zipformer, CPU)</option>
+          <option value="cloud">Cloud streaming (Gladia / ElevenLabs key below)</option>
+          <option value="whisper">Accurate but delayed (Whisper, GPU)</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Translation engine</label>
+        <select id="translationEngine">
+          <option value="auto">Auto (Chrome on-device if prepared, else local backend)</option>
+          <option value="backend">Local backend only (HY-MT on GPU / OPUS-MT on CPU)</option>
+          <option value="chrome">Chrome on-device only (Chrome 138+, prepare in popup)</option>
+        </select>
+      </div>
+      <div class="toggle-group">
+        <div class="toggle-label">
+          <span>Show partial captions</span>
+          <span>Display the in-progress transcript (dimmed) before the sentence is finalized</span>
+        </div>
+        <label class="toggle">
+          <input type="checkbox" id="showPartials" checked>
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+    </div>
+
+    <!-- Cloud keys -->
+    <div class="section">
+      <h2 class="section-title">Optional Cloud APIs</h2>
+      <p style="font-size: 12px; color: #999; margin-bottom: 12px;">
+        Keys are stored locally and sent only to your local backend, which calls the provider directly. Leave empty to stay fully local.
+      </p>
+      <div class="form-group"><label>Gladia API key (streaming speech, en/zh/bn)</label><input type="password" id="gladiaKey" placeholder="gladia key"></div>
+      <div class="form-group"><label>ElevenLabs API key (streaming speech)</label><input type="password" id="elevenlabsKey" placeholder="elevenlabs key"></div>
+      <div class="form-group"><label>Google Cloud Translation API key</label><input type="password" id="googleKey" placeholder="google translate key"></div>
+      <div class="form-group"><label>Azure Translator key</label><input type="password" id="azureKey" placeholder="azure key"></div>
+      <div class="form-group"><label>Azure Translator region</label><input type="text" id="azureRegion" placeholder="e.g. eastus"></div>
+      <div class="form-group"><label>Groq API key (refiner)</label><input type="password" id="groqKey" placeholder="groq key"></div>
+      <div class="form-group"><label>Gemini API key (refiner)</label><input type="password" id="geminiKey" placeholder="gemini key"></div>
+    </div>
+
+    <!-- Display Settings -->
+    <div class="section">
+      <h2 class="section-title">Display</h2>
+      <div class="form-group">
+        <label>Font Size</label>
+        <div class="range-group">
+          <input type="range" id="fontSize" min="12" max="32" value="18">
+          <span class="range-value" id="fontSizeValue">18px</span>
+        </div>
+      </div>
+      <div class="form-group">
+        <label>Overlay Position</label>
+        <select id="overlayPosition">
+          <option value="above">Above original subtitles</option>
+          <option value="below">Below original subtitles</option>
+          <option value="replace">Replace original subtitles</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Primary Language (Top)</label>
+        <select id="primaryLang">
+          <option value="en">English</option>
+          <option value="zh">Chinese (Simplified)</option>
+          <option value="bn">Bengali</option>
+          <option value="vi">Vietnamese</option>
+          <option value="ja">Japanese</option>
+          <option value="ko">Korean</option>
+          <option value="es">Spanish</option>
+          <option value="fr">French</option>
+          <option value="de">German</option>
+          <option value="ru">Russian</option>
+          <option value="pt">Portuguese</option>
+          <option value="it">Italian</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Secondary Language (Bottom)</label>
+        <select id="secondaryLang">
+          <option value="en">English</option>
+          <option value="zh" selected>Chinese (Simplified)</option>
+          <option value="bn">Bengali</option>
+          <option value="vi">Vietnamese</option>
+          <option value="ja">Japanese</option>
+          <option value="ko">Korean</option>
+          <option value="es">Spanish</option>
+          <option value="fr">French</option>
+          <option value="de">German</option>
+          <option value="ru">Russian</option>
+          <option value="pt">Portuguese</option>
+          <option value="it">Italian</option>
+          <option value="none">None (single language)</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Swap Language Order</label>
+        <select id="languageOrder">
+          <option value="primary-secondary">Primary first, then Secondary</option>
+          <option value="secondary-primary">Secondary first, then Primary</option>
+          <option value="primary-only">Primary only</option>
+          <option value="secondary-only">Secondary only</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Primary Language Color</label>
+        <div class="color-picker" id="primaryColorPicker">
+          <div class="color-option selected" data-color="#4facfe" style="background: #4facfe;"><input type="radio" name="primaryColor" value="#4facfe" checked></div>
+          <div class="color-option" data-color="#ffffff" style="background: #ffffff;"><input type="radio" name="primaryColor" value="#ffffff"></div>
+          <div class="color-option" data-color="#00ff88" style="background: #00ff88;"><input type="radio" name="primaryColor" value="#00ff88"></div>
+          <div class="color-option" data-color="#ff88ff" style="background: #ff88ff;"><input type="radio" name="primaryColor" value="#ff88ff"></div>
+          <div class="color-option" data-color="#88ffff" style="background: #88ffff;"><input type="radio" name="primaryColor" value="#88ffff"></div>
+        </div>
+      </div>
+      <div class="form-group">
+        <label>Secondary Language Color</label>
+        <div class="color-picker" id="secondaryColorPicker">
+          <div class="color-option" data-color="#4facfe" style="background: #4facfe;"><input type="radio" name="secondaryColor" value="#4facfe"></div>
+          <div class="color-option" data-color="#ffffff" style="background: #ffffff;"><input type="radio" name="secondaryColor" value="#ffffff"></div>
+          <div class="color-option" data-color="#ffcc00" style="background: #ffcc00;"><input type="radio" name="secondaryColor" value="#ffcc00"></div>
+          <div class="color-option selected" data-color="#ffcc00" style="background: #ffcc00;"><input type="radio" name="secondaryColor" value="#ffcc00" checked></div>
+          <div class="color-option" data-color="#ff88ff" style="background: #ff88ff;"><input type="radio" name="secondaryColor" value="#ff88ff"></div>
+        </div>
+      </div>
+      
+      <!-- Preview -->
+      <div class="form-group">
+        <label>Preview</label>
+        <div class="preview-box">
+          <div class="preview-translation">
+            <div class="preview-primary" id="previewPrimary">This is how your primary subtitles will look</div>
+            <div class="preview-secondary" id="previewSecondary">这是次要语言字幕的显示效果</div>
+          </div>
+          <div class="preview-original">[Original subtitle text here]</div>
+        </div>
+      </div>
+    </div>
+    
+    <!-- Advanced Settings -->
+    <div class="section">
+      <h2 class="section-title">Advanced</h2>
+      <div class="inline-group">
+        <div class="form-group">
+          <label for="maxCharsLatin">Max chars per line (Latin scripts: EN, VI, ES, FR, DE)</label>
+          <input type="number" id="maxCharsLatin" value="42" min="20" max="80">
+        </div>
+        <div class="form-group">
+          <label for="maxCharsCJK">Max chars per line (CJK: ZH, JA, KO)</label>
+          <input type="number" id="maxCharsCJK" value="22" min="10" max="40">
+        </div>
+      </div>
+      <div class="form-group">
+        <label for="maxLines">Maximum lines</label>
+        <select id="maxLines">
+          <option value="1">1 line</option>
+          <option value="2" selected>2 lines</option>
+          <option value="3">3 lines</option>
+        </select>
+      </div>
+      <div class="toggle-group">
+        <div class="toggle-label">
+          <span>Show Speaker Labels</span>
+          <span>Display speaker names when detected</span>
+        </div>
+        <label class="toggle">
+          <input type="checkbox" id="showSpeakers" checked>
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+      <div class="toggle-group">
+        <div class="toggle-label">
+          <span>Show Music/Sound Indicators</span>
+          <span>Display ♪ and [sound] markers</span>
+        </div>
+        <label class="toggle">
+          <input type="checkbox" id="showMusic" checked>
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+    </div>
+    
+    <!-- Keyboard Shortcuts -->
+    <div class="section">
+      <h2 class="section-title">Keyboard Shortcuts</h2>
+      <div class="keyboard-shortcuts">
+        <div class="shortcut-item">
+          <span>Toggle overlay on/off</span>
+          <div class="shortcut-key"><kbd>Alt</kbd><kbd>T</kbd></div>
+        </div>
+        <div class="shortcut-item">
+          <span>Start/stop live captions</span>
+          <div class="shortcut-key"><kbd>Alt</kbd><kbd>L</kbd></div>
+        </div>
+        <div class="shortcut-item">
+          <span>Swap language order</span>
+          <div class="shortcut-key"><kbd>Alt</kbd><kbd>S</kbd></div>
+        </div>
+        <div class="shortcut-item">
+          <span>Increase font size</span>
+          <div class="shortcut-key"><kbd>Alt</kbd><kbd>]</kbd></div>
+        </div>
+        <div class="shortcut-item">
+          <span>Decrease font size</span>
+          <div class="shortcut-key"><kbd>Alt</kbd><kbd>[</kbd></div>
+        </div>
+        <div class="shortcut-item">
+          <span>Edit current translation</span>
+          <div class="shortcut-key"><kbd>Alt</kbd><kbd>E</kbd></div>
+        </div>
+      </div>
+      <p style="margin-top: 16px; font-size: 12px; color: #888;">
+        To change shortcuts, go to chrome://extensions/shortcuts
+      </p>
+    </div>
+    
+    <!-- Data Management -->
+    <div class="section">
+      <h2 class="section-title">Data Management</h2>
+      <div class="toggle-group">
+        <div class="toggle-label">
+          <span>Save Corrections</span>
+          <span>Store your edits for training data</span>
+        </div>
+        <label class="toggle">
+          <input type="checkbox" id="saveCorrections" checked>
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+      <div class="button-group" style="justify-content: flex-start; margin-top: 16px;">
+        <button class="btn-secondary" id="exportCorrections">Export Corrections</button>
+        <button class="btn-danger" id="clearCache">Clear Translation Cache</button>
+      </div>
+    </div>
+    
+    <!-- Action Buttons -->
+    <div class="button-group">
+      <button class="btn-secondary" id="resetDefaults">Reset to Defaults</button>
+      <button class="btn-primary" id="saveSettings">Save Settings</button>
+    </div>
+  </div>
+  
+  <div class="status-bar" id="statusBar"></div>
+  
+  <script src="options.js"></script>
+</body>
+</html>

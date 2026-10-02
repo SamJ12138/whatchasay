@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Subtitle Translator</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+    
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      width: 320px;
+      background: #1a1a2e;
+      color: #eee;
+    }
+    
+    .header {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      padding: 16px;
+      text-align: center;
+    }
+    
+    .header h1 {
+      font-size: 18px;
+      font-weight: 600;
+      margin-bottom: 4px;
+    }
+    
+    .header .subtitle {
+      font-size: 12px;
+      opacity: 0.9;
+    }
+    
+    .content {
+      padding: 16px;
+    }
+    
+    .status-card {
+      background: #16213e;
+      border-radius: 8px;
+      padding: 12px;
+      margin-bottom: 16px;
+    }
+    
+    .status-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 8px 0;
+      border-bottom: 1px solid #2a2a4a;
+    }
+    
+    .status-row:last-child {
+      border-bottom: none;
+    }
+    
+    .status-label {
+      font-size: 13px;
+      color: #aaa;
+    }
+    
+    .status-value {
+      font-size: 13px;
+      font-weight: 500;
+    }
+    
+    .status-value.connected {
+      color: #4ade80;
+    }
+    
+    .status-value.disconnected {
+      color: #f87171;
+    }
+    
+    .toggle-container {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: #16213e;
+      border-radius: 8px;
+      padding: 12px;
+      margin-bottom: 12px;
+    }
+    
+    .toggle-label {
+      font-size: 14px;
+    }
+    
+    .toggle {
+      position: relative;
+      width: 48px;
+      height: 26px;
+    }
+    
+    .toggle input {
+      opacity: 0;
+      width: 0;
+      height: 0;
+    }
+    
+    .toggle-slider {
+      position: absolute;
+      cursor: pointer;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background-color: #3a3a5a;
+      transition: 0.3s;
+      border-radius: 26px;
+    }
+    
+    .toggle-slider:before {
+      position: absolute;
+      content: "";
+      height: 20px;
+      width: 20px;
+      left: 3px;
+      bottom: 3px;
+      background-color: white;
+      transition: 0.3s;
+      border-radius: 50%;
+    }
+    
+    input:checked + .toggle-slider {
+      background-color: #667eea;
+    }
+    
+    input:checked + .toggle-slider:before {
+      transform: translateX(22px);
+    }
+    
+    .actions {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      margin-bottom: 16px;
+    }
+    
+    .btn {
+      background: #16213e;
+      border: none;
+      border-radius: 8px;
+      padding: 12px;
+      color: #eee;
+      font-size: 13px;
+      cursor: pointer;
+      transition: background 0.2s;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 4px;
+    }
+    
+    .btn:hover {
+      background: #2a2a4a;
+    }
+    
+    .btn:active {
+      background: #3a3a5a;
+    }
+    
+    .btn-icon {
+      font-size: 20px;
+    }
+    
+    .btn-label {
+      font-size: 11px;
+      color: #aaa;
+    }
+    
+    .shortcuts {
+      background: #16213e;
+      border-radius: 8px;
+      padding: 12px;
+    }
+    
+    .shortcuts-title {
+      font-size: 12px;
+      color: #888;
+      margin-bottom: 8px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    
+    .shortcut-row {
+      display: flex;
+      justify-content: space-between;
+      padding: 4px 0;
+      font-size: 12px;
+    }
+    
+    .shortcut-key {
+      background: #2a2a4a;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-family: monospace;
+      font-size: 11px;
+    }
+    
+    .live-card {
+      background: #1e1e3a;
+      border: 1px solid #3a3a6a;
+      border-radius: 8px;
+      padding: 12px;
+      margin: 12px 0;
+    }
+    .live-title { font-weight: 600; font-size: 13px; margin-bottom: 8px; color: #e0e0ff; }
+    .live-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; font-size: 12px; color: #bbb; }
+    .live-row select { background: #2a2a4a; color: #eee; border: 1px solid #444; border-radius: 4px; padding: 4px 6px; font-size: 12px; }
+    .btn-live { width: 100%; justify-content: center; background: linear-gradient(135deg, #2e7d32, #43a047); border: none; }
+    .btn-live.active { background: linear-gradient(135deg, #c62828, #e53935); }
+    .btn-small { width: 100%; justify-content: center; margin-top: 8px; font-size: 11px; opacity: 0.85; }
+    .live-status { font-size: 11px; color: #aaa; margin-top: 8px; min-height: 14px; line-height: 1.4; }
+    .live-status.ok { color: #7ed07e; }
+    .live-status.error { color: #ff8a80; }
+
+    .footer {
+      padding: 12px 16px;
+      text-align: center;
+      border-top: 1px solid #2a2a4a;
+    }
+    
+    .footer a {
+      color: #667eea;
+      text-decoration: none;
+      font-size: 12px;
+    }
+    
+    .footer a:hover {
+      text-decoration: underline;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>🎬 Subtitle Translator</h1>
+    <div class="subtitle">Live captions • Translation • Local-first</div>
+  </div>
+  
+  <div class="content">
+    <div class="status-card">
+      <div class="status-row">
+        <span class="status-label">Backend</span>
+        <span id="connection-status" class="status-value disconnected">Disconnected</span>
+      </div>
+      <div class="status-row">
+        <span class="status-label">Detection</span>
+        <span id="detection-method" class="status-value">-</span>
+      </div>
+      <div class="status-row">
+        <span class="status-label">Translations</span>
+        <span id="translation-count" class="status-value">0</span>
+      </div>
+      <div class="status-row">
+        <span class="status-label">Latency (p50)</span>
+        <span id="latency-value" class="status-value">-</span>
+      </div>
+    </div>
+    
+    <div class="toggle-container">
+      <span class="toggle-label">Enable Overlay</span>
+      <label class="toggle">
+        <input type="checkbox" id="toggle-overlay" checked>
+        <span class="toggle-slider"></span>
+      </label>
+    </div>
+    
+    <div class="toggle-container">
+      <span class="toggle-label">Refine with AI (adds a delayed second pass)</span>
+      <label class="toggle">
+        <input type="checkbox" id="toggle-refiner">
+        <span class="toggle-slider"></span>
+      </label>
+    </div>
+
+    <div class="live-card">
+      <div class="live-title">🎙️ Live Captions (videos without subtitles)</div>
+      <div class="live-row">
+        <label for="live-lang">Spoken language</label>
+        <select id="live-lang">
+          <option value="auto">Auto-detect</option>
+          <option value="en">English</option>
+          <option value="zh">Chinese</option>
+          <option value="bn">Bengali</option>
+        </select>
+      </div>
+      <button class="btn btn-live" id="btn-live">
+        <span class="btn-icon">🎙️</span>
+        <span class="btn-label">Start Live Captions</span>
+      </button>
+      <div class="live-status" id="live-status">For videos without subtitles: captions + translation from the tab audio</div>
+      <button class="btn btn-small" id="btn-prepare-translator" title="Download Chrome's on-device translation packs (Chrome 138+) so translation can run without the backend">
+        <span class="btn-icon">⬇️</span>
+        <span class="btn-label">Prepare on-device translation</span>
+      </button>
+    </div>
+
+    <div class="actions">
+      <button class="btn" id="btn-swap">
+        <span class="btn-icon">🔄</span>
+        <span class="btn-label">Swap Order</span>
+      </button>
+      <button class="btn" id="btn-clear">
+        <span class="btn-icon">🗑️</span>
+        <span class="btn-label">Reload Page</span>
+      </button>
+      <button class="btn" id="btn-font-up">
+        <span class="btn-icon">A+</span>
+        <span class="btn-label">Larger Font</span>
+      </button>
+      <button class="btn" id="btn-font-down">
+        <span class="btn-icon">A-</span>
+        <span class="btn-label">Smaller Font</span>
+      </button>
+      <button class="btn" id="btn-picker" style="grid-column: span 2;">
+        <span class="btn-icon">🎯</span>
+        <span class="btn-label">Pick Subtitle Element (for unsupported sites)</span>
+      </button>
+    </div>
+
+    <div class="shortcuts">
+      <div class="shortcuts-title">Keyboard Shortcuts</div>
+      <div class="shortcut-row">
+        <span>Toggle Overlay</span>
+        <span class="shortcut-key">Alt+T</span>
+      </div>
+      <div class="shortcut-row">
+        <span>Live Captions</span>
+        <span class="shortcut-key">Alt+L</span>
+      </div>
+      <div class="shortcut-row">
+        <span>Swap Languages</span>
+        <span class="shortcut-key">Alt+S</span>
+      </div>
+      <div class="shortcut-row">
+        <span>Font Size</span>
+        <span class="shortcut-key">Alt+, / .</span>
+      </div>
+      <div class="shortcut-row">
+        <span>Edit Translation</span>
+        <span class="shortcut-key">Alt+E</span>
+      </div>
+    </div>
+  </div>
+  
+  <div class="footer">
+    <a href="#" id="open-options">⚙️ Settings</a>
+  </div>
+  
+  <script src="popup.js"></script>
+</body>
+</html>

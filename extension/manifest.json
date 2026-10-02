@@ -1,0 +1,83 @@
+{
+  "manifest_version": 3,
+  "name": "Multi-Language Subtitle Translator",
+  "version": "2.0.0",
+  "description": "Live captions and real-time local translation overlay for any video (English, Chinese, Bengali and more)",
+
+  "permissions": [
+    "storage",
+    "activeTab",
+    "tabCapture",
+    "offscreen"
+  ],
+
+  "host_permissions": [
+    "<all_urls>"
+  ],
+
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+
+  "action": {
+    "default_popup": "popup/popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png"
+    },
+    "default_title": "Subtitle Translator"
+  },
+
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": [
+        "content-scripts/websocket-client.js",
+        "content-scripts/subtitle-detector.js",
+        "content-scripts/overlay.js",
+        "content-scripts/main.js"
+      ],
+      "css": [],
+      "run_at": "document_idle",
+      "all_frames": true
+    }
+  ],
+
+  "options_ui": {
+    "page": "options/options.html",
+    "open_in_tab": true
+  },
+
+  "web_accessible_resources": [
+    {
+      "resources": ["icons/*", "pcm-worklet.js"],
+      "matches": ["<all_urls>"]
+    }
+  ],
+
+  "commands": {
+    "toggle-overlay": {
+      "suggested_key": { "default": "Alt+T", "windows": "Alt+T", "mac": "Alt+T" },
+      "description": "Toggle subtitle overlay on/off"
+    },
+    "toggle-live-captions": {
+      "suggested_key": { "default": "Alt+L", "windows": "Alt+L", "mac": "Alt+L" },
+      "description": "Start/stop live captions for the current tab"
+    },
+    "swap-order": {
+      "suggested_key": { "default": "Alt+S", "windows": "Alt+S", "mac": "Alt+S" },
+      "description": "Swap language order (primary/secondary)"
+    },
+    "increase-font": {
+      "suggested_key": { "default": "Alt+Period", "windows": "Alt+Period", "mac": "Alt+Period" },
+      "description": "Increase font size"
+    }
+  }
+}

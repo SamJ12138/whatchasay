@@ -1,0 +1,12 @@
+# NVIDIA GPU extras (Windows/Linux). Install AFTER requirements.txt:
+#   pip install -r requirements-gpu.txt --extra-index-url https://download.pytorch.org/whl/cu128
+#
+# torch: provides CUDA runtime DLLs reused by llama-server and enables faster-whisper on GPU.
+torch>=2.6
+torchaudio>=2.6
+# Accuracy mode (delayed) ASR: faster-whisper large-v3-turbo / whisper-large-v3-bn
+faster-whisper>=1.1
+silero-vad>=5.1
+# NOTE: HY-MT1.5-1.8B translation does not need a Python package; the backend
+# downloads the official llama.cpp CUDA build (llama-server.exe) into bin/llama/
+# and the GGUF model into data/models/mt/ on first start.

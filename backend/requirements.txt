@@ -1,0 +1,37 @@
+# Core runtime (CPU-only install works end to end: Zipformer ASR + OPUS-MT CTranslate2)
+fastapi>=0.109
+uvicorn[standard]>=0.27
+websockets>=12
+python-multipart>=0.0.9
+pydantic>=2.6
+pydantic-settings>=2.1
+python-dotenv>=1.0
+orjson>=3.9
+xxhash>=3.4
+httpx>=0.25
+aiosqlite>=0.19
+cachetools>=5.3
+regex>=2023.12
+ftfy>=6.1
+unidecode>=1.3
+langdetect>=1.0.9
+numpy>=1.26
+
+# Streaming ASR (local, CPU): sherpa-onnx Zipformer transducers + spoken language ID
+sherpa-onnx>=1.13
+onnxruntime>=1.17
+soundfile>=0.12
+
+# Fast MT (local, CPU): OPUS-MT on CTranslate2 int8
+ctranslate2>=4.4
+sentencepiece>=0.2
+huggingface_hub>=0.23
+# Needed once to convert OPUS-MT checkpoints to CTranslate2 (torch is pulled by requirements-gpu.txt;
+# on a CPU-only machine install: pip install torch --index-url https://download.pytorch.org/whl/cpu)
+transformers>=4.56
+
+# Testing / dev
+pytest>=7,<9
+pytest-asyncio>=0.23
+
+# Optional cloud ASR (Gladia / ElevenLabs) uses websockets + httpx above; no extra deps.

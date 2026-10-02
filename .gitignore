@@ -1,0 +1,69 @@
+# --- Python environment and build output -------------------------------------
+backend/venv/
+venv/
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# --- Runtime data: translation memory (real usage data), models, exports ----
+# The whole data folder: translation_memory.db (+ -wal, -shm), corrections
+# export, and every downloaded / converted model under data/models/.
+backend/data/
+data/
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+corrections_export.jsonl
+
+# --- Model weights and speech-model folders (in case they appear elsewhere) --
+*.gguf
+*.onnx
+*.bin
+*.safetensors
+*.pt
+*.pth
+*.ckpt
+*.spm
+sherpa-onnx-*/
+models/
+
+# --- llama.cpp binaries (auto-downloaded by hymt_translator.py) -------------
+backend/bin/
+bin/llama/
+*.exe
+*.dll
+
+# --- Archives -----------------------------------------------------------------
+*.zip
+*.tar
+*.tar.bz2
+*.tar.gz
+*.7z
+
+# --- Audio samples (come with the model archives) -----------------------------
+*.wav
+
+# --- Logs (obs run logs land in backend/logs/) -------------------------------
+*.log
+logs/
+
+# --- Secrets ------------------------------------------------------------------
+.env
+.env.*
+*.pem
+*.key
+
+# --- Editors / OS -------------------------------------------------------------
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
+
+# --- Files over 10 MB ---------------------------------------------------------
+# git has no size pattern. Every file over 10 MB in this tree today is matched
+# by a rule above (models, binaries, venv, TM WAL). scripts/check_large_files.py
+# fails if a tracked or staged file is over 10 MB; run it before committing.
