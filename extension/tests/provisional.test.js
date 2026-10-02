@@ -24,6 +24,7 @@ function newOverlay() {
   overlay.primaryLang = 'zh';
   overlay.secondaryLang = 'none';
   overlay.init();
+  overlay.setShowOriginal(true);  // these tests look at the source line too (off by default since overlay batch 1)
   return overlay;
 }
 

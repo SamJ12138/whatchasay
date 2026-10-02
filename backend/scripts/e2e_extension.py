@@ -625,7 +625,8 @@ class GeometryLog:
         if "idle" not in self.moments and t >= 0.3:
             return "idle"
         if "partial" not in self.moments:
-            prog = [ln for ln in lines if ln["in_progress"] and len(ln["text"]) >= 20]
+            # mid-sentence: 20 characters, or 8 in a CJK script (a draft translation into Chinese)
+            prog = [ln for ln in lines if ln["in_progress"] and len(ln["text"]) >= (8 if script_of(ln["text"]) == "han" else 20)]
             if prog and not any(ln["type"] in ("primary", "secondary") and not ln["draft"] for ln in lines):
                 return "partial"
         if "final" not in self.moments:
@@ -1308,6 +1309,8 @@ def main() -> int:
     ap.add_argument("--shot-name", help="--shots: file name prefix (<name>-idle.png, ...)")
     ap.add_argument("--partial-updates", type=int, default=0,
                     help="--geometry: poll fast and record the block's box at the first N partial-text changes")
+    ap.add_argument("--show-source", action="store_true",
+                    help="audio path: the source line (spoken words) on under the translation (settings.showOriginal; off by default)")
     ap.add_argument("--hover-controls", action="store_true",
                     help="audio path: keep the mouse over the player so the site's control bar is showing")
     args = ap.parse_args()
@@ -1392,12 +1395,12 @@ def main() -> int:
             auto = args.targets == "auto"  # English first; switched to Chinese if the speech turns out to be English
             targets = ["en"] if auto else [t for t in args.targets.split(",") if t]
             caption_mode = args.path not in ("audio", "clear-memory", "cloud-keys")  # the audio path must work with caption mode off (D2)
-            sw.evaluate("""async ({url, langs, captionMode, fontSize}) => {
+            sw.evaluate("""async ({url, langs, captionMode, fontSize, showSource}) => {
                 const cur = (await chrome.storage.local.get('settings')).settings || {};
                 const extra = fontSize ? {fontSize} : {};
-                await chrome.storage.local.set({settings: {...cur, serverUrl: url, ...langs, captionMode, ...extra}});
+                await chrome.storage.local.set({settings: {...cur, serverUrl: url, ...langs, captionMode, ...extra, showOriginal: !!showSource}});
             }""", {"url": f"ws://127.0.0.1:{args.port}/ws", "langs": target_settings(targets), "captionMode": caption_mode,
-                   "fontSize": args.font_size})
+                   "fontSize": args.font_size, "showSource": args.show_source})
             if caption_mode:  # caption mode registers the content scripts for the granted origins
                 end = time.time() + 10
                 while time.time() < end and not sw.evaluate(

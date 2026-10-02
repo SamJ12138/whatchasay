@@ -17,6 +17,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const latencyValue = $('latency-value');
   const toggleOverlay = $('toggle-overlay');
   const toggleRefiner = $('toggle-refiner');
+  const toggleSource = $('toggle-source');
   const btnSwap = $('btn-swap');
   const btnClear = $('btn-clear');
   const btnFontUp = $('btn-font-up');
@@ -33,6 +34,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   let settings = await getSettings();
   toggleRefiner.checked = settings.refinerEnabled === true;
+  toggleSource.checked = settings.showOriginal === true;  // off by default: translation only
   liveLang.value = settings.asrSourceLang || 'auto';
 
   let liveState = { capturing: false, tabId: null };
@@ -74,6 +76,11 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   toggleRefiner.addEventListener('change', async (e) => {
     await updateSettings({ refinerEnabled: e.target.checked, usePostEditor: e.target.checked, fastMode: !e.target.checked });
+  });
+
+  // the source line (the spoken words) under the translation; remembered, applied to open tabs
+  toggleSource.addEventListener('change', async (e) => {
+    await updateSettings({ showOriginal: e.target.checked });
   });
 
   btnSwap.addEventListener('click', () => sendCommand('swap-order'));

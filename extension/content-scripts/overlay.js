@@ -14,7 +14,9 @@ class SubtitleOverlay {
     // State
     this.visible = true;
     this.primaryOnTop = true; // Primary language on top
-    this.showOriginal = true;
+    // The source line (the spoken words) is off by default: translation only. The popup
+    // toggle and Alt+O turn it on; the choice is remembered (settings.showOriginal).
+    this.showOriginal = false;
     this.currentCues = new Map(); // cueId -> { original, translations }
 
     // Language configuration
@@ -22,24 +24,28 @@ class SubtitleOverlay {
     this.secondaryLang = 'zh';
     this.targetLanguages = ['en', 'zh'];
 
-    // Settings
+    // Settings (docs/overlay/README.md has the layout rules)
     this.settings = {
-      fontSize: 20,
+      fontSize: 20,            // px, used only while no video element is known
+      fontScalePct: 4.5,       // font size as a percentage of the video's height
+      fontMinPx: 14,           // never smaller than this (small embeds)
+      sourceScale: 0.8,        // the source line's font relative to the translation's
+      sourceOpacity: 0.7,      // ...and its opacity
       fontFamily: '"Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif',
-      opacity: 0.9,
+      overlayBgOpacity: 0.6,   // the rounded box behind each line
       position: 'above', // 'above' or 'below'
-      maxLines: 2,
+      maxLines: 2,             // rows per line of text; past it the oldest words go
+      maxCharsLatin: 42,       // characters per row
+      maxCharsCJK: 22,         // ...for zh / ja / ko
       // Dynamic colors per language
       primaryColor: '#ffffff',
       secondaryColor: '#ffeb3b',
       // Legacy en/zh colors for backwards compatibility
       enColor: '#ffffff',
       zhColor: '#ffeb3b',
-      originalColor: '#aaaaaa',
-      bgColor: 'rgba(0, 0, 0, 0.75)',
-      padding: '8px 16px',
-      borderRadius: '4px',
-      lineHeight: 1.4,
+      originalColor: '#dddddd',
+      borderRadius: '0.35em',
+      lineHeight: 1.25,
     };
 
     // DOM elements
@@ -363,23 +369,77 @@ class SubtitleOverlay {
   }
 
   /**
-   * Increase font size.
+   * Increase font size: the percentage of the video's height (and the px fallback).
+   * Returns the new settings for the caller to remember.
    */
-  increaseFontSize(amount = 2) {
-    this.settings.fontSize = Math.min(40, this.settings.fontSize + amount);
+  increaseFontSize(amount = 0.5) {
+    this.settings.fontScalePct = Math.min(10, Math.round((this.settings.fontScalePct + amount) * 10) / 10);
+    this.settings.fontSize = Math.min(40, this.settings.fontSize + 2);
     this._updateStyles();
-    console.log('[Overlay] Font size:', this.settings.fontSize);
-    return this.settings.fontSize;
+    console.log('[Overlay] Font size:', this.settings.fontScalePct, '% of the video height');
+    return { fontScalePct: this.settings.fontScalePct, fontSize: this.settings.fontSize };
   }
 
   /**
    * Decrease font size.
    */
-  decreaseFontSize(amount = 2) {
-    this.settings.fontSize = Math.max(12, this.settings.fontSize - amount);
+  decreaseFontSize(amount = 0.5) {
+    this.settings.fontScalePct = Math.max(2, Math.round((this.settings.fontScalePct - amount) * 10) / 10);
+    this.settings.fontSize = Math.max(12, this.settings.fontSize - 2);
     this._updateStyles();
-    console.log('[Overlay] Font size:', this.settings.fontSize);
-    return this.settings.fontSize;
+    console.log('[Overlay] Font size:', this.settings.fontScalePct, '% of the video height');
+    return { fontScalePct: this.settings.fontScalePct, fontSize: this.settings.fontSize };
+  }
+
+  /**
+   * Show or hide the source line (the spoken words under the translation).
+   */
+  setShowOriginal(on) {
+    on = !!on;
+    if (on === this.showOriginal) return on;
+    this.showOriginal = on;
+    this._updateDisplay();
+    return on;
+  }
+
+  /**
+   * How a role is drawn: {fontPx, opacity}. The translation's font follows the video's
+   * height (fontScalePct, at least fontMinPx; the fontSize setting while no video is
+   * known); the source line (original, partial) is smaller and dimmer.
+   */
+  roleStyle(role) {
+    const layout = globalThis.STOverlayLayout;
+    const h = this._videoHeight();
+    const base = layout ? layout.fontPx(h, { scalePct: this.settings.fontScalePct, minPx: this.settings.fontMinPx, fallbackPx: this.settings.fontSize })
+      : (h > 0 ? Math.max(this.settings.fontMinPx, h * this.settings.fontScalePct / 100) : this.settings.fontSize);
+    if (role === 'original' || role === 'partial') {
+      return { fontPx: Math.max(this.settings.fontMinPx, Math.round(base * this.settings.sourceScale * 10) / 10), opacity: this.settings.sourceOpacity };
+    }
+    if (role === 'notice') return { fontPx: Math.max(11, Math.round(base * 0.6 * 10) / 10), opacity: 0.9 };
+    return { fontPx: base, opacity: 1 };
+  }
+
+  _videoHeight() {
+    if (!this.videoElement || typeof this.videoElement.getBoundingClientRect !== 'function') return 0;
+    try { return this.videoElement.getBoundingClientRect().height || 0; } catch (_) { return 0; }
+  }
+
+  /**
+   * The rows a text is drawn on: at most maxLines rows of maxChars (CJK: maxCharsCJK)
+   * characters; a longer text keeps its newest words, with an ellipsis at the start.
+   */
+  _fit(text, lang = null) {
+    const layout = globalThis.STOverlayLayout;
+    const t = String(text == null ? '' : text).replace(/\s*\n\s*/g, ' ');
+    if (!layout) return t;
+    const cjk = layout.isCJK(lang);
+    const r = layout.fitLines(t, { maxLines: this.settings.maxLines || 2, cjk,
+      maxChars: cjk ? (this.settings.maxCharsCJK || 22) : (this.settings.maxCharsLatin || 42) });
+    return r.lines.join('\n');
+  }
+
+  _translationText(translation) {
+    return translation.single_line || (translation.display_text || '').replace(/\n/g, ' ') || '';
   }
 
   /**
@@ -387,6 +447,7 @@ class SubtitleOverlay {
    */
   updateSettings(newSettings) {
     Object.assign(this.settings, newSettings);
+    if ('showOriginal' in newSettings) this.showOriginal = !!newSettings.showOriginal;
 
     // Update language configuration if provided
     if (newSettings.primaryLang) {
@@ -433,7 +494,9 @@ class SubtitleOverlay {
    * Set the video element for positioning.
    */
   setVideoElement(video) {
+    if (video === this.videoElement) return;
     this.videoElement = video;
+    this._updateStyles();   // the font follows the video's height
     this._updatePosition();
   }
 
@@ -487,6 +550,10 @@ class SubtitleOverlay {
    * Get CSS styles.
    */
   _getStyles() {
+    const text = this.roleStyle('primary');
+    const source = this.roleStyle('original');
+    const notice = this.roleStyle('notice');
+    const bg = `rgba(0, 0, 0, ${this.settings.overlayBgOpacity})`;
     return `
       .overlay-container {
         position: fixed;
@@ -505,22 +572,26 @@ class SubtitleOverlay {
         display: flex;
         flex-direction: column;
         align-items: center;
-        gap: 2px;
+        gap: 0.15em;
+        font-size: ${text.fontPx}px;
       }
 
+      /* a rounded box behind the text only, not a bar across the picture */
       .subtitle-line {
+        display: inline-block;
+        width: fit-content;
+        max-width: 100%;
+        box-sizing: border-box;
         font-family: ${this.settings.fontFamily};
-        font-size: ${this.settings.fontSize}px;
+        font-size: ${text.fontPx}px;
         line-height: ${this.settings.lineHeight};
-        padding: ${this.settings.padding};
-        background: ${this.settings.bgColor};
+        padding: 0.15em 0.5em;
+        background: ${bg};
         border-radius: ${this.settings.borderRadius};
         text-align: center;
         white-space: pre-wrap;
-        word-wrap: break-word;
-        max-width: 100%;
-        text-shadow: 1px 1px 2px rgba(0,0,0,0.8),
-                     -1px -1px 2px rgba(0,0,0,0.8);
+        overflow-wrap: break-word;
+        text-shadow: 0 0 2px rgba(0,0,0,0.9);
         pointer-events: auto;
       }
 
@@ -541,15 +612,17 @@ class SubtitleOverlay {
         color: ${this.settings.zhColor};
       }
 
+      /* the source line (the spoken words): smaller and dimmer than the translation */
       .subtitle-line.original {
         color: ${this.settings.originalColor};
-        font-size: ${this.settings.fontSize * 0.85}px;
-        opacity: 0.8;
+        font-size: ${source.fontPx}px;
+        opacity: ${source.opacity};
       }
 
       .subtitle-line.partial {
-        color: #c8c8c8;
-        opacity: 0.75;
+        color: ${this.settings.originalColor};
+        font-size: ${source.fontPx}px;
+        opacity: ${source.opacity};
         font-style: italic;
         animation: none;
       }
@@ -578,7 +651,7 @@ class SubtitleOverlay {
       }
 
       .subtitle-line.notice {
-        font-size: ${Math.max(11, this.settings.fontSize * 0.6)}px;
+        font-size: ${notice.fontPx}px;
         color: #9be7ff;
         background: rgba(0, 0, 0, 0.55);
         opacity: 0.9;
@@ -665,13 +738,7 @@ class SubtitleOverlay {
 
     // Add primary translation
     if (usable(primary)) {
-      const line = this._createSubtitleLine(
-        translations[primary].display_text || translations[primary].single_line,
-        'primary',
-        cueId,
-        primary,
-        revised
-      );
+      const line = this._createSubtitleLine(this._translationText(translations[primary]), 'primary', cueId, primary, revised);
       this.subtitleStack.appendChild(dim(line));
     } else if (draft && this._usable(draft.translations[primary])) {
       this.subtitleStack.appendChild(this._createDraftLine(draft.translations[primary], 'primary', cueId, primary, draft.provisional || cueData.provisional));
@@ -679,22 +746,18 @@ class SubtitleOverlay {
 
     // Add secondary translation (if configured and different from primary)
     if (secondary && secondary !== 'none' && usable(secondary)) {
-      const line = this._createSubtitleLine(
-        translations[secondary].display_text || translations[secondary].single_line,
-        'secondary',
-        cueId,
-        secondary,
-        revised
-      );
+      const line = this._createSubtitleLine(this._translationText(translations[secondary]), 'secondary', cueId, secondary, revised);
       this.subtitleStack.appendChild(dim(line));
     } else if (secondary && secondary !== 'none' && draft && this._usable(draft.translations[secondary])) {
       this.subtitleStack.appendChild(this._createDraftLine(draft.translations[secondary], 'secondary', cueId, secondary, draft.provisional || cueData.provisional));
     }
 
-    // Add original if enabled (always for live captions that have no translation yet)
+    // The source line when it is on; also when the cue has nothing else to show (no
+    // translation yet and no draft), so the viewer is never left with nothing.
     const hasTranslation = Object.keys(translations || {}).some(usable);
-    if ((this.showOriginal || !hasTranslation) && original) {
-      const line = this._createSubtitleLine(original, 'original', cueId, null, revised);
+    const hasDraft = !!draft && Object.keys(draft.translations).some((l) => this._usable(draft.translations[l]));
+    if ((this.showOriginal || !(hasTranslation || hasDraft)) && original) {
+      const line = this._createSubtitleLine(original, 'original', cueId, null, revised, cueData.sourceLang);
       this.subtitleStack.appendChild(dim(line));
     }
 
@@ -719,11 +782,12 @@ class SubtitleOverlay {
         this.subtitleStack.appendChild(this._createDraftLine(draft.translations[secondary], 'secondary', openCue, secondary, dimmed));
       }
     }
-    if (this.partial && this.partial.text) {
+    if (this.showOriginal && this.partial && this.partial.text) {
       const line = document.createElement('div');
-      // the line still being recognised: its text grows with every partial result
+      // the line still being recognised: its text grows with every partial result, and is
+      // truncated from the start so the newest words stay on screen
       line.className = 'subtitle-line partial in-progress' + (this.partial.provisional ? ' provisional' : '');
-      line.textContent = this.partial.text;
+      line.textContent = this._fit(this.partial.text, this.partial.lang);
       line.dataset.cueId = this.partial.cueId;
       line.dataset.state = 'in-progress';
       this.subtitleStack.appendChild(line);
@@ -749,7 +813,7 @@ class SubtitleOverlay {
   _createDraftLine(translation, type, cueId, langCode, dimmed) {
     const line = document.createElement('div');
     line.className = `subtitle-line ${type} draft in-progress` + (dimmed ? ' provisional' : '');
-    line.textContent = translation.display_text || translation.single_line;
+    line.textContent = this._fit(this._translationText(translation), langCode);
     line.dataset.cueId = cueId;
     line.dataset.type = type;
     line.dataset.lang = langCode;
@@ -764,10 +828,10 @@ class SubtitleOverlay {
    * @param {string} cueId - The cue ID
    * @param {string} langCode - Optional language code for styling
    */
-  _createSubtitleLine(text, type, cueId, langCode = null, revised = false) {
+  _createSubtitleLine(text, type, cueId, langCode = null, revised = false, fitLang = langCode) {
     const line = document.createElement('div');
     line.className = `subtitle-line ${type}` + (revised ? ' revised' : '');
-    line.textContent = text;
+    line.textContent = this._fit(text, fitLang);
     line.dataset.cueId = cueId;
     line.dataset.type = type;
     if (langCode) {
@@ -777,6 +841,7 @@ class SubtitleOverlay {
     // Handle edit mode
     if (this.editMode && this.editCueId === cueId && type !== 'original') {
       line.classList.add('editing');
+      line.textContent = text;   // the whole translation is edited, not the rows that fit
       this._editingLine = line;
       line.contentEditable = 'true';
       line.spellcheck = false;

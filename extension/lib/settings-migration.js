@@ -27,7 +27,15 @@
     return { settings: out, removed };
   }
 
-  const api = { stripCloudKeys, KEY_FIELDS, WHERE };
+  /** Schema 5 (the compact overlay, docs/overlay/README.md): the source line is off by
+   *  default. Applied once, to settings written by an older schema; the user's later choice
+   *  is kept. Returns the settings unchanged when nothing applies. */
+  function applyOverlayDefaults(settings, fromVersion) {
+    if (!settings || !(fromVersion < 5)) return settings;
+    return { ...settings, showOriginal: false };
+  }
+
+  const api = { stripCloudKeys, applyOverlayDefaults, KEY_FIELDS, WHERE };
   root.STSettingsMigration = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })(typeof globalThis !== 'undefined' ? globalThis : self);

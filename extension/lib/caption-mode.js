@@ -40,6 +40,7 @@
     'content-scripts/guards.js',
     'content-scripts/backend-port.js',
     'content-scripts/subtitle-detector.js',
+    'lib/overlay-layout.js',
     'content-scripts/overlay.js',
     'content-scripts/line-latency.js',
     'content-scripts/main.js',

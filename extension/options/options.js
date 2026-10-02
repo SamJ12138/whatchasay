@@ -11,7 +11,7 @@ const obs = window.STObs;
 obs.init({ context: 'options', sessionId: obs.newSessionId('opt') });
 
 // Schema version for migration
-const SETTINGS_SCHEMA_VERSION = 4; // 4: cloud keys removed from the extension (D4)
+const SETTINGS_SCHEMA_VERSION = 5; // 4: cloud keys removed from the extension (D4); 5: translation-only overlay
 
 // Language display names for UI
 const LANGUAGE_NAMES = {
@@ -67,6 +67,9 @@ const DEFAULT_SETTINGS = {
   secondaryColor: '#ffcc00',
   // Display settings
   fontSize: 20,
+  fontScalePct: 4.5,
+  fontMinPx: 14,
+  overlayBgOpacity: 0.6,
   fontFamily: '"Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif',
   primaryOnTop: true,
   overlayOpacity: 0.9,
@@ -92,7 +95,7 @@ const DEFAULT_SETTINGS = {
   // Other settings
   showSpeakers: true,
   showMusic: true,
-  showOriginal: true,
+  showOriginal: false,
   saveCorrections: true,
   autoConnect: true
 };
@@ -118,6 +121,11 @@ const elements = {
   strictMeaningLock: document.getElementById('strictMeaning'), // DOM ID is strictMeaning but we save as strictMeaningLock
   fontSize: document.getElementById('fontSize'),
   fontSizeValue: document.getElementById('fontSizeValue'),
+  fontScalePct: document.getElementById('fontScalePct'),
+  fontScalePctValue: document.getElementById('fontScalePctValue'),
+  fontMinPx: document.getElementById('fontMinPx'),
+  overlayBgOpacity: document.getElementById('overlayBgOpacity'),
+  overlayBgOpacityValue: document.getElementById('overlayBgOpacityValue'),
   overlayPosition: document.getElementById('overlayPosition'),
   // Language elements
   primaryLang: document.getElementById('primaryLang'),
@@ -168,6 +176,13 @@ function migrateSettings(settings) {
   const stripped = window.STSettingsMigration.stripCloudKeys(migrated);
   if (stripped.settings !== migrated) {
     migrated = stripped.settings;
+    needsSave = true;
+  }
+
+  // v5: the source line is off by default; applied once to settings from an older schema
+  const defaulted = window.STSettingsMigration.applyOverlayDefaults(migrated, typeof migrated.schemaVersion === 'number' ? migrated.schemaVersion : 0);
+  if (defaulted !== migrated) {
+    migrated = defaulted;
     needsSave = true;
   }
 
@@ -254,6 +269,15 @@ async function loadSettings() {
       elements.fontSize.value = settings.fontSize || 20;
       if (elements.fontSizeValue) elements.fontSizeValue.textContent = `${settings.fontSize || 20}px`;
     }
+    if (elements.fontScalePct) {
+      elements.fontScalePct.value = settings.fontScalePct == null ? 4.5 : settings.fontScalePct;
+      if (elements.fontScalePctValue) elements.fontScalePctValue.textContent = `${elements.fontScalePct.value}%`;
+    }
+    if (elements.fontMinPx) elements.fontMinPx.value = settings.fontMinPx == null ? 14 : settings.fontMinPx;
+    if (elements.overlayBgOpacity) {
+      elements.overlayBgOpacity.value = Math.round((settings.overlayBgOpacity == null ? 0.6 : settings.overlayBgOpacity) * 100);
+      if (elements.overlayBgOpacityValue) elements.overlayBgOpacityValue.textContent = `${elements.overlayBgOpacity.value}%`;
+    }
     if (elements.overlayPosition) elements.overlayPosition.value = settings.overlayPosition || 'above';
 
     // Language settings
@@ -299,6 +323,7 @@ async function saveSettings() {
     const primaryColor = getSelectedColor(primaryColorPicker);
     const secondaryColor = getSelectedColor(secondaryColorPicker);
     const targetLanguages = getTargetLanguages();
+    const currentSettings = (await chrome.storage.local.get('settings')).settings || {};
 
     const settings = {
       schemaVersion: SETTINGS_SCHEMA_VERSION,
@@ -340,7 +365,11 @@ async function saveSettings() {
       // Other settings
       showSpeakers: elements.showSpeakers?.checked !== false,
       showMusic: elements.showMusic?.checked !== false,
-      showOriginal: true,
+      // the source line: the popup toggle / Alt+O own this setting; a save here keeps it
+      showOriginal: currentSettings.showOriginal === true,
+      fontScalePct: parseFloat(elements.fontScalePct?.value) || 4.5,
+      fontMinPx: parseInt(elements.fontMinPx?.value) || 14,
+      overlayBgOpacity: elements.overlayBgOpacity ? parseInt(elements.overlayBgOpacity.value) / 100 : 0.6,
       saveCorrections: elements.saveCorrections?.checked !== false,
       autoConnect: true
     };
@@ -754,6 +783,16 @@ function initEventListeners() {
   }
 
   // Font size slider
+  if (elements.fontScalePct) {
+    elements.fontScalePct.addEventListener('input', () => {
+      if (elements.fontScalePctValue) elements.fontScalePctValue.textContent = `${elements.fontScalePct.value}%`;
+    });
+  }
+  if (elements.overlayBgOpacity) {
+    elements.overlayBgOpacity.addEventListener('input', () => {
+      if (elements.overlayBgOpacityValue) elements.overlayBgOpacityValue.textContent = `${elements.overlayBgOpacity.value}%`;
+    });
+  }
   if (elements.fontSize) {
     elements.fontSize.addEventListener('input', () => {
       if (elements.fontSizeValue) {

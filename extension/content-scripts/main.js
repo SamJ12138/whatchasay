@@ -158,6 +158,9 @@
       secondaryLang: 'zh',
       targetLanguages: ['en', 'zh'],
       fontSize: 20,
+      fontScalePct: 4.5,
+      fontMinPx: 14,
+      overlayBgOpacity: 0.6,
       fontFamily: '"Segoe UI", "Microsoft YaHei", "PingFang SC", "Noto Sans Bengali", sans-serif',
       primaryOnTop: true,
       primaryColor: '#ffffff',
@@ -170,7 +173,7 @@
       refinerEnabled: false,
       fastMode: true,
       strictMeaningLock: true,
-      showOriginal: true,
+      showOriginal: false,
       showPartials: true,
       autoConnect: true,
       asrSourceLang: 'auto',
@@ -623,10 +626,14 @@
         overlay.swapOrder();
         break;
       case 'increase-font':
-        overlay.increaseFontSize();
+        rememberSettings(overlay.increaseFontSize());
         break;
       case 'decrease-font':
-        overlay.decreaseFontSize();
+        rememberSettings(overlay.decreaseFontSize());
+        break;
+      case 'toggle-source':
+        // the source line (the spoken words) under the translation; remembered
+        rememberSettings({ showOriginal: overlay.setShowOriginal(!overlay.showOriginal) });
         break;
       case 'toggle-edit': {
         // the newest cue that has a translation (with live captions the newest cue is
@@ -639,13 +646,27 @@
     }
   }
 
+  // Alt+E and Alt+O live here, not in the manifest's commands: Chrome allows four
+  // suggested keys per extension and the manifest already has them.
   function setupKeyboardShortcuts() {
     document.addEventListener('keydown', (e) => {
       if (e.altKey && e.key === 'e') {
         e.preventDefault();
         handleCommand('toggle-edit');
+      } else if (e.altKey && e.key === 'o') {
+        e.preventDefault();
+        handleCommand('toggle-source');
       }
     });
+  }
+
+  /** A change made on the page (shortcut, popup button) is saved; the worker broadcasts it back. */
+  function rememberSettings(changed) {
+    if (!changed) return;
+    Object.assign(settings, changed);
+    try {
+      chrome.runtime.sendMessage({ type: 'UPDATE_SETTINGS', settings: changed }, () => void chrome.runtime.lastError);
+    } catch (_) {}
   }
 
   function applyOverlaySettings() {
@@ -653,16 +674,50 @@
     settings.targetLanguages = langs;
     overlay.updateSettings({
       fontSize: settings.fontSize,
+      fontScalePct: settings.fontScalePct == null ? 4.5 : settings.fontScalePct,
+      fontMinPx: settings.fontMinPx == null ? 14 : settings.fontMinPx,
+      overlayBgOpacity: settings.overlayBgOpacity == null ? 0.6 : settings.overlayBgOpacity,
+      maxLines: settings.maxLines || 2,
+      maxCharsLatin: settings.maxCharsLatin || settings.maxCharsEn || 42,
+      maxCharsCJK: settings.maxCharsCJK || settings.maxCharsZh || 22,
       fontFamily: settings.fontFamily,
-      opacity: settings.overlayOpacity,
       primaryColor: settings.primaryColor || settings.enColor,
       secondaryColor: settings.secondaryColor || settings.zhColor,
       primaryLang: settings.primaryLang,
       secondaryLang: settings.secondaryLang,
       targetLanguages: langs,
+      showOriginal: settings.showOriginal === true,
     });
     overlay.primaryOnTop = settings.primaryOnTop !== false;
-    overlay.showOriginal = settings.showOriginal !== false;
+    watchVideo();
+  }
+
+  // ---------------------------------------------------------------------------
+  // The video element: the overlay sizes its font from the video's height (and, batch 2,
+  // sits below or over it). The largest <video> on the page, re-checked every second
+  // while the overlay has something to show, since players replace their element.
+  // ---------------------------------------------------------------------------
+
+  let videoTimer = null;
+
+  function findVideo() {
+    if (detector && detector.videoElement && detector.videoElement.isConnected) return detector.videoElement;
+    let best = null, bestArea = 0;
+    for (const v of document.querySelectorAll('video')) {
+      const r = v.getBoundingClientRect();
+      const area = r.width * r.height;
+      if (area > bestArea) { best = v; bestArea = area; }
+    }
+    return best;
+  }
+
+  function watchVideo() {
+    overlay.setVideoElement(findVideo());
+    if (videoTimer) return;
+    videoTimer = setInterval(() => {
+      if (!live.active && !overlay.currentCues.size && !overlay.partial) return;
+      overlay.setVideoElement(findVideo());
+    }, 1000);
   }
 
   function applySettings() {

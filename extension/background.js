@@ -45,7 +45,7 @@ function logRelayFail(stage, err, extra) {
   }
 }
 
-const SETTINGS_SCHEMA_VERSION = 4; // 4: cloud keys removed from the extension (D4)
+const SETTINGS_SCHEMA_VERSION = 5; // 4: cloud keys removed from the extension (D4); 5: translation-only overlay
 
 const DEFAULT_SETTINGS = {
   enabled: true,
@@ -53,7 +53,10 @@ const DEFAULT_SETTINGS = {
   primaryLang: 'en',
   secondaryLang: 'zh',
   targetLanguages: ['en', 'zh'],
-  fontSize: 20,
+  fontSize: 20,               // px, used only while no video element is known
+  fontScalePct: 4.5,          // overlay font: percentage of the video's height
+  fontMinPx: 14,              // ...never under this (small embeds)
+  overlayBgOpacity: 0.6,      // the rounded box behind each subtitle line
   fontFamily: '"Segoe UI", "Microsoft YaHei", "PingFang SC", "Noto Sans Bengali", sans-serif',
   primaryOnTop: true,
   maxLines: 2,
@@ -68,7 +71,7 @@ const DEFAULT_SETTINGS = {
   refinerEnabled: false,
   fastMode: true,
   strictMeaningLock: true,
-  showOriginal: true,
+  showOriginal: false,        // the source line (spoken words) under the translation: popup toggle / Alt+O
   autoConnect: true,
   // Live captions
   asrSourceLang: 'auto',      // auto | en | zh | bn
@@ -108,6 +111,14 @@ function migrateSettings(settings) {
   const stripped = globalThis.STSettingsMigration.stripCloudKeys(migrated);
   if (stripped.settings !== migrated) {
     migrated = stripped.settings;
+    needsSave = true;
+  }
+
+  // v5: the source line is off by default; applied once to settings from an older schema
+  const fromVersion = typeof migrated.schemaVersion === 'number' ? migrated.schemaVersion : 0;
+  const defaulted = globalThis.STSettingsMigration.applyOverlayDefaults(migrated, fromVersion);
+  if (defaulted !== migrated) {
+    migrated = defaulted;
     needsSave = true;
   }
 

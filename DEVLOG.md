@@ -667,3 +667,22 @@ D4 cloud providers off by default, keys only in backend config.
   15 % up the *viewport*, never in the bottom 15 % of the video in fullscreen. 12 screenshots
   `docs/overlay/before-*.png` (3.3 MB). The harness's models root for these runs is a scratch folder with the
   punctuation model (`backend/data/` has none and is never written).
+- Batch 1 (show less; commit "feat: translation-only default, compact overlay"). `lib/overlay-layout.js` (pure):
+  `fitLines` wraps by words (CJK: characters) at `maxCharsLatin` 42 / `maxCharsCJK` 22 per row, at most
+  `maxLines` 2 rows, and past that keeps the newest words with an ellipsis at the start, never dropping the end;
+  `fontPx` = `fontScalePct` (4.5) % of the video element's height, at least `fontMinPx` (14), the old `fontSize`
+  px only while no video is known. The overlay: `showOriginal` defaults to **false** (translation only; the
+  partial source text is not drawn either), `setShowOriginal`, `roleStyle(role)` (the source line at 0.8x the
+  font and 0.7 opacity), every line through `_fit` (the edited line keeps the whole text), a rounded box behind
+  the text only (`inline-block; width: fit-content`, `rgba(0,0,0, overlayBgOpacity 0.6)`, padding 0.15em 0.5em,
+  line-height 1.25), the font set on `setVideoElement`; a cue with no translation and no draft still shows its
+  words. main.js finds the largest `<video>` (the detector's for caption mode), re-checked every second while
+  something is on screen; Alt+O toggles the source line (content-script shortcut like Alt+E: the manifest already
+  has Chrome's four suggested keys); A+ / A- now change `fontScalePct` by 0.5 and are remembered
+  (`UPDATE_SETTINGS`). Popup: "Show the spoken words under the translation (Alt+O)" toggle. Options: font size as
+  a percentage of the video height, the minimum px, the box opacity; the px slider stays as the no-video
+  fallback; `saveSettings` no longer hard-codes `showOriginal: true` (it had: a Settings save would have undone
+  the choice). Settings schema 5 (`applyOverlayDefaults` in `lib/settings-migration.js`): the source line is
+  turned off once for settings from an older schema, then the user's choice is kept. Harness: `--show-source`.
+  Node tests `tests/overlay-layout.test.js` (layout math, defaults, migration, injection order); the older
+  overlay tests turn the source on explicitly. Tallies: fast 334, node 109.
