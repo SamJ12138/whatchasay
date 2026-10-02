@@ -67,3 +67,9 @@ Thumbs.db
 # git has no size pattern. Every file over 10 MB in this tree today is matched
 # by a rule above (models, binaries, venv, TM WAL). scripts/check_large_files.py
 # fails if a tracked or staged file is over 10 MB; run it before committing.
+
+# --- Test coverage output --------------------------------------------------
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/

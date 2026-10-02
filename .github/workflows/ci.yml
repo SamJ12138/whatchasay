@@ -1,0 +1,93 @@
+# CI: fast backend suite with coverage, extension node tests, clean-install proof.
+# No model downloads: the fast suite uses fakes (no Zipformer, no HY-MT, no llama-server,
+# no browser); slow tests (pytest -m slow) are local only.
+# Actions are pinned by commit SHA; every one of them runs on Node 24 (`using: node24`).
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.12"
+  NODE_VERSION: "22"
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  PYTHONUTF8: "1"
+
+jobs:
+  backend-fast:
+    name: backend fast suite (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: |
+            backend/requirements.txt
+            backend/requirements-dev.txt
+      - name: Install (requirements.txt + requirements-dev.txt only)
+        run: python -m pip install -r requirements.txt -r requirements-dev.txt
+      - name: Fast suite with coverage
+        run: python -m pytest -v --cov=app --cov-report=term-missing:skip-covered --cov-report=xml:coverage.xml
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        if: always()
+        with:
+          name: coverage-${{ matrix.os }}
+          path: backend/coverage.xml
+          if-no-files-found: ignore
+
+  extension:
+    name: extension node --test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: extension
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Syntax check
+        shell: bash
+        run: for f in background.js offscreen.js obs.js pcm-worklet.js content-scripts/*.js lib/*.js popup/*.js options/*.js; do node --check "$f"; done
+      - name: node --test
+        run: node --test
+
+  clean-install:
+    name: clean install from requirements.txt (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Fresh venv, pip install -r requirements.txt -r requirements-dev.txt, import app.main, fast suite
+        run: python backend/scripts/clean_install_check.py

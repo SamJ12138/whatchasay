@@ -209,3 +209,8 @@ Browser: load `extension/` unpacked → YouTube video without captions → popup
   with the 120 s first-start health budget, not the restart bound. Lazy restarts after the first spawn now use
   `hymt_restart_timeout_s`, and the llama-server client has a 0.5 s connect timeout (Windows takes ~2 s to refuse a
   localhost connect to a dead port), counted as "child gone". The test covers both shapes (reaped / poll still running).
+- Batch 7: `.github/workflows/ci.yml` — three jobs on ubuntu-24.04 and windows-2025: backend fast suite with coverage
+  (Python 3.12, `pip install -r requirements.txt -r requirements-dev.txt`, coverage.xml uploaded), extension `node --check`
+  + `node --test` (Node 22), and the clean-install proof (`backend/scripts/clean_install_check.py`). No model downloads.
+  Actions pinned by commit SHA: checkout v7.0.1, setup-python v7.0.0, setup-node v7.0.0, upload-artifact v7.0.1, all
+  `using: node24`. Locally green on Windows / Python 3.10 (Python 3.12 and Linux are first exercised by CI in Phase 3).
