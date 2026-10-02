@@ -245,7 +245,13 @@ class ASRConfig(BaseSettings):
     # Longest line: past either limit it is cut at its widest gap between words (0 = no limit).
     max_segment_s: float = Field(default=6.0)
     max_segment_tokens: int = Field(default=48)
+    # Spoken-language ID schedule: the first, early attempt after lid_first_window_s of voiced audio,
+    # more every lid_retry_step_s of audio (accepted early: a language other than the provisional one,
+    # twice in a row), then the full window, lid_window_s of voiced audio, at which any answer above
+    # the floor is accepted.
     lid_window_s: float = Field(default=2.5)
+    lid_first_window_s: float = Field(default=1.0)
+    lid_retry_step_s: float = Field(default=0.5)
     # Spoken-language ID picks the likeliest of `languages` (renormalised over them); below this
     # it stays undecided (provisional language kept). docs/observations.md A7
     lid_min_confidence: float = Field(default=0.6)

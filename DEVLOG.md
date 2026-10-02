@@ -613,4 +613,23 @@ D4 cloud providers off by default, keys only in backend config.
   p95 43-130 ms on the CPU (bound 150). The MT engine is untouched. **Conflict with the brief:** its defaults
   (2 / 300 ms) miss its own flicker budget by a factor of two; the budget is met only by showing fewer drafts.
   Not built: a minimum prefix length (a line's first draft is usually one word). Tallies: fast 315, node 92.
+- Batch 3 (earlier language confirmation; commit "perf: earlier language confirmation"). Spoken-language ID now runs
+  first after 1.0 s of voiced audio (`asr.lid_first_window_s`), then every 0.5 s of audio, voiced or not
+  (`asr.lid_retry_step_s`; three early attempts), then on the full window as before (`asr.lid_window_s` 2.5 s
+  voiced, once more at 4.0 s). An early attempt can only switch to a language other than the first guess, and only
+  when two attempts in a row give it: whisper-tiny says "en" for noise and for the first second of Mandarin and
+  Bengali (up to 0.99), so the first guess is confirmed on the full window only. The constrained-set rule and the
+  0.6 floor are unchanged. `lid.py` no longer pads to 30 s (window = audio + 0.5 s): 0.14 s (0.86 s live) -> about
+  0.015 s per call, and at least as confident on short audio; the model is loaded at startup (it cost the first
+  attempt 0.55 s). Offline, 30 start offsets over six inputs: the same language as before in all, decided 1-2.9 s
+  earlier for Mandarin and Bengali (live clip 3.92 -> 1.92 s of audio), English unchanged. Browser, live clip, 3 of
+  3 runs: first confirmed-language subtitle 5.26-5.36 s -> 2.14-2.15 s after play, Bengali confirmed in all.
+  Found on the way: (1) observations A10, fixed: a `config` message with `source_lang: auto` (sent on any settings
+  change) restarted detection of a confirmed session; (2) observations A11, open: when a silent tab starts to play,
+  its first few hundred milliseconds do not reach the capture, and the live clip, which opens with speech, lost its
+  first sentence in 17 of 18 browser runs; the harness gained `--prime-audio` (a near-silent tone before the clip,
+  as over a video already playing), used by `line_latency_table.py`, and `--backend-dir` / `--extension` to measure
+  an older commit's code the same way. Without priming the after number is 3.62-3.69 s (the language is confirmed
+  at about 2.3 s, but there is no captured speech to show before the second sentence). Tallies: fast 327, slow 35,
+  node 92.
 

@@ -388,6 +388,20 @@ def correction_target(lines: list[dict]) -> dict | None:
     return {"cue_id": tr["cue_id"], "lang": tr["lang"], "original": orig, "translation": tr["text"]}
 
 
+# --prime-audio: a near-silent tone on the page, so the tab's audio output is already running when
+# the clip starts, as it is when a viewer turns captions on over a playing video. Without it Chrome
+# starts the output with the clip and the first few hundred milliseconds never reach the capture: a
+# clip that begins with speech loses its first sentence (docs/latency.md, Batch 3).
+PRIME_AUDIO_JS = """async () => {
+  const ctx = new AudioContext();
+  const osc = ctx.createOscillator(), gain = ctx.createGain();
+  gain.gain.value = 0.00002;
+  osc.connect(gain).connect(ctx.destination);
+  osc.start();
+  window.__stPrime = ctx;
+  await new Promise(r => setTimeout(r, 600));
+}"""
+
 VIDEO_STATE_JS = "(v => v ? {muted: v.muted, paused: v.paused, t: v.currentTime, loop: v.loop} : null)"
 
 
@@ -474,7 +488,11 @@ def test_extension_copy(extension: Path, scratch: Path, extra_origins=()) -> Pat
     return dst.resolve()
 
 
-def start_backend(port: int, scratch: Path, extension_ids=(), tm: Path | None = None) -> subprocess.Popen:
+def start_backend(port: int, scratch: Path, extension_ids=(), tm: Path | None = None,
+                  backend_dir: Path | None = None) -> subprocess.Popen:
+    """backend_dir: run the backend code of another checkout (a before / after comparison)
+    with this checkout's venv; its relative model paths then need absolute settings
+    (SUBTITLE_ASR__MODELS_DIR, SUBTITLE_ASR__PUNCT_DIR, SUBTITLE_TRANSLATION__CT2_DIR)."""
     py = BACKEND / ("venv/Scripts/python.exe" if os.name == "nt" else "venv/bin/python")
     env = dict(os.environ)
     if extension_ids:
@@ -483,7 +501,7 @@ def start_backend(port: int, scratch: Path, extension_ids=(), tm: Path | None = 
     env["SUBTITLE_DATA_DIR"] = str(scratch / "data")
     env["SUBTITLE_SERVER__PORT"] = str(port)
     log = open(scratch / "backend.log", "w", encoding="utf-8")
-    return subprocess.Popen([str(py), "run.py", "--port", str(port)], cwd=str(BACKEND), env=env,
+    return subprocess.Popen([str(py), "run.py", "--port", str(port)], cwd=str(backend_dir or BACKEND), env=env,
                             stdout=log, stderr=subprocess.STDOUT)
 
 
@@ -1045,6 +1063,12 @@ def main() -> int:
     ap.add_argument("--url", help="audio path: live-caption the first <video> of this real page (the test copy is granted "
                                   "its origin, standing in for the toolbar click); exit 2 on a consent wall or bot check")
     ap.add_argument("--start-at", type=float, default=0.0, help="--url: seek the video here (s) before capture starts")
+    ap.add_argument("--backend-dir", type=Path,
+                    help="--start-backend: run the backend code in this folder (another checkout's backend/) with this "
+                         "checkout's venv, for before / after comparisons; pair it with --extension")
+    ap.add_argument("--prime-audio", action="store_true",
+                    help="audio path with --video / --url: start a near-silent tone on the page before the clip plays, "
+                         "so the tab's audio output is already running (as over a video that is already playing)")
     ap.add_argument("--lines", type=int, default=0,
                     help="audio path: read the overlay (CDP) and keep the first N translated lines with their originals")
     args = ap.parse_args()
@@ -1075,7 +1099,8 @@ def main() -> int:
             args.extension = test_extension_copy(args.extension, scratch, extra)
             summary["test_grant"] = list(TEST_ORIGINS) + extra
         if args.start_backend:
-            backend = start_backend(args.port, scratch, [extension_id_for_path(str(args.extension))], tm=args.tm)
+            backend = start_backend(args.port, scratch, [extension_id_for_path(str(args.extension))], tm=args.tm,
+                                    backend_dir=args.backend_dir)
         health = f"http://127.0.0.1:{args.port}/health/json"
         if not wait_http(health, 120 if args.start_backend else 5):
             summary["error"] = f"backend not reachable at {health}"
@@ -1216,6 +1241,9 @@ def main() -> int:
                     summary["error"] = f"ASR_START failed: {res}"
                     return 1
                 if args.video or args.url:  # capture is running: start the clip now
+                    if args.prime_audio:
+                        page.evaluate(PRIME_AUDIO_JS)
+                        summary["prime_audio"] = True
                     page.evaluate(f"{PAGE_VIDEO_JS}.play()" if args.url else "document.getElementById('v').play()")
                     play_t = time.time()
                     summary["play_started_s"] = round(play_t - page_opened, 2)

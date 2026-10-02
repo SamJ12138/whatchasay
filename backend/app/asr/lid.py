@@ -1,8 +1,9 @@
 """
 Spoken language identification (once per session).
 
-whisper-tiny (the sherpa-onnx export) on the first few seconds of voiced audio,
-run directly with onnxruntime so that its per-language probabilities are visible:
+whisper-tiny (the sherpa-onnx export) on the first seconds of voiced audio (the
+session decides when: asr/session.py), run directly with onnxruntime so that its
+per-language probabilities are visible:
 the answer is the most probable language among the ones we can recognise
 (renormalised over them), and only if it is at least `min_confidence`; otherwise
 the session stays provisional. whisper's own unconstrained answer is often a
@@ -38,8 +39,12 @@ LID_MODEL_NAME = "sherpa-onnx-whisper-tiny"
 LID_URL = f"https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/{LID_MODEL_NAME}.tar.bz2"
 ENCODER, DECODER = "tiny-encoder.int8.onnx", "tiny-decoder.onnx"
 
-# whisper's front end: 30 s windows, 25 ms frames every 10 ms, 80 mel bins (Slaney scale and norm)
+# whisper's front end: 25 ms frames every 10 ms, 80 mel bins (Slaney scale and norm), windows of
+# at most 30 s. The exported encoder takes any length, and its cost grows with it: the window is
+# the audio plus PAD_S of silence (at least MIN_S), not always 30 s (0.14 s -> 0.015 s per call for
+# 2.5 s of audio; on short audio the answer is at least as confident as with 30 s of padding).
 N_FFT, HOP, N_MELS, CHUNK_S = 400, 160, 80, 30
+PAD_S, MIN_S = 0.5, 2.0
 
 
 def _hz_to_mel(f):
@@ -71,9 +76,11 @@ _WINDOW = (0.5 - 0.5 * np.cos(2 * np.pi * np.arange(N_FFT) / N_FFT)).astype(np.f
 
 
 def log_mel(samples) -> np.ndarray:
-    """whisper's log-mel spectrogram of one 30 s window (shorter audio is zero-padded): (80, 3000)."""
+    """whisper's log-mel spectrogram of the audio plus PAD_S of silence, at least MIN_S and
+    at most 30 s long (an even number of frames): (80, 200) for 1 s ... (80, 3000)."""
     audio = np.asarray(samples, dtype=np.float32)
-    n = CHUNK_S * SAMPLE_RATE
+    n = len(audio) + int(PAD_S * SAMPLE_RATE)
+    n = min(CHUNK_S * SAMPLE_RATE, max(int(MIN_S * SAMPLE_RATE), -(-n // (2 * HOP)) * 2 * HOP))
     audio = np.pad(audio, (0, max(0, n - len(audio))))[:n]
     x = np.pad(audio, (N_FFT // 2, N_FFT // 2), mode="reflect")
     frames = np.lib.stride_tricks.as_strided(x, (1 + (len(x) - N_FFT) // HOP, N_FFT), (x.strides[0] * HOP, x.strides[0]))
@@ -147,6 +154,17 @@ class SpokenLanguageId:
 
     def available(self) -> bool:
         return ORT_AVAILABLE
+
+    def load(self) -> None:
+        """Load the model now if it is on disk (startup warmup: about half a second that the
+        first attempt of the first Auto-detect session would otherwise spend). A model that
+        is not downloaded yet is left to the first use, as before."""
+        if self._enc is not None:
+            return
+        model_dir = self.models_root / LID_MODEL_NAME
+        if not ((model_dir / ENCODER).exists() and (model_dir / DECODER).exists()):
+            raise FileNotFoundError(f"{LID_MODEL_NAME} is not in {self.models_root}")
+        self._load()
 
     def probabilities(self, samples_f32) -> Dict[str, float]:
         """whisper-tiny's probability for each of its ~100 languages (softmax over the

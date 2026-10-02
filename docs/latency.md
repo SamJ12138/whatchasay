@@ -157,3 +157,54 @@ What the numbers say, and they are not flattering:
   drafts running: p50 26-28 ms, p95 43-130 ms on the CPU, under the 150 ms bound in all nine runs; drafts are short
   texts, so the median fell. The final translation after the last word did not move (1.29-1.38 s p50).
 
+## Batch 3: earlier language confirmation (2026-10-02)
+
+With Auto-detect nothing in the right language can be shown before spoken-language ID confirms it. What changed
+(`asr/session.py`, `asr/lid.py`; the constrained-set rule and the 0.6 confidence floor are as they were):
+
+| | Before | Now |
+|---|---|---|
+| First attempt | after 2.5 s of voiced audio | after 1.0 s of voiced audio (`SUBTITLE_ASR__LID_FIRST_WINDOW_S`) |
+| Next attempts | one more, 1.5 s of voiced audio later | every 0.5 s of audio, voiced or not (`SUBTITLE_ASR__LID_RETRY_STEP_S`), three early attempts in all; then the full window at 2.5 s of voiced audio (`SUBTITLE_ASR__LID_WINDOW_S`) and one more at 4.0 s |
+| What an early attempt may decide | (there was none) | only a language **other than the first guess**, and only when two attempts in a row give it. whisper-tiny answers "en" for noise and for the first second of Mandarin and Bengali samples, with confidence up to 0.99, so English (the first guess) is still confirmed on the full window only |
+| One call | 0.14 s (0.86 s in the live runs): the window was padded to whisper's 30 s | 0.012-0.02 s: the window is the audio plus 0.5 s. On short audio the short window is at least as confident (Bengali sample, 1.5 s: 0.69 for English with 30 s of padding, 0.83 for Bengali without) |
+| Model load | on the first attempt (0.55 s in a live run, stalling the audio loop) | at startup |
+
+**Decision time, offline** (the real session and model; seconds of audio fed when the language was decided; start
+offsets 0 / 0.3 / 0.7 / 1.5 / 3.0 s into each file; `tests/test_lid_real.py` holds the clip and sample claims):
+
+| Input | Before | Now | Result |
+|---|---|---|---|
+| Live clip (Bengali) | 3.92 / 4.28 / 4.24 / 3.88 / 3.48 | 1.92 / 2.72 / 3.44 / 2.56 / 1.80 | bn, the same in all |
+| Bengali sample | 3.16 / 2.88 / 2.68 / 3.08 / 3.24 | 2.08 / 2.32 / 1.60 / 1.56 / 1.96 | bn, the same |
+| Mandarin sample `0.wav` | 4.84 / 4.56 / 4.56 / 5.20 / 4.44 | 2.24 / 1.92 / 1.60 / 5.20 / 4.44 | zh, zh, zh, zh, en (the last window is English words); the same before and now |
+| Mandarin sample `3.wav` | 3.16 / 2.84 / 2.52 / 2.76 / 4.56 | 2.16 / 2.36 / 1.52 / 1.52 / 1.80 | zh, the same |
+| English samples `0.wav`, `1.wav` | 2.52-3.04 | unchanged (the first guess waits for the full window) | en, the same |
+
+30 of 30 cases give the same language as before; none is decided later.
+
+**First confirmed-language subtitle on the live clip, in the browser** (seconds after the clip starts to play; 3 runs
+each; the tab's audio output already running, see below):
+
+| | run_ids | Detected | First confirmed subtitle (s) |
+|---|---|---|---|
+| Before (code of commit `0d5e875`) | `20261002T171325-0c2002`, `20261002T171414-a14a6b`, `20261002T171504-b67c48` | bn, confirmed | 5.26, 5.31, 5.36 |
+| Now | `20261002T170515-fdf93f`, `20261002T170558-b9e40e`, `20261002T170641-33eb36` | bn, confirmed | **2.14, 2.15, 2.14** (2.54-2.57 s after the session's first audio frame) |
+
+Under 3 s in 3 of 3 runs, the same detection result. The first subtitle is the clip's first sentence, replayed into
+the Bengali recognizer the moment the language is confirmed.
+
+**A finding about the measurement.** Without the tab's audio output already running, the same three runs give
+3.62, 3.62 and 3.69 s (before: 5.43-5.58 s), and not because detection is slower: language ID confirmed Bengali at
+about 2.3 s, but the clip's first sentence (0-0.68 s) never reached the capture, so there was nothing to show until
+the next sentence (from 2.68 s) produced its first partial. Chrome starts a silent tab's audio output with the first
+sample and the capture stream begins a few hundred milliseconds later; the sentence was missing in 17 of the 18
+browser runs of Batches 1-3 made that way and present in every run with the output already running
+(observations A11). The harness option `--prime-audio` plays a near-silent tone on the page before the clip
+starts, which is the situation of a viewer who turns captions on over a video that is already playing;
+`line_latency_table.py` uses it (and `--no-prime` gives the other case). The first baseline table above was
+measured without it; the before / after table below uses it on both sides.
+
+English speech is not confirmed earlier (3.9-4.2 s as before): its text is on screen from 0.3-0.5 s, dimmed, and
+undimmed in place.
+

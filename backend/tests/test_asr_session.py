@@ -272,7 +272,8 @@ def test_sentences_inside_the_replayed_buffer_come_out_as_their_own_finals():
     there: 3 s of buffer replayed in frames must produce the final at 2 s."""
     eng = FakeEngine()
     s = StreamingASRSession(
-        SessionConfig(source_lang="auto", allowed_langs=["en", "zh", "bn"], lid_window_s=3.0, lid_min_rms=0.001, partial_interval_ms=0),
+        SessionConfig(source_lang="auto", allowed_langs=["en", "zh", "bn"], lid_window_s=3.0, lid_first_window_s=3.0,
+                      lid_min_rms=0.001, partial_interval_ms=0),
         {"sherpa-zipformer": eng}, lid_identify=lambda audio, allowed: "bn")
     msgs = []
     while s.lang != "bn":
@@ -280,3 +281,143 @@ def test_sentences_inside_the_replayed_buffer_come_out_as_their_own_finals():
     after = msgs[[m["type"] for m in msgs].index("reset"):]
     replayed_finals = [m["text"] for m in after if m["type"] == "final" and m["lang"] == "bn"]
     assert replayed_finals and replayed_finals[0] == "bn final 1", replayed_finals
+
+
+# ---------------------------------------------------------------- earlier language confirmation
+
+
+def _early(lid, **kw):
+    """Auto-detect with the real schedule: first attempt after 1 s of voiced audio, then
+    every 0.5 s, the full window at 2.5 s. Returns (session, engine, the lid calls)."""
+    calls = []
+
+    def identify(audio, allowed):
+        calls.append(round(len(audio) / SAMPLE_RATE, 2))
+        return lid(calls[-1])
+
+    eng = FakeEngine()
+    kw.setdefault("lid_min_rms", 0.001)
+    cfg = SessionConfig(source_lang="auto", allowed_langs=["en", "zh", "bn"], partial_interval_ms=0, **kw)
+    return StreamingASRSession(cfg, {"sherpa-zipformer": eng}, lid_identify=identify), eng, calls
+
+
+def _feed_until_decided(s, max_frames=200):
+    """-> (messages, seconds of audio fed when the language status left 'provisional')"""
+    msgs = []
+    for i in range(max_frames):
+        msgs.extend(s.feed(loud_frame()))
+        if s.lang_status != "provisional":
+            return msgs, round((i + 1) * 0.04, 2)
+    return msgs, None
+
+
+def test_another_language_is_confirmed_early_when_two_attempts_in_a_row_agree():
+    s, eng, calls = _early(lambda secs: "bn")
+    msgs, decided_at = _feed_until_decided(s)
+    assert s.lang == "bn" and s.lang_status == "confirmed"
+    assert calls == [1.0, 1.52], calls            # 1 s of voiced audio, then 0.5 s more (40 ms frames)
+    assert decided_at == 1.52                     # was 2.5 s
+    lid = [m for m in msgs if m["type"] == "lid" and m.get("confirmed")]
+    assert lid[0]["lang"] == "bn" and lid[0]["switched"] is True
+    assert [m["type"] for m in msgs].count("reset") == 1
+
+
+def test_one_early_answer_is_not_enough_to_switch():
+    """A second of audio is weak evidence: the early answer has to come twice in a row."""
+    s, eng, calls = _early(lambda secs: "zh" if secs < 1.2 else "en")
+    msgs, decided_at = _feed_until_decided(s)
+    assert s.lang == "en" and s.lang_status == "confirmed" and len(eng.sessions) == 1
+    assert "reset" not in [m["type"] for m in msgs]
+    assert decided_at == 2.52
+
+
+def test_the_provisional_language_is_not_confirmed_before_the_full_window():
+    """whisper-tiny answers "en" for noise and for the first second of other languages
+    (docs/latency.md): English, the provisional language, is only confirmed on the full
+    window, as before."""
+    s, eng, calls = _early(lambda secs: "en")
+    msgs, decided_at = _feed_until_decided(s)
+    assert calls == [1.0, 1.52, 2.04, 2.52], calls
+    assert decided_at == 2.52 and s.lang == "en" and s.lang_status == "confirmed"
+
+
+def test_speech_that_starts_late_is_still_detected_right():
+    # the first seconds are noise ("en"), then Bengali speech
+    s, eng, calls = _early(lambda secs: "en" if secs < 1.8 else "bn")
+    msgs, decided_at = _feed_until_decided(s)
+    assert s.lang == "bn" and s.lang_status == "confirmed"
+    assert decided_at == 2.52                     # bn at 2.0 s and again at the full window
+    assert not [m for m in msgs if m["type"] == "lid" and m.get("confirmed") and m["lang"] == "en"]
+
+
+def test_undecided_attempts_end_in_fallback_after_the_full_window_and_one_more():
+    s, eng, calls = _early(lambda secs: None)
+    msgs, decided_at = _feed_until_decided(s)
+    assert s.lang_status == "fallback" and s.lang == "en"
+    assert calls == [1.0, 1.52, 2.04, 2.52, 4.0], calls
+    assert decided_at == 4.0
+
+
+def quiet_frame(ms=40):
+    return (np.zeros(int(SAMPLE_RATE * ms / 1000))).astype("<i2").tobytes()
+
+
+def test_the_second_early_attempt_does_not_wait_for_more_speech():
+    """Seen on the live clip: one sentence, then two seconds without speech. The second
+    early attempt is due half a second of audio after the first, voiced or not; counted in
+    voiced audio it came 1.5 s later and the first Bengali subtitle with it."""
+    s, eng, calls = _early(lambda secs: "bn", lid_min_rms=0.004)
+    decided = None
+    for i in range(100):
+        s.feed(loud_frame() if i < 25 else quiet_frame())   # 1 s of speech, then quiet
+        if s.lang_status != "provisional":
+            decided = round((i + 1) * 0.04, 2)
+            break
+    assert calls == [1.0, 1.52] and decided == 1.52 and s.lang == "bn"
+
+
+def test_early_attempts_stop_after_their_number_when_no_more_speech_comes():
+    s, eng, calls = _early(lambda secs: "en", lid_min_rms=0.004)
+    for i in range(250):                                     # 1 s of speech, then 9 s of quiet
+        s.feed(loud_frame() if i < 25 else quiet_frame())
+    assert calls == [1.0, 1.52, 2.04], calls                 # three early attempts, then it waits for the full window
+    assert s.lang_status == "provisional"
+
+
+def test_early_attempts_can_be_switched_off():
+    s, eng, calls = _early(lambda secs: "bn", lid_first_window_s=2.5)
+    msgs, decided_at = _feed_until_decided(s)
+    assert calls == [2.52] and decided_at == 2.52
+
+
+def test_a_settings_change_does_not_restart_detection_of_an_auto_session():
+    """The extension re-sends its config (source_lang "auto" included) when the user changes
+    a setting, e.g. the target language: a confirmed session must stay confirmed."""
+    s, eng, calls = _early(lambda secs: "en")
+    _feed_until_decided(s)
+    assert s.lang_status == "confirmed"
+    assert s.set_language("auto") == []
+    assert s.lang_status == "confirmed" and s.lang_confirmed
+    n = len(calls)
+    for _ in range(100):
+        s.feed(loud_frame())
+    assert len(calls) == n                        # detection did not run again
+
+    # from a manual choice back to Auto-detect: detection does start again
+    s.set_language("zh")
+    assert s.lang_status == "manual"
+    out = s.set_language("auto")
+    assert out and out[0]["status"] == "provisional" and s.lang_status == "provisional"
+
+
+def test_lid_schedule_defaults_and_wiring(monkeypatch):
+    from app import asr as asr_pkg
+    from app.config import ASRConfig, settings
+
+    cfg = ASRConfig()
+    assert (cfg.lid_first_window_s, cfg.lid_retry_step_s, cfg.lid_window_s, cfg.lid_min_confidence) == (1.0, 0.5, 2.5, 0.6)
+    monkeypatch.setattr(asr_pkg, "_engines", {"sherpa-zipformer": FakeEngine()})
+    monkeypatch.setattr(settings.asr, "lid_first_window_s", 1.25)
+    monkeypatch.setattr(settings.asr, "lid_retry_step_s", 0.75)
+    s = asr_pkg.create_session(source_lang="auto", target_langs=["en"])
+    assert (s.config.lid_first_window_s, s.config.lid_retry_step_s) == (1.25, 0.75)

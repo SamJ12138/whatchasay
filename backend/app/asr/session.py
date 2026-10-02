@@ -17,6 +17,21 @@ Language handling
                         way and a 'reset' when the provisional captions must be
                         discarded.
 
+                        When LID runs: first after lid_first_window_s (1.0 s)
+                        of voiced audio, then every lid_retry_step_s (0.5 s)
+                        of audio, voiced or not (speech is often followed by a
+                        pause), as many times as steps fit before the full
+                        window; then at the full window, lid_window_s (2.5 s)
+                        of voiced audio, and once more at 1.6 x that. Before
+                        the full window only a language other than the provisional one
+                        is accepted, and only when two attempts in a row give
+                        it: whisper-tiny answers "en" for noise and for the
+                        first second of other languages, so the provisional
+                        language is confirmed on the full window only. From the
+                        full window on, any answer at or above the confidence
+                        floor is accepted; no answer at the last attempt ->
+                        fallback.
+
 Messages (JSON, sent by the WebSocket endpoint):
     {type:'partial', utterance_id, text, lang, lang_status, confirmed, t0, t1, w_first, w_last, w_session
                      [, stable_text]}   stable_text: the leading words of the open line that were the same
@@ -70,7 +85,9 @@ class SessionConfig:
     target_langs: List[str] = field(default_factory=lambda: ["en"])
     engine: str = "auto"  # 'auto' | 'sherpa-zipformer'
     allowed_langs: List[str] = field(default_factory=lambda: ["en", "zh", "bn"])
-    lid_window_s: float = 2.5     # seconds of voiced audio before running LID
+    lid_window_s: float = 2.5     # the full window: seconds of voiced audio at which any LID answer is accepted
+    lid_first_window_s: float = 1.0  # first (early) attempt; >= lid_window_s: no early attempts
+    lid_retry_step_s: float = 0.5    # audio (voiced or not) between early attempts
     lid_min_rms: float = 0.004    # frames quieter than this do not count as voiced
     lid_max_buffer_s: float = 12.0
     partial_interval_ms: int = 120
@@ -103,6 +120,10 @@ class StreamingASRSession:
         self._lid_attempts = 0
         self._lid_errors: List[BaseException] = []
         self._lid_done = False
+        self._lid_early_left = self._early_attempts()  # early attempts not made yet
+        self._lid_next_early: Optional[int] = None    # samples_received at which the next one runs
+        self._lid_full_attempts = 0                   # attempts on the full window (at most 2)
+        self._lid_early_answer: Optional[str] = None  # what the previous early attempt said
 
         self._last_partial_sent = 0.0
         self._pending_partial: Optional[AsrEvent] = None
@@ -169,18 +190,37 @@ class StreamingASRSession:
         msgs, self._startup_msgs = self._startup_msgs, []
         return msgs
 
+    def _early_attempts(self) -> int:
+        """How many early attempts fit before the full window: lid_first_window_s, then one per
+        lid_retry_step_s (1.0, 1.5, 2.0 for a 2.5 s window)."""
+        c = self.config
+        n, t = 0, c.lid_first_window_s
+        while c.lid_retry_step_s > 0 and t < c.lid_window_s - 1e-9 and n < 20:
+            n, t = n + 1, t + c.lid_retry_step_s
+        return n
+
     def set_language(self, lang: str) -> List[dict]:
-        """Manual override from the UI. Restarts the recognizer."""
+        """The spoken language from the UI: a language restarts the recognizer with it;
+        "auto" starts detection, unless this session is already detecting or has detected
+        (the extension re-sends its whole config when any setting changes)."""
         out: List[dict] = []
         if lang == "auto":
+            if self.config.source_lang == "auto" and self.lang_status in ("provisional", "confirmed"):
+                return out
+            self.config.source_lang = "auto"
             self.lang_confirmed = False
             self.lang_status = "provisional"
             self._lid_done = False
             self._lid_attempts = 0
             self._lid_errors = []
+            self._lid_early_left = self._early_attempts()
+            self._lid_next_early = None
+            self._lid_full_attempts = 0
+            self._lid_early_answer = None
             self._reset_lid_buffer()
             out.append({"type": "lid", "lang": self.lang, "source": "provisional", "confirmed": False, "status": "provisional"})
             return out
+        self.config.source_lang = lang
         if self.asr is not None and lang == self.lang:
             self.lang_confirmed = True
             self.lang_status = "manual"
@@ -249,8 +289,20 @@ class StreamingASRSession:
             dropped = self._lid_buffer.pop(0)
             self._lid_buffer_samples -= len(dropped)
 
-        if self._lid_voiced_samples < SAMPLE_RATE * self.config.lid_window_s:
+        voiced_s = self._lid_voiced_samples / SAMPLE_RATE
+        full_at = self.config.lid_window_s * (1.6 if self._lid_full_attempts else 1.0)
+        if voiced_s >= full_at - 1e-6:
+            early = False
+            self._lid_full_attempts += 1
+        elif self._lid_full_attempts == 0 and self._lid_early_left > 0 and (
+                voiced_s >= self.config.lid_first_window_s - 1e-6 if self._lid_next_early is None
+                else self.samples_received >= self._lid_next_early):
+            early = True
+            self._lid_early_left -= 1
+            self._lid_next_early = self.samples_received + int(SAMPLE_RATE * self.config.lid_retry_step_s)
+        else:
             return []
+        final_attempt = self._lid_full_attempts >= 2
 
         lang = None
         buffered_s = round(self._lid_buffer_samples / SAMPLE_RATE, 2)
@@ -266,8 +318,18 @@ class StreamingASRSession:
             self.stats["lid_ms"] = round((time.time() - t0) * 1000)
         self._lid_attempts += 1
 
+        if early and self.lid_identify is not None:
+            # A short window is weak evidence. Accepted early: a language other than the provisional
+            # one that two attempts in a row agree on. The provisional language waits for the full window.
+            agreed = lang is not None and lang != self.lang and lang == self._lid_early_answer
+            self._lid_early_answer = lang
+            if not agreed:
+                obs.log("lid", "skip", duration_ms=self.stats["lid_ms"], attempt=self._lid_attempts, buffered_s=buffered_s,
+                        early=True, answer=lang, error_message="early attempt: not decided yet")
+                return []
+
         if lang is None:
-            if self._lid_attempts >= 2 or self.lid_identify is None:
+            if final_attempt or self.lid_identify is None:
                 # give up: keep the provisional language, and say so (never "confirmed")
                 self._lid_done = True
                 self._reset_lid_buffer()
@@ -291,7 +353,6 @@ class StreamingASRSession:
             obs.log("lid", "skip", duration_ms=self.stats["lid_ms"], error_type="input_invalid",
                     error_message="LID undecided; collecting more speech for one more attempt",
                     attempt=self._lid_attempts, buffered_s=buffered_s)
-            self._lid_voiced_samples = int(SAMPLE_RATE * self.config.lid_window_s * 0.4)
             return []
 
         self._lid_done = True
@@ -299,7 +360,7 @@ class StreamingASRSession:
         self.lang_status = "confirmed"
         out: List[dict] = []
         obs.log("lid", "success", duration_ms=self.stats["lid_ms"], lang=lang, provisional=self.lang,
-                switched=lang != self.lang, attempt=self._lid_attempts, buffered_s=buffered_s)
+                switched=lang != self.lang, attempt=self._lid_attempts, buffered_s=buffered_s, early=early)
         if lang != self.lang:
             # Wrong provisional guess: swap recognizer, tell UI to drop provisional captions,
             # and replay the buffered audio so the first words are not lost.

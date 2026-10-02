@@ -11,6 +11,7 @@ Public API used by main.py:
 from __future__ import annotations
 
 import logging
+import time
 from typing import Dict, List, Optional
 
 import numpy as np
@@ -95,6 +96,8 @@ def create_session(
         engine=engine if engine != "auto" else settings.asr.engine,
         allowed_langs=list(settings.asr.languages),
         lid_window_s=settings.asr.lid_window_s,
+        lid_first_window_s=settings.asr.lid_first_window_s,
+        lid_retry_step_s=settings.asr.lid_retry_step_s,
         partial_interval_ms=settings.asr.partial_interval_ms,
         draft_stable_partials=settings.asr.draft_stable_partials,
     )
@@ -120,6 +123,16 @@ def warmup_asr() -> None:
     p = get_punctuator()
     if p is not None and any(p.supports(l) for l in settings.asr.languages):
         p.load()
+    lid = get_lid()
+    if lid.available():
+        t0 = time.perf_counter()
+        try:
+            lid.load()
+            obs.log("startup", "success", duration_ms=(time.perf_counter() - t0) * 1000, component="lid_model")
+        except Exception as e:
+            logger.info("Spoken-language ID model not loaded at startup: %s", e)
+            obs.log_exc("startup", e, api="process", event="skip", component="lid_model",
+                        degraded="loaded (or downloaded) on the first Auto-detect session instead")
 
 
 async def check_asr_available() -> bool:

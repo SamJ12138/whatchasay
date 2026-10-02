@@ -147,7 +147,7 @@ def test_page_scripts_parse_as_javascript():
     node = shutil.which("node")
     if not node:
         pytest.skip("node not on PATH")
-    for src in (h.PAGE_VIDEO_STATE_JS, h.PAGE_VIDEO_JS + ".play()"):
+    for src in (h.PAGE_VIDEO_STATE_JS, h.PAGE_VIDEO_JS + ".play()", h.PRIME_AUDIO_JS):
         r = subprocess.run([node, "-e", "new Function('return ' + process.argv[1])", src], capture_output=True, text=True)
         assert r.returncode == 0, (src, r.stderr[-500:])
 

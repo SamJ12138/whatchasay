@@ -342,7 +342,9 @@ objects are JSON; relative paths are relative to `backend/`. Every setting:
 | `SUBTITLE_ASR__SPLIT_MIN_PIECE_S` | `2.0` | ...and only once the line is at least this long (seconds; a hesitation does not become a line) |
 | `SUBTITLE_ASR__MAX_SEGMENT_S` | `6.0` | Longest line in seconds of speech: past it the line is cut at its widest gap between words (0 = no limit) |
 | `SUBTITLE_ASR__MAX_SEGMENT_TOKENS` | `48` | Longest line in recognizer tokens, cut the same way (0 = no limit) |
-| `SUBTITLE_ASR__LID_WINDOW_S` | `2.5` | Seconds of voiced audio before spoken-language ID runs |
+| `SUBTITLE_ASR__LID_WINDOW_S` | `2.5` | Spoken-language ID, full window: seconds of voiced audio at which any answer above the floor is accepted (and the first-guess language confirmed) |
+| `SUBTITLE_ASR__LID_FIRST_WINDOW_S` | `1.0` | First, early attempt after this many seconds of voiced audio; early, only another language than the first guess is accepted, twice in a row |
+| `SUBTITLE_ASR__LID_RETRY_STEP_S` | `0.5` | Audio between early attempts (seconds; voiced or not) |
 | `SUBTITLE_ASR__LID_MIN_CONFIDENCE` | `0.6` | Spoken-language ID answers only at or above this confidence among the spoken languages |
 | `SUBTITLE_ASR__PARTIAL_INTERVAL_MS` | `120` | Minimum gap between partial captions (ms) |
 | `SUBTITLE_ASR__DRAFT_STABLE_PARTIALS` | `3` | Draft translation of a line that is still open: a word counts as stable after this many partial results in a row (0 = no drafts) |
@@ -472,9 +474,11 @@ Windows (`.github/workflows/ci.yml`). `DEVLOG.md` is the project history; every 
   are not restored.
 - A line ends at a pause (0.5-0.6 s) and is at most 6 seconds of speech: a longer sentence is cut at its widest
   pause and its parts are translated separately, which can split a clause from its verb.
-- With *Auto-detect*, the first seconds (about 5 in the YouTube live test) are recognised as English until detection
-  has heard enough. That text is dimmed under *Detecting language…* and thrown away if the language turns out to be
-  another one; choosing the spoken language avoids the wait.
+- With *Auto-detect*, the first seconds (about 2 for Mandarin or Bengali speech, 4 for English) are recognised as
+  English until detection has heard enough. That text is dimmed under *Detecting language…* and thrown away if the
+  language turns out to be another one; choosing the spoken language avoids the wait.
+- When a silent tab starts to play, its first few hundred milliseconds of sound do not reach the capture: a video
+  that opens with speech can lose its first words (`docs/observations.md`, A11).
 - Spoken-language detection (whisper-tiny) is unreliable on Bengali: on its own it often takes Bengali for Hindi or
   Nepali. The backend now picks the likeliest of English, Mandarin and Bengali, and stays on its first guess when
   that is not clear enough: the captions then stay dimmed under *Language not detected, assuming English*. Set the
