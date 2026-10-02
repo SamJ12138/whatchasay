@@ -215,10 +215,12 @@ def auto_target(lang: str) -> str:
 LINE_TYPES = ("primary", "secondary", "original", "partial")
 
 
-def overlay_lines(node: dict) -> list[dict]:
+def overlay_lines(node: dict, want_label: bool = False):
     """The overlay's subtitle lines from a CDP DOM.describeNode(pierce) tree: the overlay
-    lives in a closed shadow root, which page scripts cannot read but DevTools can."""
+    lives in a closed shadow root, which page scripts cannot read but DevTools can.
+    dimmed = drawn as provisional text (the spoken language is not confirmed yet)."""
     out: list[dict] = []
+    label: list[str] = []
 
     def text_of(n):
         return (n.get("nodeValue") or "") if n.get("nodeType") == 3 else "".join(text_of(c) for c in n.get("children") or [])
@@ -230,13 +232,85 @@ def overlay_lines(node: dict) -> list[dict]:
             classes = attrs.get("class", "").split()
             kind = next((c for c in classes if c in LINE_TYPES), None)
             if "subtitle-line" in classes and kind:
-                out.append({"type": kind, "cue_id": attrs.get("data-cue-id"), "lang": attrs.get("data-lang"), "text": text_of(n)})
+                out.append({"type": kind, "cue_id": attrs.get("data-cue-id"), "lang": attrs.get("data-lang"), "text": text_of(n),
+                            "dimmed": "provisional" in classes})
+                return
+            if "lang-pending" in classes:
+                label.append(text_of(n))
                 return
         for c in (n.get("shadowRoots") or []) + (n.get("children") or []):
             walk(c)
 
     walk(node)
-    return out
+    return (label[0] if label else None) if want_label else out
+
+
+def overlay_label(node: dict) -> str | None:
+    """The overlay's language label ("Detecting language…", or that detection gave up),
+    shown while the spoken language is not confirmed; None when it is not up."""
+    return overlay_lines(node, want_label=True)
+
+
+SCRIPTS = (("bengali", 0x0980, 0x09FF), ("han", 0x4E00, 0x9FFF), ("latin", 0x41, 0x5A), ("latin", 0x61, 0x7A))
+
+
+def script_of(text: str) -> str | None:
+    """The writing system most of a line's letters are in (the summary keeps this, not the text)."""
+    counts: dict = {}
+    for ch in text or "":
+        for name, lo, hi in SCRIPTS:
+            if lo <= ord(ch) <= hi:
+                counts[name] = counts.get(name, 0) + 1
+    return max(counts, key=counts.get) if counts else None
+
+
+class DimmingLog:
+    """Overlay samples against the language status the content script had rendered:
+    until spoken-language ID confirms, every caption line must be dimmed and the label
+    up; from then on nothing is dimmed and the label is gone. `confirmed` is True /
+    False, or None when the confirmation arrived while the overlay was being read
+    (that sample proves nothing either way)."""
+
+    def __init__(self):
+        self.samples = 0
+        self.dimmed_samples = 0
+        self.dimmed_scripts: set = set()
+        self.first_dimmed_t = None
+        self.first_undimmed = None
+        self.confirmed_first_seen = None
+        self.violations: list = []
+
+    def add(self, t: float, lines: list[dict], label: str | None, confirmed: bool | None) -> None:
+        self.samples += 1
+        if confirmed is not False and self.confirmed_first_seen is None:
+            self.confirmed_first_seen = t
+        dimmed = [ln for ln in lines if ln.get("dimmed")]
+        undimmed = [ln for ln in lines if not ln.get("dimmed")]
+        if dimmed:
+            self.dimmed_samples += 1
+            self.dimmed_scripts.update(filter(None, (script_of(ln["text"]) for ln in dimmed)))
+            if self.first_dimmed_t is None:
+                self.first_dimmed_t = t
+        if undimmed and self.first_undimmed is None:
+            ln = undimmed[0]
+            self.first_undimmed = {"t": t, "type": ln["type"], "cue_id": ln["cue_id"], "script": script_of(ln["text"])}
+        found = []
+        if confirmed is False:
+            if undimmed:
+                found.append("undimmed_before_confirmed")
+            if dimmed and not label:
+                found.append("dimmed_without_label")
+        elif confirmed is True:
+            if dimmed:
+                found.append("dimmed_after_confirmed")
+            if label:
+                found.append("label_after_confirmed")
+        self.violations.extend({"kind": k, "t": t} for k in found)
+
+    def summary(self) -> dict:
+        return {"samples": self.samples, "dimmed_samples": self.dimmed_samples, "dimmed_scripts": sorted(self.dimmed_scripts),
+                "first_dimmed_s": self.first_dimmed_t, "first_undimmed": self.first_undimmed,
+                "confirmed_first_seen_s": self.confirmed_first_seen, "violations": self.violations[:10]}
 
 
 class LineCollector:
@@ -313,12 +387,14 @@ def summary_line(summary: dict) -> str:
     return json.dumps(summary, ensure_ascii=True)
 
 
-def read_overlay(cdp) -> list[dict]:
+def read_overlay(cdp) -> tuple[list[dict], str | None]:
+    """(caption lines, language label) as drawn right now."""
     root = cdp.send("DOM.getDocument", {"depth": 0})["root"]["nodeId"]
     nid = cdp.send("DOM.querySelector", {"nodeId": root, "selector": "#subtitle-translator-host"}).get("nodeId")
     if not nid:
-        return []
-    return overlay_lines(cdp.send("DOM.describeNode", {"nodeId": nid, "depth": -1, "pierce": True})["node"])
+        return [], None
+    node = cdp.send("DOM.describeNode", {"nodeId": nid, "depth": -1, "pierce": True})["node"]
+    return overlay_lines(node), overlay_label(node)
 
 
 def test_extension_copy(extension: Path, scratch: Path, extra_origins=()) -> Path:
@@ -1020,14 +1096,25 @@ def main() -> int:
                 tab_id = sw.evaluate("async (u) => (await chrome.tabs.query({url: u}))[0].id", page_url)
             cdp = ctx.new_cdp_session(page) if args.lines else None
             collector = LineCollector(args.lines) if args.lines else None
+            dimming = DimmingLog() if args.lines else None
             play_t = None
             lid_seen: list = []
+
+            def lid_certain() -> bool:
+                """The content script has rendered a confirmed (or user-chosen) language."""
+                return any(r.get("stage") == "ext_render" and (r.get("context") or {}).get("kind") == "lid"
+                           and (r.get("context") or {}).get("lid_status") in ("confirmed", "manual") for r in records)
 
             def tick():
                 """While captions run: read the overlay, and apply --targets auto once the language is known."""
                 if collector is not None and play_t is not None:
                     try:
-                        collector.add(round(time.time() - play_t, 2), read_overlay(cdp))
+                        before = lid_certain()
+                        lines, label = read_overlay(cdp)
+                        after = lid_certain()  # console records reach us before a later DOM answer does
+                        t = round(time.time() - play_t, 2)
+                        collector.add(t, lines)
+                        dimming.add(t, lines, label, before if before == after else None)
                     except Exception:
                         summary["overlay_read_errors"] = summary.get("overlay_read_errors", 0) + 1
                     if args.url and page.evaluate("!!document.querySelector('.ad-showing')"):
@@ -1113,6 +1200,7 @@ def main() -> int:
                 summary["first_translation_after_play_s"] = collector.first_translation_t
                 summary["lines"] = collector.lines()
                 summary["translated_cues"] = collector.translated_cues
+                summary["dimming"] = dimming.summary()
             if args.path == "audio":
                 page.wait_for_timeout(1500)  # let the other target's translation land too
                 summary["tm_rows_after"] = tm_rows(args.port)

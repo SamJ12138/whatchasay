@@ -58,9 +58,16 @@ class SubtitleOverlay {
     this.resizeObserver = null;
 
     // Live-caption state
-    this.partial = null;   // { cueId, text, lang } - unstable ASR hypothesis
+    this.partial = null;   // { cueId, text, lang, provisional } - unstable ASR hypothesis
     this.notice = null;    // { text, kind } - short status line (warnings, detected language)
     this._noticeTimer = null;
+
+    // Live captions with auto-detect: the backend's language status for the session
+    // (provisional | confirmed | manual | fallback | error; null = no live session).
+    // Only confirmed and manual are certain; until then live text is drawn dimmed.
+    this.langStatus = null;
+    this.liveLang = null;        // language of the recognizer the status is about
+    this.liveLangName = null;
   }
 
   /**
@@ -106,12 +113,16 @@ class SubtitleOverlay {
     }
 
     const existing = this.currentCues.get(cueId);
+    const drawn = options.langStatus ? this._treatment(options.langStatus, options.sourceLang)
+      : (existing && existing.provisional ? 'dim' : 'normal');
+    if (drawn === 'drop') return;
     // Store cue data (merge so a later revision keeps original/sourceLang)
     this.currentCues.set(cueId, {
       original: originalText,
       translations: translations || {},
       sourceLang: options.sourceLang || (existing && existing.sourceLang) || null,
       revised: !!options.revised,
+      provisional: drawn === 'dim',
     });
 
     // A final caption replaces any partial for the same cue
@@ -125,13 +136,89 @@ class SubtitleOverlay {
 
   /**
    * Show an unstable (partial) live caption. Rendered dimmed, no animation.
+   * langStatus: the backend's lang_status of the caption (live captions only).
    */
-  showPartial(cueId, text, lang = null) {
+  showPartial(cueId, text, lang = null, langStatus = null) {
     if (!this.container) {
       this.init();
     }
-    this.partial = { cueId, text, lang };
+    const drawn = langStatus ? this._treatment(langStatus, lang) : 'normal';
+    if (drawn === 'drop') return;
+    this.partial = { cueId, text, lang, provisional: drawn === 'dim' };
     this._updateDisplay();
+  }
+
+  /**
+   * Live captions: the session's language status, from the backend's 'lid' message
+   * (and repeated on every partial / final). While it is not certain, live text is
+   * dimmed above a label. When it becomes certain, text from the same recognizer is
+   * undimmed in place; text from another recognizer is removed.
+   * info: { lang, name } of the recognizer's language.
+   */
+  setLanguageStatus(status, info = {}) {
+    const lang = info.lang || null;
+    if (status === this.langStatus && lang === this.liveLang) return;
+    const sameRecognizer = !lang || !this.liveLang || lang === this.liveLang;
+    this.langStatus = status || null;
+    this.liveLang = status ? lang : null;
+    this.liveLangName = status ? (info.name || lang) : null;
+    if (this._certain(status) || !status) {
+      // certain now: the same recognizer's text is undimmed in place; another one's text,
+      // or dimmed text left when the session ends, goes
+      const keep = !!status && sameRecognizer;
+      for (const [id, cue] of Array.from(this.currentCues.entries())) {
+        if (!cue.provisional) continue;
+        if (keep) cue.provisional = false; else this.currentCues.delete(id);
+      }
+      if (this.partial && this.partial.provisional) {
+        if (keep) this.partial.provisional = false; else this.partial = null;
+      }
+    }
+    this._updateDisplay();
+  }
+
+  /**
+   * Detection switched the language (backend 'reset'): what the provisional recognizer
+   * wrote is removed. Whatever of it is still on its way (a translation of one of its
+   * sentences) is dropped when it arrives, see _treatment.
+   */
+  discardProvisional() {
+    this.clear();
+  }
+
+  _certain(status) {
+    return status === 'confirmed' || status === 'manual';
+  }
+
+  /**
+   * How a live caption with the backend's lang_status (and language) is drawn: 'dim'
+   * while the language is not certain, 'normal' once it is, 'drop' when the caption was
+   * written by the recognizer that has been replaced since.
+   */
+  _treatment(langStatus, lang = null) {
+    if (this._certain(langStatus)) return 'normal';
+    if (this._certain(this.langStatus)) {
+      // Written before the language was certain: by the recognizer that is still running
+      // (detection agreed with it), or by the one detection replaced. The replaced one's
+      // utterance ids start again in the new one, so its late translations must not land.
+      return lang && this.liveLang && lang !== this.liveLang ? 'drop' : 'normal';
+    }
+    if (!this.langStatus) {  // script injected mid-session: the caption itself says the status
+      this.langStatus = langStatus;
+      this.liveLang = lang;
+      this.liveLangName = lang;
+    }
+    return 'dim';
+  }
+
+  /** The label under dimmed text: what the overlay is waiting for. */
+  _languageLabel() {
+    if (this.langStatus === 'provisional') return { text: 'Detecting language…', kind: 'info' };
+    if (this.langStatus === 'fallback' || this.langStatus === 'error') {
+      const assumed = this.liveLangName ? `, assuming ${this.liveLangName}` : '';
+      return { text: `Language not detected${assumed}. Pick it in the popup.`, kind: 'warn' };
+    }
+    return null;
   }
 
   clearPartial(cueId = null) {
@@ -411,11 +498,19 @@ class SubtitleOverlay {
         animation: none;
       }
 
+      /* live text from a recognizer whose language is not confirmed yet
+         (after .partial and .original: same specificity, the later rule wins) */
+      .subtitle-line.provisional {
+        opacity: 0.45;
+        animation: none;
+      }
+
       .subtitle-line.notice {
         font-size: ${Math.max(11, this.settings.fontSize * 0.6)}px;
         color: #9be7ff;
         background: rgba(0, 0, 0, 0.55);
         opacity: 0.9;
+        animation: none;
       }
 
       .subtitle-line.notice.warn {
@@ -486,6 +581,7 @@ class SubtitleOverlay {
     const [cueId, cueData] = lastCue;
     const { original, translations } = cueData;
     const revised = !!cueData.revised;
+    const dim = (line) => { if (cueData.provisional) line.classList.add('provisional'); return line; };
 
     // Determine order based on primaryOnTop and configured languages
     const primary = this.primaryOnTop ? this.primaryLang : this.secondaryLang;
@@ -504,7 +600,7 @@ class SubtitleOverlay {
         primary,
         revised
       );
-      this.subtitleStack.appendChild(line);
+      this.subtitleStack.appendChild(dim(line));
     }
 
     // Add secondary translation (if configured and different from primary)
@@ -516,28 +612,35 @@ class SubtitleOverlay {
         secondary,
         revised
       );
-      this.subtitleStack.appendChild(line);
+      this.subtitleStack.appendChild(dim(line));
     }
 
     // Add original if enabled (always for live captions that have no translation yet)
     const hasTranslation = Object.keys(translations || {}).some(usable);
     if ((this.showOriginal || !hasTranslation) && original) {
       const line = this._createSubtitleLine(original, 'original', cueId, null, revised);
-      this.subtitleStack.appendChild(line);
+      this.subtitleStack.appendChild(dim(line));
     }
 
     this._renderExtras();
   }
 
   /**
-   * Render the partial (unstable) caption and any notice below the stack.
+   * Render the partial (unstable) caption, the language label and any notice below the stack.
    */
   _renderExtras() {
     if (this.partial && this.partial.text) {
       const line = document.createElement('div');
-      line.className = 'subtitle-line partial';
+      line.className = 'subtitle-line partial' + (this.partial.provisional ? ' provisional' : '');
       line.textContent = this.partial.text;
       line.dataset.cueId = this.partial.cueId;
+      this.subtitleStack.appendChild(line);
+    }
+    const label = this._languageLabel();
+    if (label) {
+      const line = document.createElement('div');
+      line.className = 'subtitle-line notice lang-pending' + (label.kind === 'warn' ? ' warn' : '');
+      line.textContent = label.text;
       this.subtitleStack.appendChild(line);
     }
     if (this.notice && this.notice.text) {
@@ -590,7 +693,8 @@ class SubtitleOverlay {
     } else {
       // Double-click to edit
       line.addEventListener('dblclick', () => {
-        if (type !== 'original') {
+        const cue = this.currentCues.get(cueId);
+        if (type !== 'original' && !(cue && cue.provisional)) {
           this.enableEditMode(cueId);
         }
       });

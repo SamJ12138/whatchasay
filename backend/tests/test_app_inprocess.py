@@ -65,3 +65,23 @@ def test_ws_asr_streams_partials_finals_and_translations(app_env):
     assert "zh" in tr["translations"]
     assert order.index("final") < order.index("translation")
     assert tr["utterance_id"] == got["final"][0]["utterance_id"]
+
+
+@pytest.mark.parametrize("source_lang,status", [("auto", "provisional"), ("en", "manual")])
+def test_ws_asr_translation_carries_the_language_status_of_its_sentence(app_env, source_lang, status):
+    """A translation arrives after its final (MT is asynchronous), possibly after spoken-
+    language ID switched the recognizer: the overlay has to know which recognizer the
+    sentence came from, so the translation repeats the final's lang_status."""
+    app_env.asr.final_every = 10
+    got = {"final": [], "translation": []}
+    with app_env.client() as c:
+        with c.websocket_connect(app_env.ws_url("/ws/asr", source_lang=source_lang, target_langs="zh")) as ws:
+            assert ws.receive_json()["type"] == "ready"
+            for _ in range(10):
+                ws.send_bytes(pcm_frame())
+            while not got["translation"]:
+                m = ws.receive_json()
+                if m["type"] in got:
+                    got[m["type"]].append(m)
+    assert got["final"][0]["lang_status"] == status
+    assert got["translation"][0]["lang_status"] == status

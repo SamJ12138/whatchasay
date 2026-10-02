@@ -338,6 +338,7 @@ async function translateOnDevice(finalMsg) {
     revision: 1,
     source_text: finalMsg.text,
     source_lang: src,
+    lang_status: finalMsg.lang_status,
     translations,
     mt_ms: Math.round(performance.now() - t0),
   });

@@ -78,7 +78,8 @@ the final. Typical 5–12-word subtitle sentences land inside the 1 s target; ve
   (`asr/punctuation.py`, `docs/asr-input-quality.md`); Mandarin and Bengali are not (no measured gain). The bilingual
   Mandarin model still writes English words in UPPERCASE.
 - Utterances longer than 10 s are force-split (rule3) mid-sentence.
-- Provisional-language start shows a second or two of wrong-language text before LID switches (cleared by `reset`).
+- Provisional-language start shows wrong-language text until LID switches (about 5 s on the YouTube live test;
+  cleared by `reset`). Since 2026-10-02 it is drawn dimmed under a "Detecting language…" label.
 - DRM sites: tab capture likely yields silence; only a "No audio" notice is shown (not verified on Netflix).
 - Chrome Translator API (Tier 0) path is implemented but not yet benchmarked; needs Chrome 138+ and a user-gesture pack download from the popup.
 - Cloud ASR and an accuracy-mode Whisper engine were never implemented; Phase 3 removed their registry stubs and
@@ -478,3 +479,30 @@ D4 cloud providers off by default, keys only in backend config.
   paragraph; the NASA GIF and its caption moved to "How it works". `NOTICE.md`: the excerpt belongs to its rights
   holders, is not under the MIT License, and is shown only to demonstrate the software. `tests/test_docs_media.py`:
   the GIF's place and credit, at most 5 MB and 5-10 s, the NASA GIF inside "How it works".
+
+
+### 2026-10-02 — Provisional subtitles, glossary check on a real error, segmentation note
+- Batch 1 (provisional subtitles; owner's rule: until language ID confirms, the overlay must not show the
+  provisional recognizer's text as if it were final). Chosen: **dimmed with a label**, not hidden. Why: when the
+  provisional language is right (English speech, the default first guess) the captions still start under a second
+  after the speech, which is the product's goal, and at confirmation they are undimmed in place; hiding would have
+  delayed every English session by the 4-5 s detection takes to protect the other languages from a few seconds of
+  nonsense, which dimming plus the label already marks as a guess. Overlay state (`overlay.js`):
+  `setLanguageStatus(status, {lang, name})` from the backend's `lid` message and from every partial / final
+  (`lang_status`); while the status is not `confirmed` / `manual`, cue and partial lines get the class `provisional`
+  (opacity 0.45) above a `lang-pending` label: "Detecting language…" while provisional, "Language not detected,
+  assuming English. Pick it in the popup." (warn colour, permanent) after `fallback` / `error`, which replaces the
+  6 s warning notice. On confirmation of the same language the text on screen is undimmed; on a switch the backend's
+  `reset` discards it (`discardProvisional`). Found on the way: a translation of a provisional sentence could
+  arrive after the switch and be drawn at full brightness, on the new recognizer's cue when the ids matched (every
+  recognizer numbers its utterances from 0); `/ws/asr` translation and revision messages (and the on-device ones)
+  now carry the `lang_status` of their sentence, and the overlay drops uncertain ones whose language is not the
+  confirmed recognizer's (`_treatment`). Alt+E and double-click skip provisional lines; dimmed text is removed
+  when the session stops; notice lines no longer fade in again on every redraw (the label flickered at 8 redraws
+  per second). Tests, RED first: node `extension/tests/provisional.test.js` (10, the real render path on a fake
+  DOM, `tests/fake-dom.js`); fast `test_ws_asr_translation_carries_the_language_status_of_its_sentence`; harness
+  `--lines` now also keeps a `dimming` summary (`DimmingLog`: per 250 ms overlay sample, dimmed / label / whether
+  the content script had rendered a confirmed language; scripts and times only, never text), fast tests for it;
+  slow `test_first_confirmed_subtitle_is_the_first_undimmed_one[en-zh, bn-en]` in Chromium (RED before:
+  `undimmed_before_confirmed` from 1.63 s with confirmation at 4.27 s; after, bn sample: 11 dimmed samples, all
+  Latin script, first undimmed line Bengali at 4.54 s = the confirmation). `docs/observations.md` A8.

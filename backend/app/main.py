@@ -271,7 +271,8 @@ async def ws_asr(websocket: WebSocket):
         if not targets:
             # nothing to translate: still tell the UI the caption is complete
             await send({"type": "translation", "utterance_id": msg["utterance_id"], "cue_id": "asr_%s" % msg["utterance_id"],
-                        "revision": 1, "source_text": text, "source_lang": lang, "translations": {}, "mt_ms": 0, "server_ts": time.time()})
+                        "revision": 1, "source_text": text, "source_lang": lang, "lang_status": msg.get("lang_status"),
+                        "translations": {}, "mt_ms": 0, "server_ts": time.time()})
             return
         results: List[Any] = []
 
@@ -293,6 +294,8 @@ async def ws_asr(websocket: WebSocket):
                 "revision": 1,
                 "source_text": text,
                 "source_lang": lang,
+                # the status its sentence had: MT is asynchronous, the recognizer may have been switched since
+                "lang_status": msg.get("lang_status"),
                 "translations": {target: payload["translations"][target]} if target in payload["translations"] else payload["translations"],
                 "targets_pending": max(0, len(targets) - len(results)),
                 "mt_ms": round((time.time() - t0) * 1000),
@@ -312,7 +315,8 @@ async def ws_asr(websocket: WebSocket):
                     p = format_result(r)
                     await send({
                         "type": "revision", "utterance_id": msg["utterance_id"], "cue_id": r.cue_id, "revision": 2,
-                        "source_text": text, "source_lang": lang, "translations": p["translations"], "server_ts": time.time(),
+                        "source_text": text, "source_lang": lang, "lang_status": msg.get("lang_status"),
+                        "translations": p["translations"], "server_ts": time.time(),
                     })
             except Exception as e:  # pragma: no cover
                 logger.debug("refine failed: %s", e)

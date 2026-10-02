@@ -71,6 +71,32 @@ def test_alt_e_correction_on_a_live_captions_only_tab_is_saved():
     assert summary["correction_saved"], summary
 
 
+@pytest.mark.parametrize("lang,target", [("en", "zh"), ("bn", "en")])
+def test_first_confirmed_subtitle_is_the_first_undimmed_one(lang, target):
+    """Auto-detect in the browser: what the provisional (English) recognizer hears is drawn
+    dimmed above a "Detecting language…" label, and nothing is undimmed before the content
+    script has the confirmed language. en: the provisional language was right, its text is
+    undimmed in place. bn: detection switches, the English guesses are discarded and the
+    first undimmed line is Bengali. The overlay is read through CDP every 250 ms."""
+    if not has_zipformer(lang):
+        pytest.skip(f"{lang} model not downloaded")
+    if not (MODELS_DIR / "sherpa-onnx-whisper-tiny" / "tiny-encoder.int8.onnx").exists():
+        pytest.skip("whisper-tiny LID model not downloaded")
+    wav = zipformer_dir(lang) / "test_wavs" / "0.wav"
+    # --video: the clip starts from its first word once capture runs (and does not loop)
+    summary, proc = run_harness("--path", "audio", "--video", str(wav), "--source", "auto", "--targets", target,
+                                "--lines", "1", "--hold", "4")
+    assert summary.get("detected_lang") == lang, (summary, proc.stderr[-2000:])
+    d = summary["dimming"]
+    assert d["violations"] == [], d
+    assert d["dimmed_samples"] >= 1, d       # the provisional phase was on screen, dimmed and labelled
+    assert d["first_undimmed"], d
+    assert d["first_undimmed"]["t"] >= d["confirmed_first_seen_s"], d
+    if lang == "bn":
+        assert d["dimmed_scripts"] == ["latin"], d
+        assert d["first_undimmed"]["script"] == "bengali", d
+
+
 def test_page_subtitles_are_translated_over_ws():
     summary, proc = run_harness("--path", "captions", "--enable")
     assert summary["ok"], (summary, proc.stderr[-2000:])

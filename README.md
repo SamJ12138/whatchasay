@@ -112,7 +112,9 @@ The extension asks for no site access when it is installed.
 
 What you will see: the words in italics on a grey band while a sentence is being spoken, then the finished sentence with
 casing and punctuation, with its translation above it in yellow. The default target languages are English and
-Chinese; a language equal to the spoken one is skipped.
+Chinese; a language equal to the spoken one is skipped. With *Auto-detect*, what is recognised before the language
+is known is a guess: it is drawn dimmed above a small *Detecting language…* label, and the first line at full
+brightness is in the detected language.
 
 ![Live captions on a NASA ScienceCasts video: the translation into Chinese above the English sentence, the next sentence in progress below](docs/screenshot.png)
 
@@ -454,12 +456,13 @@ Windows (`.github/workflows/ci.yml`). `DEVLOG.md` is the project history; every 
   handles badly. The bilingual Mandarin model writes English words inside Mandarin speech in upper case, and they
   are not restored.
 - A sentence longer than 10 seconds of continuous speech is cut and its parts are translated separately.
-- With *Auto-detect*, the first one or two seconds may show text in the wrong language until detection switches;
-  choosing the spoken language avoids it.
+- With *Auto-detect*, the first seconds (about 5 in the YouTube live test) are recognised as English until detection
+  has heard enough. That text is dimmed under *Detecting language…* and thrown away if the language turns out to be
+  another one; choosing the spoken language avoids the wait.
 - Spoken-language detection (whisper-tiny) is unreliable on Bengali: on its own it often takes Bengali for Hindi or
   Nepali. The backend now picks the likeliest of English, Mandarin and Bengali, and stays on its first guess when
-  that is not clear enough; if the captions are in the wrong language, set the spoken language under *Live Captions*
-  in the popup instead of *Auto-detect*.
+  that is not clear enough: the captions then stay dimmed under *Language not detected, assuming English*. Set the
+  spoken language under *Live Captions* in the popup instead of *Auto-detect*.
 - Korean and Portuguese targets stay untranslated with OPUS-MT (no model from English).
 - Sites that protect their audio (DRM) give silence; the popup then says no audio is reaching the capture.
 - Chrome's built-in on-device translator (Chrome 138+, *Prepare on-device translation* in the popup) is wired in but

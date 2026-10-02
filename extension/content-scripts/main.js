@@ -119,7 +119,7 @@
       // Ask background whether live captions are already running for this tab
       chrome.runtime.sendMessage({ type: 'ASR_STATUS' }, (st) => {
         void chrome.runtime.lastError;
-        if (st && st.capturing) { live.sessionId = st.sessionId || null; setLiveState(true, st.sourceLang); }
+        if (st && st.capturing) { live.sessionId = st.sessionId || null; setLiveState(true, st.sourceLang, false); }
       });
 
       console.log('[SubTrans] Initialized, connected:', connected);
@@ -373,17 +373,31 @@
 
   const LANG_NAMES = { en: 'English', zh: 'Chinese', bn: 'Bengali', vi: 'Vietnamese', ja: 'Japanese', ko: 'Korean' };
 
-  function setLiveState(active, sourceLang) {
+  const langInfo = (lang) => ({ lang: lang || null, name: LANG_NAMES[lang] || lang || null });
+
+  // fresh: live captions were started just now (not found already running when this
+  // script loaded; then the next caption says what the language status is)
+  function setLiveState(active, sourceLang, fresh = true) {
     live.active = active;
     live.sourceLang = sourceLang || null;
     if (active) {
       overlay.clear();
-      overlay.showNotice(sourceLang && sourceLang !== 'auto' ? `Listening (${LANG_NAMES[sourceLang] || sourceLang})` : 'Listening… detecting language', 'info', 5000);
+      const manual = sourceLang && sourceLang !== 'auto';
+      // auto-detect: the overlay shows "Detecting language…" until the backend confirms one
+      if (manual) overlay.showNotice(`Listening (${LANG_NAMES[sourceLang] || sourceLang})`, 'info', 5000);
+      overlay.setLanguageStatus(manual ? 'manual' : (fresh ? 'provisional' : null), manual ? langInfo(sourceLang) : {});
     } else {
+      overlay.setLanguageStatus(null);
       overlay.clearPartial();
       overlay.showNotice('Live captions stopped', 'info', 2500);
       if (live.hideTimer) clearTimeout(live.hideTimer);
     }
+  }
+
+  // Partials and finals arrive in session order and carry the session's language status
+  // (translations come later and carry the status their sentence had).
+  function syncLanguageStatus(ev) {
+    if (ev.lang_status) overlay.setLanguageStatus(ev.lang_status, langInfo(ev.lang));
   }
 
   function liveCueId(ev) {
@@ -405,16 +419,18 @@
     if (!ev || !ev.type) return;
     switch (ev.type) {
       case 'partial':
-        if (settings.showPartials !== false) overlay.showPartial('asr_' + ev.utterance_id, ev.text, ev.lang);
+        syncLanguageStatus(ev);
+        if (settings.showPartials !== false) overlay.showPartial('asr_' + ev.utterance_id, ev.text, ev.lang, ev.lang_status);
         break;
       case 'final': {
         const cueId = 'asr_' + ev.utterance_id;
+        syncLanguageStatus(ev);
         live.lastUtteranceId = ev.utterance_id;
         // drop older live cues so the stack shows one utterance at a time
         for (const id of Array.from(overlay.currentCues.keys())) {
           if (id !== cueId && !(overlay.editMode && overlay.editCueId === id)) overlay.currentCues.delete(id);
         }
-        overlay.showTranslation(cueId, ev.text, {}, { sourceLang: ev.lang });
+        overlay.showTranslation(cueId, ev.text, {}, { sourceLang: ev.lang, langStatus: ev.lang_status });
         if (ev.server_ts) recordLatency((Date.now() / 1000 - ev.server_ts) * 1000, 'final');
         obs.log('ext_render', 'success', { kind: 'final', utterance_id: ev.utterance_id, lang: ev.lang, text_len: (ev.text || '').length,
           session_id: live.sessionId || undefined, server_to_glass_ms: ev.server_ts ? Math.round(Date.now() - ev.server_ts * 1000) : null });
@@ -427,7 +443,8 @@
         const existing = overlay.currentCues.get(cueId);
         // targets arrive one at a time; merge into what is already shown for this cue
         const merged = Object.assign({}, existing ? existing.translations : {}, ev.translations || {});
-        overlay.showTranslation(cueId, existing ? existing.original : ev.source_text, merged, { revised: ev.revision > 1 || !!existing, sourceLang: ev.source_lang });
+        overlay.showTranslation(cueId, existing ? existing.original : ev.source_text, merged,
+          { revised: ev.revision > 1 || !!existing, sourceLang: ev.source_lang, langStatus: ev.lang_status });
         if (ev.mt_ms !== undefined && !(ev.targets_pending > 0)) recordLatency(ev.mt_ms, 'mt');
         obs.log('ext_render', 'success', { kind: ev.type, utterance_id: ev.utterance_id, revision: ev.revision, engine: ev.engine || 'backend',
           targets: Object.keys(ev.translations || {}), statuses: statusesOf(ev.translations), mt_ms: ev.mt_ms, session_id: live.sessionId || undefined,
@@ -436,17 +453,16 @@
         break;
       }
       case 'reset':
-        // language switched after auto-detect: provisional captions are discarded
-        overlay.clear();
+        // language switched after auto-detect: provisional captions are discarded,
+        // and so is anything of theirs that arrives later
+        overlay.discardProvisional();
         break;
       case 'lid':
         live.sourceLang = ev.lang;
-        // status: provisional | confirmed | manual | fallback | error; only confirmed/manual are certain
-        if (ev.status === 'fallback' || ev.status === 'error') {
-          overlay.showNotice(`Could not detect the spoken language; assuming ${LANG_NAMES[ev.lang] || ev.lang}. Pick it in the popup if this is wrong.`, 'warn', 6000);
-        } else if (ev.source === 'provisional' || ev.status === 'provisional') {
-          overlay.showNotice(`Listening… assuming ${LANG_NAMES[ev.lang] || ev.lang} until detected`, 'info', 3000);
-        } else {
+        // status: provisional | confirmed | manual | fallback | error; only confirmed/manual are certain.
+        // Until then the overlay dims the text and says why in its own label.
+        overlay.setLanguageStatus(ev.status || (ev.confirmed ? 'confirmed' : 'provisional'), langInfo(ev.lang));
+        if (ev.status === 'confirmed' || ev.status === 'manual' || (!ev.status && ev.confirmed)) {
           overlay.showNotice(`${ev.source === 'auto' ? 'Detected' : 'Language'}: ${LANG_NAMES[ev.lang] || ev.lang}`, 'info', 3000);
         }
         obs.log('ext_render', 'success', { kind: 'lid', lang: ev.lang, lid_status: ev.status || null, confirmed: !!ev.confirmed, session_id: live.sessionId || undefined });
@@ -591,7 +607,7 @@
         // the newest cue that has a translation (with live captions the newest cue is
         // often the next sentence, still in progress, with nothing to correct yet)
         const editable = Array.from(overlay.currentCues.entries()).reverse()
-          .find(([, cue]) => cue && cue.translations && Object.keys(cue.translations).length);
+          .find(([, cue]) => cue && !cue.provisional && cue.translations && Object.keys(cue.translations).length);
         if (editable) overlay.enableEditMode(editable[0]);
         break;
       }

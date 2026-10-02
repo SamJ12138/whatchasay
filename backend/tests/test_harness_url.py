@@ -67,10 +67,58 @@ def test_overlay_lines_reads_through_the_closed_shadow_root():
                     _el("subtitle-line original", "দশ হাজার চাই", cue_id="asr_3", type="original"),
                     _el("subtitle-line partial", "আর", cue_id="asr_4"))
     assert h.overlay_lines(node) == [
-        {"type": "primary", "cue_id": "asr_3", "lang": "en", "text": "I want ten thousand."},
-        {"type": "original", "cue_id": "asr_3", "lang": None, "text": "দশ হাজার চাই"},
-        {"type": "partial", "cue_id": "asr_4", "lang": None, "text": "আর"},
+        {"type": "primary", "cue_id": "asr_3", "lang": "en", "text": "I want ten thousand.", "dimmed": False},
+        {"type": "original", "cue_id": "asr_3", "lang": None, "text": "দশ হাজার চাই", "dimmed": False},
+        {"type": "partial", "cue_id": "asr_4", "lang": None, "text": "আর", "dimmed": False},
     ]
+    assert h.overlay_label(node) is None
+
+
+def test_overlay_lines_tell_dimmed_provisional_text_and_the_label():
+    node = _overlay(_el("subtitle-line original provisional", "A cut the rush book.", cue_id="asr_0", type="original"),
+                    _el("subtitle-line partial provisional", "they call", cue_id="asr_1"),
+                    _el("subtitle-line notice lang-pending", "Detecting language…"))
+    assert [(ln["type"], ln["dimmed"]) for ln in h.overlay_lines(node)] == [("original", True), ("partial", True)]
+    assert h.overlay_label(node) == "Detecting language…"
+
+
+def test_script_of_names_the_writing_system_not_the_text():
+    assert h.script_of("একটা রাজবুক দেখা তো") == "bengali"
+    assert h.script_of("A cut the rush book.") == "latin"
+    assert h.script_of("你把钥匙放在哪里了?") == "han"
+    assert h.script_of("... 12") is None
+
+
+def _ln(kind, text, dimmed, cue="asr_0"):
+    return {"type": kind, "cue_id": cue, "lang": None, "text": text, "dimmed": dimmed}
+
+
+def test_dimming_log_passes_when_the_first_undimmed_line_comes_after_confirmation():
+    d = h.DimmingLog()
+    d.add(0.5, [], "Detecting language…", confirmed=False)
+    d.add(1.0, [_ln("partial", "a cut the", True)], "Detecting language…", confirmed=False)
+    d.add(1.5, [_ln("original", "A cut the rush book.", True)], "Detecting language…", confirmed=False)
+    d.add(5.5, [_ln("partial", "একটা", False)], None, confirmed=True)
+    d.add(6.0, [_ln("primary", "A royal book.", False), _ln("original", "একটা রাজবুক দেখা তো", False)], None, confirmed=True)
+    s = d.summary()
+    assert s["samples"] == 5 and s["dimmed_samples"] == 2 and s["dimmed_scripts"] == ["latin"]
+    assert s["first_undimmed"] == {"t": 5.5, "type": "partial", "cue_id": "asr_0", "script": "bengali"}
+    assert s["confirmed_first_seen_s"] == 5.5
+    assert s["violations"] == []
+    assert "একটা" not in json.dumps(s, ensure_ascii=False)  # scripts and times, never the text
+
+
+@pytest.mark.parametrize("sample,violation", [
+    (([_ln("partial", "a cut the", False)], "Detecting language…", False), "undimmed_before_confirmed"),
+    (([_ln("partial", "a cut the", True)], None, False), "dimmed_without_label"),
+    (([_ln("partial", "a cut the", True)], None, True), "dimmed_after_confirmed"),
+    (([_ln("partial", "একটা", False)], "Detecting language…", True), "label_after_confirmed"),
+])
+def test_dimming_log_names_each_violation(sample, violation):
+    d = h.DimmingLog()
+    lines, label, confirmed = sample
+    d.add(1.0, lines, label, confirmed=confirmed)
+    assert [v["kind"] for v in d.summary()["violations"]] == [violation]
 
 
 def test_line_collector_keeps_at_most_n_translated_cues_and_first_seen_times():

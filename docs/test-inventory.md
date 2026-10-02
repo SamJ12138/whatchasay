@@ -120,3 +120,11 @@ ran without the server's real engines except `test_pipeline`.
 | `extension/tests/options-asr.test.js` (2) | the ASR engine select offers only auto / sherpa-zipformer; no extension source mentions Whisper | node |
 | `extension/tests/options-shortcuts.test.js` (+1) | the popup's shortcut list shows exactly the bound keys | node |
 
+## Added with provisional subtitles (2026-10-02)
+
+| File :: test | Asserts | Suite |
+|---|---|---|
+| `extension/tests/provisional.test.js` (10) | the overlay's real render path on a fake DOM (`tests/fake-dom.js`): live text is dimmed (`provisional`) above *Detecting language…* until the language is confirmed; a switch discards it and drops its late translations, so the first undimmed line is the first confirmed one; confirmation of the same language undims in place; after a failed detection the text stays dimmed under *Language not detected* until the user picks a language; page subtitles and a stopped session are never dimmed; the label does not re-animate on redraw; `main.js` passes `lang_status` through; Alt+E skips provisional lines; on-device translations carry the status | node |
+| `test_app_inprocess` :: `test_ws_asr_translation_carries_the_language_status_of_its_sentence[auto/en]` | a `/ws/asr` translation repeats its final's `lang_status` (`provisional` with auto-detect before LID, `manual` with a declared language) | fast |
+| `test_harness_url` (+7) | the harness reads `dimmed` per overlay line and the language label; `script_of` names a line's writing system; `DimmingLog` passes a correct run and names each violation (undimmed before confirmation, dimmed without label, dimmed or labelled after confirmation), keeping scripts and times, never text | fast |
+| `test_e2e_extension` :: `test_first_confirmed_subtitle_is_the_first_undimmed_one[en-zh/bn-en]` | Chromium, Auto-detect, the en and bn sample WAVs played from their first word: the overlay read through CDP every 250 ms has dimmed, labelled text before the content script renders the confirmed language and none after; for bn the dimmed text is Latin script and the first undimmed line Bengali | **slow** |
