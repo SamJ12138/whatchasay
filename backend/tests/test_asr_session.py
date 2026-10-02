@@ -122,7 +122,7 @@ def test_manual_override_restarts_recognizer():
     eng = FakeEngine()
     s = StreamingASRSession(SessionConfig(source_lang="auto"), {"sherpa-zipformer": eng}, lid_identify=lambda a, b: None)
     out = s.set_language("zh")
-    assert out[-1] == {"type": "lid", "lang": "zh", "source": "manual", "confirmed": True}
+    assert out[-1] == {"type": "lid", "lang": "zh", "source": "manual", "confirmed": True, "status": "manual"}
     assert s.lang == "zh" and len(eng.sessions) == 2
 
 
@@ -155,3 +155,74 @@ def test_real_zipformer_streams_partials_before_end():
     assert "NIGHTFALL" in text or "LAMPS" in text
     # streaming budget: processing a 40 ms frame must take well under 40 ms
     assert sorted(feed_ms)[len(feed_ms) // 2] < 40
+
+
+# ---------------------------------------------------------------- Batch 4: honest LID status (A1-A3)
+
+
+def _auto(lid, **kw):
+    eng = FakeEngine()
+    cfg = SessionConfig(source_lang="auto", allowed_langs=["en", "zh", "bn"], lid_window_s=0.5,
+                        lid_min_rms=0.001, partial_interval_ms=0, **kw)
+    return StreamingASRSession(cfg, {"sherpa-zipformer": eng}, lid_identify=lid)
+
+
+def _feed(s, n=80):
+    msgs = []
+    for _ in range(n):
+        msgs.extend(s.feed(loud_frame()))
+    return msgs
+
+
+def test_captions_are_provisional_until_lid_confirms():
+    s = _auto(lambda a, allowed: "en")
+    start = s.startup_messages()
+    assert start == [{"type": "lid", "lang": "en", "source": "provisional", "confirmed": False, "status": "provisional"}]
+    first = s.feed(loud_frame())
+    caps = [m for m in first if m["type"] in ("partial", "final")]
+    assert caps and all(m["confirmed"] is False and m["lang_status"] == "provisional" for m in caps)
+    msgs = _feed(s)
+    lid = [m for m in msgs if m["type"] == "lid"]
+    assert lid and lid[-1]["confirmed"] is True and lid[-1]["status"] == "confirmed"
+    after = [m for m in msgs[msgs.index(lid[-1]):] if m["type"] in ("partial", "final")]
+    assert after and all(m["confirmed"] is True and m["lang_status"] == "confirmed" for m in after)
+
+
+def test_undecided_lid_is_reported_as_fallback_never_confirmed():
+    s = _auto(lambda a, allowed: None)  # A2 / A3: nothing inside the allowed languages
+    msgs = _feed(s, 120)
+    lid = [m for m in msgs if m["type"] == "lid"]
+    assert lid, "no lid message after LID gave up"
+    assert all(m.get("confirmed") is not True for m in lid)
+    assert lid[-1]["status"] == "fallback" and lid[-1]["source"] == "fallback" and lid[-1]["lang"] == "en"
+    caps = [m for m in msgs if m["type"] in ("partial", "final")]
+    assert caps and all(m["confirmed"] is False for m in caps)
+    assert caps[-1]["lang_status"] == "fallback"
+    assert s.status()["lang_confirmed"] is False
+
+
+def test_lid_errors_are_reported_as_error_never_confirmed():
+    def boom(audio, allowed):
+        raise RuntimeError("whisper-tiny failed to load")
+
+    s = _auto(boom)  # A1
+    msgs = _feed(s, 120)
+    lid = [m for m in msgs if m["type"] == "lid"]
+    assert lid and all(m.get("confirmed") is not True for m in lid)
+    assert lid[-1]["status"] == "error" and lid[-1]["error_type"] == "process"
+    caps = [m for m in msgs if m["type"] in ("partial", "final")]
+    assert caps[-1]["confirmed"] is False and caps[-1]["lang_status"] == "error"
+
+
+def test_lid_model_missing_is_fallback_not_confirmed():
+    s = _auto(None)
+    msgs = _feed(s, 120)
+    lid = [m for m in msgs if m["type"] == "lid"]
+    assert lid and lid[-1]["status"] == "fallback" and lid[-1]["confirmed"] is False
+
+
+def test_declared_language_is_manual():
+    eng = FakeEngine()
+    s = StreamingASRSession(SessionConfig(source_lang="bn"), {"sherpa-zipformer": eng}, lid_identify=None)
+    caps = [m for m in s.feed(loud_frame()) if m["type"] in ("partial", "final")]
+    assert caps and caps[0]["confirmed"] is True and caps[0]["lang_status"] == "manual"

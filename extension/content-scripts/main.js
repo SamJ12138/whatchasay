@@ -435,8 +435,15 @@
         break;
       case 'lid':
         live.sourceLang = ev.lang;
-        if (ev.source === 'provisional') overlay.showNotice(`Listening… assuming ${LANG_NAMES[ev.lang] || ev.lang} until detected`, 'info', 3000);
-        else overlay.showNotice(`${ev.source === 'auto' ? 'Detected' : 'Language'}: ${LANG_NAMES[ev.lang] || ev.lang}`, 'info', 3000);
+        // status: provisional | confirmed | manual | fallback | error; only confirmed/manual are certain
+        if (ev.status === 'fallback' || ev.status === 'error') {
+          overlay.showNotice(`Could not detect the spoken language; assuming ${LANG_NAMES[ev.lang] || ev.lang}. Pick it in the popup if this is wrong.`, 'warn', 6000);
+        } else if (ev.source === 'provisional' || ev.status === 'provisional') {
+          overlay.showNotice(`Listening… assuming ${LANG_NAMES[ev.lang] || ev.lang} until detected`, 'info', 3000);
+        } else {
+          overlay.showNotice(`${ev.source === 'auto' ? 'Detected' : 'Language'}: ${LANG_NAMES[ev.lang] || ev.lang}`, 'info', 3000);
+        }
+        obs.log('ext_render', 'success', { kind: 'lid', lang: ev.lang, lid_status: ev.status || null, confirmed: !!ev.confirmed, session_id: live.sessionId || undefined });
         break;
       case 'status':
         if (ev.warning === 'no-audio') overlay.showNotice(ev.message || 'No audio reaching capture', 'warn', 0);

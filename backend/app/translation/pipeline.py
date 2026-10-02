@@ -296,8 +296,10 @@ class TranslationPipeline:
 
     # ---------------------------------------------------------------- refiner
 
-    def refiner_enabled(self, target_languages: List[str]) -> bool:
-        if not (settings.refiner.enabled or settings.features.use_post_editor):
+    def refiner_enabled(self, target_languages: List[str], enabled: Optional[bool] = None) -> bool:
+        """`enabled` is a session's own preference (W7); None = the server default."""
+        on = (settings.refiner.enabled or settings.features.use_post_editor) if enabled is None else enabled
+        if not on:
             return False
         return any(t not in settings.refiner.skip_languages for t in target_languages)
 
@@ -306,12 +308,14 @@ class TranslationPipeline:
         results: List[TranslationResult],
         target_languages: List[str],
         deadline_s: Optional[float] = None,
+        enabled: Optional[bool] = None,
     ) -> List[TranslationResult]:
         """
         Improve already-delivered fast translations with an LLM, under a hard
         deadline. Returns only the results that changed, as revision 2.
+        `enabled`: the requesting session's preference (None = server default).
         """
-        if not results or not self.refiner_enabled(target_languages):
+        if not results or not self.refiner_enabled(target_languages, enabled):
             return []
         from .refiner import get_refiner
 

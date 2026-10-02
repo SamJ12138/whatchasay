@@ -18,10 +18,20 @@ Language handling
                         discarded.
 
 Messages (JSON, sent by the WebSocket endpoint):
-    {type:'partial', utterance_id, text, lang, t0, t1}
-    {type:'final',   utterance_id, text, lang, t0, t1}
-    {type:'lid',     lang, source:'auto'|'manual'|'provisional', confirmed}
+    {type:'partial', utterance_id, text, lang, lang_status, confirmed, t0, t1}
+    {type:'final',   utterance_id, text, lang, lang_status, confirmed, t0, t1}
+    {type:'lid',     lang, source:'auto'|'manual'|'provisional'|'fallback', status, confirmed}
     {type:'reset'}   discard provisional captions (language switched)
+
+Language status (A1-A3), on every lid / partial / final:
+    provisional  auto mode before LID has answered
+    confirmed    LID identified the language (confirmed: true)
+    manual       the language was declared by the user (confirmed: true)
+    fallback     LID gave up (no answer inside the allowed languages, or no LID
+                 model): the provisional language is kept, confirmed: false
+    error        every LID attempt raised: provisional language kept,
+                 confirmed: false, error_type / error on the lid message
+confirmed is true only for confirmed and manual.
 """
 
 from __future__ import annotations
@@ -64,6 +74,7 @@ class StreamingASRSession:
 
         self.lang: Optional[str] = None
         self.lang_confirmed: bool = False
+        self.lang_status: str = "provisional"  # provisional | confirmed | manual | fallback | error
         self.engine: Optional[StreamingASREngine] = None
         self.asr: Optional[AsrSession] = None
 
@@ -72,6 +83,7 @@ class StreamingASRSession:
         self._lid_buffer_samples = 0
         self._lid_voiced_samples = 0
         self._lid_attempts = 0
+        self._lid_errors: List[BaseException] = []
         self._lid_done = False
 
         self._last_partial_sent = 0.0
@@ -84,11 +96,13 @@ class StreamingASRSession:
         if config.source_lang and config.source_lang != "auto":
             self._start_recognizer(config.source_lang)
             self.lang_confirmed = True
+            self.lang_status = "manual"
             self._lid_done = True
         else:
             provisional = self._provisional_language()
             self._start_recognizer(provisional)
-            self._startup_msgs.append({"type": "lid", "lang": provisional, "source": "provisional", "confirmed": False})
+            self._startup_msgs.append({"type": "lid", "lang": provisional, "source": "provisional", "confirmed": False,
+                                       "status": "provisional"})
 
     # ------------------------------------------------------------------ setup
 
@@ -130,23 +144,27 @@ class StreamingASRSession:
         out: List[dict] = []
         if lang == "auto":
             self.lang_confirmed = False
+            self.lang_status = "provisional"
             self._lid_done = False
             self._lid_attempts = 0
+            self._lid_errors = []
             self._reset_lid_buffer()
-            out.append({"type": "lid", "lang": self.lang, "source": "provisional", "confirmed": False})
+            out.append({"type": "lid", "lang": self.lang, "source": "provisional", "confirmed": False, "status": "provisional"})
             return out
         if self.asr is not None and lang == self.lang:
             self.lang_confirmed = True
+            self.lang_status = "manual"
             self._lid_done = True
-            return [{"type": "lid", "lang": lang, "source": "manual", "confirmed": True}]
+            return [{"type": "lid", "lang": lang, "source": "manual", "confirmed": True, "status": "manual"}]
         if self.asr is not None:
             for ev in self.asr.flush():
                 out.append(self._event_msg(ev))
         self._start_recognizer(lang)
         self.lang_confirmed = True
+        self.lang_status = "manual"
         self._lid_done = True
         self._reset_lid_buffer()
-        out.append({"type": "lid", "lang": lang, "source": "manual", "confirmed": True})
+        out.append({"type": "lid", "lang": lang, "source": "manual", "confirmed": True, "status": "manual"})
         return out
 
     def _reset_lid_buffer(self) -> None:
@@ -190,8 +208,9 @@ class StreamingASRSession:
             t0 = time.time()
             try:
                 lang = self.lid_identify(np.concatenate(self._lid_buffer), self.config.allowed_langs)
-            except Exception as e:  # pragma: no cover
+            except Exception as e:
                 logger.warning("LID failed: %s", e)
+                self._lid_errors.append(e)
                 obs.log_exc("lid", e, api="process", duration_ms=(time.time() - t0) * 1000, attempt=self._lid_attempts + 1,
                             buffered_s=buffered_s, degraded="treated as undecided")
             self.stats["lid_ms"] = round((time.time() - t0) * 1000)
@@ -199,14 +218,25 @@ class StreamingASRSession:
 
         if lang is None:
             if self._lid_attempts >= 2 or self.lid_identify is None:
-                # give up: keep the provisional language
+                # give up: keep the provisional language, and say so (never "confirmed")
                 self._lid_done = True
                 self._reset_lid_buffer()
-                logger.info("LID undecided; keeping provisional language %s", self.lang)
+                errored = self.lid_identify is not None and len(self._lid_errors) >= self._lid_attempts
+                self.lang_status = "error" if errored else "fallback"
+                logger.info("LID undecided; keeping provisional language %s (%s)", self.lang, self.lang_status)
                 obs.log("lid", "skip", duration_ms=self.stats["lid_ms"], error_type="input_invalid",
                         error_message="LID undecided (no result inside allowed languages)", attempt=self._lid_attempts,
-                        buffered_s=buffered_s, degraded=f"provisional language {self.lang!r} kept and reported as confirmed")
-                return [{"type": "lid", "lang": self.lang, "source": "auto", "confirmed": True, "lid_ms": self.stats["lid_ms"]}]
+                        buffered_s=buffered_s,
+                        degraded=f"provisional language {self.lang!r} kept, reported as {self.lang_status} (not confirmed)")
+                msg = {"type": "lid", "lang": self.lang, "source": "fallback", "confirmed": False,
+                       "status": self.lang_status, "lid_ms": self.stats["lid_ms"]}
+                if errored:
+                    last = self._lid_errors[-1]
+                    et = obs.classify(last, "process")
+                    msg.update(error_type="process" if et == "unknown" else et, error=str(last) or type(last).__name__)
+                elif self.lid_identify is None:
+                    msg["error"] = "no spoken-language-ID model"
+                return [msg]
             # collect a bit more speech and try once more
             obs.log("lid", "skip", duration_ms=self.stats["lid_ms"], error_type="input_invalid",
                     error_message="LID undecided; collecting more speech for one more attempt",
@@ -216,6 +246,7 @@ class StreamingASRSession:
 
         self._lid_done = True
         self.lang_confirmed = True
+        self.lang_status = "confirmed"
         out: List[dict] = []
         obs.log("lid", "success", duration_ms=self.stats["lid_ms"], lang=lang, provisional=self.lang,
                 switched=lang != self.lang, attempt=self._lid_attempts, buffered_s=buffered_s)
@@ -226,12 +257,14 @@ class StreamingASRSession:
             self.stats["lid_switches"] += 1
             self._start_recognizer(lang)
             out.append({"type": "reset"})
-            out.append({"type": "lid", "lang": lang, "source": "auto", "confirmed": True, "lid_ms": self.stats["lid_ms"], "switched": True})
+            out.append({"type": "lid", "lang": lang, "source": "auto", "confirmed": True, "status": "confirmed",
+                        "lid_ms": self.stats["lid_ms"], "switched": True})
             replay = np.concatenate(self._lid_buffer)
             pcm = (np.clip(replay, -1, 1) * 32767).astype("<i2").tobytes()
             out.extend(self._emit(self.asr.feed(pcm), None))
         else:
-            out.append({"type": "lid", "lang": lang, "source": "auto", "confirmed": True, "lid_ms": self.stats["lid_ms"]})
+            out.append({"type": "lid", "lang": lang, "source": "auto", "confirmed": True, "status": "confirmed",
+                        "lid_ms": self.stats["lid_ms"]})
         self._reset_lid_buffer()
         return out
 
@@ -264,6 +297,7 @@ class StreamingASRSession:
             "utterance_id": ev.utterance_id,
             "text": ev.text,
             "lang": ev.lang,
+            "lang_status": self.lang_status,
             "confirmed": self.lang_confirmed,
             "t0": round(ev.t0, 3),
             "t1": round(ev.t1, 3),
@@ -287,6 +321,7 @@ class StreamingASRSession:
         return {
             "lang": self.lang,
             "lang_confirmed": self.lang_confirmed,
+            "lang_status": self.lang_status,
             "engine": self.engine.name if self.engine else None,
             "target_langs": self.config.target_langs,
             "seconds_received": round(self.samples_received / SAMPLE_RATE, 1),

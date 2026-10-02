@@ -28,19 +28,29 @@ from .config import settings
 from .models import MessageType, SubtitleCue, ConfigUpdate, TranslationCorrection, TranslationResult
 from .translation import get_pipeline, TranslationPipeline
 from .cache import get_translation_memory
+from .translation.line_breaker import format_subtitle_lines
 from . import obs
 
 logger = logging.getLogger(__name__)
 
 
-def format_result(result: TranslationResult) -> Dict[str, Any]:
-    """Wire format for a TranslationResult (shared by every sender)."""
+def format_result(result: TranslationResult, layout: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Wire format for a TranslationResult (shared by every sender).
+
+    layout: a session's own line limits {"max_lines", "max_chars_by_lang"} (W7);
+    the lines are re-broken for that session. None = as computed (server defaults).
+    """
     translations = {}
     for lang, trans in result.translations.items():
+        lines = trans.lines
+        if layout and trans.status != "error" and trans.single_line:
+            max_chars = (layout.get("max_chars_by_lang") or {}).get(lang)
+            lines, _ = format_subtitle_lines(trans.single_line, lang, max_chars=max_chars,
+                                             max_lines=layout.get("max_lines") or settings.translation.max_lines)
         translations[lang] = {
-            "lines": trans.lines,
+            "lines": lines,
             "single_line": trans.single_line,
-            "display_text": trans.display_text,
+            "display_text": "\n".join(lines),
             "status": trans.status,
             "engine": trans.engine,
             "error_type": trans.error_type,
@@ -96,9 +106,10 @@ class ConnectionManager:
             "messages_received": 0,
             "messages_sent": 0,
             "last_activity": datetime.utcnow(),
-            # per-connection preferences (never mutate global settings for these)
+            # per-connection preferences (never mutate global settings for these, W7)
             "target_languages": None,
             "source_lang_hint": None,
+            "config": {},  # refiner_enabled, max_lines, max_chars_by_lang, fast_mode, strict_meaning_lock
             "session_id": session_id,
         }
         logger.info("Client connected: %s", conn_id)
@@ -146,6 +157,32 @@ class ConnectionManager:
 
 manager = ConnectionManager()
 
+SESSION_KEYS = ("refiner_enabled", "max_lines", "max_chars_by_lang", "fast_mode", "strict_meaning_lock")
+
+
+def session_config(conn_id: str) -> Dict[str, Any]:
+    """Effective config of one /ws connection: its own values over the server defaults."""
+    info = manager.connection_info.get(conn_id) or {}
+    own = info.get("config") or {}
+    return {
+        "target_languages": list(info.get("target_languages") or settings.translation.target_languages),
+        "source_lang_hint": info.get("source_lang_hint"),
+        "refiner_enabled": own.get("refiner_enabled", settings.refiner.enabled or settings.features.use_post_editor),
+        "max_lines": own.get("max_lines", settings.translation.max_lines),
+        "max_chars_by_lang": {**settings.translation.max_chars_by_lang, **(own.get("max_chars_by_lang") or {})},
+        "fast_mode": own.get("fast_mode", settings.features.fast_mode),
+        "strict_meaning_lock": own.get("strict_meaning_lock", settings.features.strict_meaning_lock),
+    }
+
+
+def session_layout(conn_id: str) -> Optional[Dict[str, Any]]:
+    """The connection's own line limits, or None when it uses the server defaults."""
+    own = (manager.connection_info.get(conn_id) or {}).get("config") or {}
+    if "max_lines" not in own and not own.get("max_chars_by_lang"):
+        return None
+    cfg = session_config(conn_id)
+    return {"max_lines": cfg["max_lines"], "max_chars_by_lang": cfg["max_chars_by_lang"]}
+
 
 # ---------------------------------------------------------------------------
 # Delivery: fast result now, refined revision later
@@ -156,16 +193,19 @@ _inflight_refinements: Set[str] = set()
 
 async def deliver_results(
     pipeline: TranslationPipeline,
-    pairs: List[tuple],  # (conn_id, correlation_id, TranslationResult)
+    pairs: List[tuple],  # (conn_id, correlation_id, TranslationResult[, skip_refine])
     target_languages: List[str],
     skip_refine: bool = False,
 ) -> None:
-    for conn_id, correlation_id, result in pairs:
-        await manager.send_message(conn_id, _envelope(MessageType.RESULT, correlation_id, format_result(result)))
+    pairs = [p if len(p) == 4 else (*p, skip_refine) for p in pairs]
+    for conn_id, correlation_id, result, _ in pairs:
+        await manager.send_message(conn_id, _envelope(MessageType.RESULT, correlation_id,
+                                                      format_result(result, session_layout(conn_id))))
 
-    if skip_refine or not pipeline.refiner_enabled(target_languages):
-        return
-    candidates = [(c, k, r) for (c, k, r) in pairs if not r.from_cache and r.cue_id not in _inflight_refinements and not (r.notes or {}).get("error")]
+    # each session decides for itself whether it wants a refined revision (W7)
+    candidates = [(c, k, r) for (c, k, r, skip) in pairs
+                  if not skip and pipeline.refiner_enabled(target_languages, session_config(c)["refiner_enabled"])
+                  and not r.from_cache and r.cue_id not in _inflight_refinements and not (r.notes or {}).get("error")]
     if not candidates:
         return
     for _, _, r in candidates:
@@ -173,12 +213,13 @@ async def deliver_results(
 
     async def _refine():
         try:
-            changed = await pipeline.refine_batch([r for _, _, r in candidates], target_languages)
+            changed = await pipeline.refine_batch([r for _, _, r in candidates], target_languages, enabled=True)
             by_id = {r.cue_id: r for r in changed}
             for conn_id, correlation_id, r in candidates:
                 new_r = by_id.get(r.cue_id)
                 if new_r is not None:
-                    await manager.send_message(conn_id, _envelope(MessageType.REVISION, correlation_id, format_result(new_r)))
+                    await manager.send_message(conn_id, _envelope(MessageType.REVISION, correlation_id,
+                                                                  format_result(new_r, session_layout(conn_id))))
         except Exception as e:  # pragma: no cover
             logger.warning("Refinement task failed: %s", e)
             obs.log_exc("refine", e, path="/ws", n=len(candidates), degraded="no revision sent")
@@ -241,7 +282,6 @@ class MicroBatcher:
 
     async def _process_batch(self, batch: List[PendingCue], target_languages: List[str]) -> None:
         start = time.time()
-        skip_refine = any(p.skip_post_edit for p in batch)
         # One batch can hold cues from several connections; log under the first
         # cue's session and list all of them.
         sessions = sorted({manager.connection_info.get(p.conn_id, {}).get("session_id") or "?" for p in batch})
@@ -249,9 +289,10 @@ class MicroBatcher:
         ctx = dict(path="/ws", n_cues=len(batch), targets=target_languages, sessions=sessions,
                    max_wait_ms=round(max((start - p.received_at) * 1000 for p in batch), 1) if batch else 0)
         try:
-            results = await self.pipeline.translate_batch([p.cue for p in batch], target_languages, skip_refine)
-            pairs = [(p.conn_id, p.correlation_id, r) for p, r in zip(batch, results)]
-            await deliver_results(self.pipeline, pairs, target_languages, skip_refine)
+            results = await self.pipeline.translate_batch([p.cue for p in batch], target_languages, True)
+            # refinement is decided per cue/session, not for the whole (possibly mixed) batch
+            pairs = [(p.conn_id, p.correlation_id, r, p.skip_post_edit) for p, r in zip(batch, results)]
+            await deliver_results(self.pipeline, pairs, target_languages)
             obs.log("micro_batch", "success", duration_ms=(time.time() - start) * 1000, **ctx)
         except Exception as e:
             logger.error("Batch processing error: %s", e)
@@ -386,7 +427,8 @@ class WebSocketHandler:
             c.lang_hint = c.lang_hint or payload.get("lang_hint") or self._conn_hint()
         target_languages = self._conn_targets(payload)
         results = await self.pipeline.translate_batch(cues, target_languages, skip_post_edit=True)
-        return {"results": [format_result(r) for r in results], "count": len(results)}
+        layout = session_layout(self.conn_id)
+        return {"results": [format_result(r, layout) for r in results], "count": len(results)}
 
     async def _handle_correction(self, payload: Dict) -> Dict:
         try:
@@ -419,58 +461,58 @@ class WebSocketHandler:
             raise HandlerError(f"correction not saved: {e}", obs.classify(e, "process")) from e
 
     async def _handle_config(self, payload: Dict) -> Dict:
+        """Per-connection config (W7): nothing here changes the server-wide
+        defaults except cloud keys (engines are shared; product scope)."""
         try:
             update = ConfigUpdate(**payload)
             info = manager.connection_info.get(self.conn_id)
+            if info is None:
+                raise HandlerError("connection is gone", "process")
+            own = info.setdefault("config", {})
+            before = session_config(self.conn_id)
 
-            if update.source_lang_hint is not None and info is not None:
+            if update.source_lang_hint is not None:
                 info["source_lang_hint"] = update.source_lang_hint or None
             if update.target_languages is not None:
-                # per-connection, plus keep the global default for HTTP/debug callers
-                if info is not None:
-                    info["target_languages"] = list(update.target_languages)
-                before = list(settings.translation.target_languages)
-                settings.translation.target_languages = list(update.target_languages)
-                obs.log("config", "success", path="/ws", scope="global", key="translation.target_languages",
-                        before=before, after=list(update.target_languages),
-                        note="per-connection config message changed the server-wide default")
-            if update.use_post_editor is not None:
-                settings.features.use_post_editor = update.use_post_editor
+                info["target_languages"] = list(update.target_languages)
             if update.refiner_enabled is not None:
-                settings.refiner.enabled = update.refiner_enabled
+                own["refiner_enabled"] = update.refiner_enabled
+            elif update.use_post_editor is not None:
+                own["refiner_enabled"] = update.use_post_editor  # legacy name
             if update.fast_mode is not None:
-                settings.features.fast_mode = update.fast_mode
+                own["fast_mode"] = update.fast_mode
             if update.strict_meaning_lock is not None:
-                settings.features.strict_meaning_lock = update.strict_meaning_lock
+                own["strict_meaning_lock"] = update.strict_meaning_lock
             if update.max_lines is not None:
-                settings.translation.max_lines = update.max_lines
-            if update.max_chars_en is not None:
-                settings.translation.max_chars_en = update.max_chars_en
-                settings.translation.max_chars_by_lang["en"] = update.max_chars_en
-            if update.max_chars_zh is not None:
-                settings.translation.max_chars_zh = update.max_chars_zh
-                settings.translation.max_chars_by_lang["zh"] = update.max_chars_zh
-            if update.max_chars_vi is not None:
-                settings.translation.max_chars_vi = update.max_chars_vi
-                settings.translation.max_chars_by_lang["vi"] = update.max_chars_vi
+                own["max_lines"] = update.max_lines
+            chars = dict(own.get("max_chars_by_lang") or {})
+            for lang, v in (("en", update.max_chars_en), ("zh", update.max_chars_zh), ("vi", update.max_chars_vi)):
+                if v is not None:
+                    chars[lang] = v
             if update.max_chars_by_lang:
-                settings.translation.max_chars_by_lang.update(update.max_chars_by_lang)
+                chars.update(update.max_chars_by_lang)
+            if chars:
+                own["max_chars_by_lang"] = chars
             if update.cloud_keys:
                 apply_cloud_keys(update.cloud_keys)
 
+            after = session_config(self.conn_id)
+            changed = sorted(k for k in after if after[k] != before[k])
+            obs.log("config", "success", path="/ws", scope="session", keys=changed,
+                    before={k: before[k] for k in changed if k != "max_chars_by_lang"},
+                    after={k: after[k] for k in changed if k != "max_chars_by_lang"})
             return {
                 "status": "updated",
                 "current_config": {
-                    "target_languages": settings.translation.target_languages,
+                    **{k: v for k, v in after.items()},
+                    "use_post_editor": after["refiner_enabled"],
                     "supported_languages": settings.translation.supported_languages,
-                    "use_post_editor": settings.features.use_post_editor,
-                    "refiner_enabled": settings.refiner.enabled,
-                    "fast_mode": settings.features.fast_mode,
-                    "max_lines": settings.translation.max_lines,
-                    "max_chars_by_lang": settings.translation.max_chars_by_lang,
                     "mt_engines": list(self.pipeline.base_translator.engines.keys()),
+                    "scope": "session",
                 },
             }
+        except HandlerError:
+            raise
         except Exception as e:
             logger.error("Config update error: %s", e)
             obs.log_exc("config", e, path="/ws", degraded="error envelope sent to the client")

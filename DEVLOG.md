@@ -179,3 +179,11 @@ Browser: load `extension/` unpacked → YouTube video without captions → popup
   before that. Window messages are accepted only from the page's own origin (`content-scripts/guards.js`); sub-frame
   detectors relay cues through the worker (`FRAME_CUE`). Browser harness `--path security`: 8 checks pass (old
   extension fails 3: detects on load, accepts a cross-origin cue, no per-tab enable).
+- Batch 4 (W7, A1-A3): `/ws` `config` is per connection (`connection_info[...]["config"]` + `session_config()`):
+  target languages, source-language hint, refiner preference (a session can ask for or decline revisions regardless
+  of the server default; refinement is decided per cue, not per mixed micro-batch), max_lines / max_chars (lines are
+  re-broken per session in `format_result(result, layout)`), fast_mode / strict_meaning_lock. No `/ws` message changes
+  server-wide settings any more, except cloud keys (shared engines; out of this phase's scope). ASR: every lid / partial /
+  final carries `lang_status` = provisional | confirmed | manual | fallback | error; LID that gives up → `fallback`
+  (source `fallback`), LID that raised on every attempt → `error` with `error_type`; `confirmed: true` only for confirmed
+  and manual. The overlay says "Could not detect the spoken language; assuming …" for fallback/error.

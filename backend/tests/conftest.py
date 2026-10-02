@@ -202,3 +202,20 @@ def obs_records(monkeypatch):
 
     monkeypatch.setattr(obs, "_write", capture)
     return records
+
+
+def ws_recv(ws, timeout: float = 3.0):
+    """Next JSON message from a TestClient WebSocket, or None after `timeout`
+    seconds (TestClient's receive() blocks forever; this reads its queue)."""
+    import json
+    import queue
+
+    try:
+        message = ws._send_queue.get(timeout=timeout)
+    except queue.Empty:
+        return None
+    if isinstance(message, BaseException):
+        raise message
+    if message.get("type") == "websocket.close":
+        raise AssertionError(f"server closed the socket: {message}")
+    return json.loads(message["text"])
