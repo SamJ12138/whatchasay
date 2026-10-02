@@ -365,4 +365,17 @@ D4 cloud providers off by default, keys only in backend config.
   `main`. First CI run (37027169748) green on all six jobs (backend fast suite, extension tests, clean install;
   ubuntu-24.04 and windows-2025, Python 3.12): 215 passed, 1 skipped (the TM check of the hygiene test: no local
   translation memory on a CI runner). Nothing needed fixing. README CI badge, repository description and topics set.
+- Batch E (fresh clone): cloned https://github.com/SamJ12138/whatchasay into an empty folder and followed the README's
+  PowerShell quickstart literally with `python` = Python 3.14.2, no pip cache and an empty Hugging Face cache. Run 1
+  timings: clone 1.2 s, venv 3.4 s, `pip install -r requirements.txt` 46 s, CPU torch 49 s, `download_models.py`
+  158 s (3.2 GB, about 29 MB/s), `run.py` ready in about 5 s. Extension: installed Google Chrome 153 with a fresh
+  profile; "Load unpacked" stood in for by CDP `Extensions.loadUnpacked` (Chrome 137+ ignores `--load-extension`;
+  `--enable-unsafe-extension-debugging`), the toolbar click and the first-use prompt by a manifest that lists
+  `tabCapture` + the video's origin (restored after) and `--allowlisted-extension-id`; Chrome assigned the id the
+  backend derives from `../extension`. The public Wikimedia URL of the NASA clip, Auto-detect: first Chinese
+  translation on the page 9.7 s after start (the first sentence ends ~9 s in). README errors it found: pip fails on
+  Windows paths over 260 characters (the first attempt, in a deep folder); the Hugging Face cache is 2.18 GB, not
+  1.24 GB (transformers fetches both `pytorch_model.bin` and an auto-converted `model.safetensors` for three of the
+  four models), so the download is 3.2 GB; harmless download warnings; OPUS-MT moves to an NVIDIA GPU when CTranslate2
+  sees one; no times stated. All fixed in the README.
 

@@ -18,12 +18,12 @@ second after each sentence ends. Audio and text stay on your machine: the extens
 | | |
 |---|---|
 | Operating system | **Windows 11: tested** (everything in this README). **Linux:** the backend's fast test suite and the extension tests run in CI on Ubuntu 24.04; the backend with real models and the browser extension have not been run on Linux. **macOS: untested.** |
-| Python | 3.10 or newer (tested: 3.10 on Windows, 3.12 in CI on Windows and Ubuntu) |
-| Browser | Desktop Chrome or Chromium 116 or newer (the extension uses an offscreen document and tab capture from its service worker). Tested with Chromium 145. Other Chromium browsers: untested |
+| Python | 3.10 or newer (tested: 3.10 and 3.14 on Windows, 3.12 in CI on Windows and Ubuntu) |
+| Browser | Desktop Chrome or Chromium 116 or newer (the extension uses an offscreen document and tab capture from its service worker). Tested with Google Chrome 153 (fresh profile) and Chromium 145. Other Chromium browsers: untested |
 | CPU | Enough on its own. Measured on an Intel i9-13900H: speech recognition takes 2.5 ms per 40 ms of audio, translation 30-140 ms per sentence |
 | Memory | The backend uses about 1 GB of RAM with English, Mandarin and Bengali loaded |
 | GPU | Optional, only for the optional HY-MT translation engine (NVIDIA, 4 GB+) |
-| Disk | Python packages: see the venv step below. Models: 2.29 GB downloaded, 1.22 GB kept in `backend/data/models/` plus 1.24 GB of OPUS-MT source checkpoints left in the Hugging Face cache (`~/.cache/huggingface/hub`, removable once the models are converted) |
+| Disk | 4.5 GB in all: Python packages 1.07 GB (`backend/venv`, CPU PyTorch included), models 1.22 GB (`backend/data/models/`), and 2.18 GB of OPUS-MT source checkpoints left in the Hugging Face cache (`~/.cache/huggingface/hub`, safe to delete once the models are converted) |
 | Network | Only for installing and downloading models. Running needs none |
 
 ## Quickstart
@@ -31,14 +31,16 @@ second after each sentence ends. Audio and text stay on your machine: the extens
 The commands are the same on every system except where PowerShell (Windows) and bash (Linux, macOS) differ. The
 backend's virtual environment lives in `backend/venv`.
 
-**1. Clone**
+**1. Clone** (on Windows into a short path such as `C:\src`: pip fails on paths over 260 characters unless
+Windows long paths are enabled)
 
 ```
 git clone https://github.com/SamJ12138/whatchasay.git
 cd whatchasay/backend
 ```
 
-**2. Virtual environment and packages** (the CPU build of PyTorch is needed once, to convert the translation models)
+**2. Virtual environment and packages** (the CPU build of PyTorch is needed once, to convert the translation models;
+about 1.5 minutes, 1.07 GB)
 
 PowerShell:
 
@@ -56,15 +58,15 @@ venv/bin/python -m pip install -r requirements.txt
 venv/bin/python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
 ```
 
-**3. Download the models** (2.29 GB: speech models 1,056 MB, OPUS-MT checkpoints 1,237 MB, then a one-time
-conversion to CTranslate2)
+**3. Download the models** (3.2 GB: speech models 1.06 GB and OPUS-MT checkpoints 2.18 GB, then a one-time
+conversion to CTranslate2; 2 minutes 40 seconds on a connection that downloads 29 MB/s, longer on a slower one)
 
 PowerShell: `venv\Scripts\python ..\scripts\download_models.py`
 
 bash: `venv/bin/python ../scripts/download_models.py`
 
-It prints each model as it goes and ends with `Done.`. Everything it downloads has a declared permissive license
-(`NOTICE.md`).
+It prints each model as it goes and ends with `Done.`. Warnings about `HF_TOKEN`, symlinks and `torch_dtype` along
+the way are harmless. Everything it downloads has a declared permissive license (`NOTICE.md`).
 
 **4. Start the backend** (leave it running)
 
@@ -72,8 +74,10 @@ PowerShell: `venv\Scripts\python run.py`
 
 bash: `venv/bin/python run.py`
 
-It listens on `http://127.0.0.1:8765` and is ready when it prints `Uvicorn running on http://127.0.0.1:8765`.
-`http://127.0.0.1:8765/health/json` shows the loaded engines. Stop it with Ctrl+C.
+It listens on `http://127.0.0.1:8765` and is ready when it prints `Uvicorn running on http://127.0.0.1:8765` (about
+5 seconds). `http://127.0.0.1:8765/health/json` shows the loaded engines; its `device` is `cpu`, or `cuda` if
+CTranslate2 finds an NVIDIA GPU, which it then uses for OPUS-MT (`SUBTITLE_TRANSLATION__DEVICE=cpu` keeps it on the
+CPU). Stop it with Ctrl+C.
 
 **5. Load the extension**
 
@@ -146,6 +150,7 @@ Alt+. larger font (the popup also has a smaller-font button), Alt+E edit the cur
 | "No audio reaching capture (DRM site or paused video)" | The video is paused, or the site protects its audio |
 | Port 8765 is taken | `run.py --port 8766`, then set the server address in **Settings → Connection** |
 | The backend log says a model is missing | Run step 3 again; it skips what is already there |
+| pip fails with "No such file or directory" and a hint about long paths (Windows) | Clone into a shorter path (step 1), or enable Windows long paths |
 
 ## Optional extras
 
