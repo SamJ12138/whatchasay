@@ -114,3 +114,19 @@ def test_relative_links_in_the_readme_exist():
     links = re.findall(r"\]\((?!https?://|#|mailto:)([^)\s]+)\)", README)
     missing = [l for l in links if not (REPO / l.split("#")[0]).exists()]
     assert links and not missing, missing
+
+
+def test_using_it_has_the_real_correction_example_and_says_what_a_correction_covers():
+    """One example under "Using it", from the live test: the real mistranscription, what was
+    typed, and what happened on the rerun. The README must not promise more than that run
+    showed (the correction was saved and not used again: the sentence did not recur)."""
+    using = " ".join(README[README.index("## Using it"):README.index("## Optional extras")].split())
+    corrections = using[using.index("**Corrections.**"):using.index("**What is remembered.**")]
+    assert "docs/live-test-youtube.md" in corrections
+    for real in ("রাজভোগ", "রাজবুক", "A Royal Book Shower", "Show me a rajbhog."):
+        assert real in corrections, real
+    assert "letter for letter" in corrections      # when a correction is used again
+    assert "was not used" in corrections           # what the rerun showed
+    assert "T13" in corrections                    # no glossary yet, and where the fix is described
+    assert "in live captions and in caption mode alike" not in README
+

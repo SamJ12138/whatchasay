@@ -542,3 +542,10 @@ D4 cloud providers off by default, keys only in backend config.
   10.4 s final (the rerun's line 1), in 40 ms frames the first sentence stays its own 2.1 s final. Candidate
   fixes: split a final at token-timestamp gaps of about 0.4 s or more before MT, with a minimum piece length;
   replay the detection buffer in frames; alternatives in the row.
+- Batch 4 (README). Step 2 did not produce a correction or glossary entry that fixes the mistranscription on a
+  rerun, so the example under "Using it" is the real one with its real outcome: রাজভোগ heard as রাজবুক, line 1
+  "A Royal Book Shower", Alt+E "Show me a rajbhog.", saved, not used when the scene was played again. The
+  Corrections paragraph no longer says a correction is reused "in live captions and in caption mode alike": it is
+  reused when the source sentence returns letter for letter, which page subtitles do and live captions mostly do
+  not. Two limitations added (no glossary; Bengali run-on lines, A9). `tests/test_docs_media.py` pins the example.
+  Tallies: fast 278, slow 27 (12 browser), node 71.

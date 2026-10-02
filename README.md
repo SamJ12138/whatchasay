@@ -142,8 +142,15 @@ the subtitle text those pages show. Even then nothing is read until you switch o
 tab** in the popup for a particular tab. Switching caption mode off gives the site access back.
 
 **Corrections.** Press **Alt+E** while a translation is on screen, edit it, and press Enter (Escape cancels). The
-subtitles hold still while you type. The correction is stored in the translation memory and used from the next
-time the same sentence comes up, in live captions and in caption mode alike.
+subtitles hold still while you type. The correction is stored in the translation memory and used whenever the same
+source sentence comes up again, letter for letter. Page subtitles (caption mode) repeat exactly, so there a
+correction holds. Live captions mostly do not: the recognizer rarely writes a sentence the same way twice.
+
+*Example, from the live test (`docs/live-test-youtube.md`).* In a Bengali film scene the recognizer hears the sweet
+রাজভোগ (rajbhog) as রাজবুক, "royal book", and the first line, "একটা রাজবুক দেখান্ত", was translated as "A Royal Book
+Shower". Alt+E, type "Show me a rajbhog.", Enter: saved. When the scene was played again the recognizer wrote that
+sentence differently (it did in each of five passes), so the correction was not used and the line was wrong again.
+A glossary that fixes one word wherever it is heard does not exist yet (`docs/observations.md`, T13).
 
 **What is remembered.** Live-caption text and its translations are kept in memory only until the session ends.
 Page subtitles from caption mode and your corrections are kept in `backend/data/translation_memory.db`; machine
@@ -466,6 +473,10 @@ Windows (`.github/workflows/ci.yml`). `DEVLOG.md` is the project history; every 
   Nepali. The backend now picks the likeliest of English, Mandarin and Bengali, and stays on its first guess when
   that is not clear enough: the captions then stay dimmed under *Language not detected, assuming English*. Set the
   spoken language under *Live Captions* in the popup instead of *Auto-detect*.
+- There is no glossary: a word the recognizer gets wrong (a name, a dish) stays wrong, and an Alt+E correction
+  covers only the exact sentence it was made on.
+- Bengali film dialogue comes out in long run-on lines (several sentences in one, up to the 10-second cut), which
+  the translator then garbles (`docs/observations.md`, A9).
 - Korean and Portuguese targets stay untranslated with OPUS-MT (no model from English).
 - Sites that protect their audio (DRM) give silence; the popup then says no audio is reaching the capture.
 - Chrome's built-in on-device translator (Chrome 138+, *Prepare on-device translation* in the popup) is wired in but
