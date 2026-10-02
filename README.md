@@ -414,7 +414,8 @@ Playwright and drives one path end to end: `--path audio` (a page plays a sample
 translated cue to the page), `captions`, `security`, `sw-idle` (Chrome's real 30 s service-worker idle timeout,
 driven over raw CDP because Playwright keeps workers alive), `permissions`, `clear-memory`, `cloud-keys`. Add
 `--start-backend` to start a backend with scratch data. `--video FILE --record DIR --screenshot FILE` produce the
-demo and the screenshot in this README.
+demo and the screenshot in this README. `--url URL --targets auto --lines 5` live-captions a real page's video
+(`docs/live-test-youtube.md`); it stops with exit code 2 on a consent wall or bot check instead of getting past it.
 
 **Run logs and the failure report.** Every backend run writes one JSON line per event to
 `backend/logs/run_<run_id>.jsonl` (stage, event, duration, error type; the extension's events arrive through

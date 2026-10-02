@@ -448,3 +448,24 @@ D4 cloud providers off by default, keys only in backend config.
   Harness fixes found on the way (in the next batch): `--targets` was never applied (the extension rebuilds
   `targetLanguages` from `primaryLang` / `secondaryLang`), and the summary line could not be printed on a GBK
   console once it held Bengali.
+- Batch 3 (live test on YouTube, `docs/live-test-youtube.md`): browser harness `--url URL` (audio path): the test
+  copy of the extension is granted the page's origin (standing in for the toolbar click), the page's first
+  `<video>` is waited for (no ad showing: YouTube's `.ad-showing`), paused, put back to `--start-at`, captured, then
+  played; a consent page, a Google "sorry" page, "confirm you're not a bot" or "before you continue" ends the run
+  with exit code 2 and `blocked` in the summary, nothing is clicked. `--lines N` reads the overlay through CDP
+  (`DOM.describeNode` with `pierce`, the overlay's shadow root is closed) and keeps the first N translated lines
+  with their originals, plus first-caption / first-translation times; later cues are only counted. `--targets auto`
+  = English, switched to Chinese (UPDATE_SETTINGS, like the Settings page) if the speech is English. Summary gains
+  `run_id`, `lid`, `detected_lang`, `page`. Three harness bugs found by the live runs, each with a test first
+  where it could fail fast: the readiness check's JavaScript was a syntax error (a Python implicit string
+  concatenation left `}}` in it; every check failed and looked like "no playable video"; now a test parses the page
+  scripts with Node); `--targets` had never been applied (the harness wrote `targetLanguages`, which the
+  extension's settings migration rebuilds from `primaryLang` / `secondaryLang` on every read, so every run got the
+  defaults en + zh: earlier tests passed because the extra target equalled the spoken language and was skipped);
+  the summary line could not be printed on a GBK console once it held Bengali (now ASCII-escaped JSON).
+  Results: before the LID fix, 2 of 3 complete runs fell back to English (whisper-tiny: `ne`/`hi`, `hi`/`hi`);
+  after it, 3 of 3 confirmed Bengali on the first attempt (constrained bn 0.974-0.999; whisper's own top 3 still
+  led by `hi`), first subtitle 1.0-1.1 s after play (provisional English recognizer), Bengali captions from
+  5.3-5.5 s, translations from 5.4-10.7 s, translate p50 34.7-43.6 ms / p95 114.5-148.1 ms per run. Five lines
+  from run `run_20261002T141338-35728b` with what went wrong in them (রাজভোগ heard as রাজবুক, "royal book").
+  Noticed: LID now takes ~0.87 s per call (30 s padding), was 0.18-0.56 s; not changed.

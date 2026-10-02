@@ -80,6 +80,7 @@ import threading
 import time
 import urllib.request
 from pathlib import Path
+from urllib.parse import urlsplit
 
 BACKEND = Path(__file__).resolve().parents[1]
 REPO = BACKEND.parent
@@ -172,7 +173,155 @@ def extension_id_for_path(path: str) -> str:
 TEST_ORIGINS = ("http://127.0.0.1/*",)
 
 
-def test_extension_copy(extension: Path, scratch: Path) -> Path:
+def origin_pattern(url: str) -> str:
+    """The host-permission pattern for a page's origin (any port)."""
+    p = urlsplit(url)
+    return f"{p.scheme}://{p.hostname}/*"
+
+
+# --url: pages that stand between the browser and the video. The run stops on them;
+# nothing is clicked, dismissed or worked around.
+BLOCK_TEXT = (("confirm you're not a bot", "bot check"), ("unusual traffic from your computer", "bot check"),
+              ("before you continue to youtube", "consent wall"), ("before you continue to google", "consent wall"))
+
+
+def block_reason(url: str, text: str) -> str | None:
+    p = urlsplit(url)
+    host = p.hostname or ""
+    if host.startswith("consent."):
+        return f"consent wall ({host})"
+    if p.path.startswith("/sorry/"):
+        return f"bot check ({host}{p.path})"
+    low = (text or "").lower().replace("’", "'")
+    for marker, reason in BLOCK_TEXT:
+        if marker in low:
+            return f'{reason} ("{marker}")'
+    return None
+
+
+def target_settings(targets: list[str]) -> dict:
+    """Target languages as the Settings page stores them: background.js derives
+    targetLanguages from primaryLang / secondaryLang on every read, so setting
+    targetLanguages alone is overwritten (with the defaults en + zh)."""
+    return {"primaryLang": targets[0], "secondaryLang": targets[1] if len(targets) > 1 else "none",
+            "targetLanguages": list(targets[:2])}
+
+
+def auto_target(lang: str) -> str:
+    """--targets auto: English, unless the speech is English; then Chinese."""
+    return "zh" if lang == "en" else "en"
+
+
+LINE_TYPES = ("primary", "secondary", "original", "partial")
+
+
+def overlay_lines(node: dict) -> list[dict]:
+    """The overlay's subtitle lines from a CDP DOM.describeNode(pierce) tree: the overlay
+    lives in a closed shadow root, which page scripts cannot read but DevTools can."""
+    out: list[dict] = []
+
+    def text_of(n):
+        return (n.get("nodeValue") or "") if n.get("nodeType") == 3 else "".join(text_of(c) for c in n.get("children") or [])
+
+    def walk(n):
+        if n.get("nodeType") == 1:
+            a = n.get("attributes") or []
+            attrs = dict(zip(a[::2], a[1::2]))
+            classes = attrs.get("class", "").split()
+            kind = next((c for c in classes if c in LINE_TYPES), None)
+            if "subtitle-line" in classes and kind:
+                out.append({"type": kind, "cue_id": attrs.get("data-cue-id"), "lang": attrs.get("data-lang"), "text": text_of(n)})
+                return
+        for c in (n.get("shadowRoots") or []) + (n.get("children") or []):
+            walk(c)
+
+    walk(node)
+    return out
+
+
+class LineCollector:
+    """First-seen times of a caption and of a translation, and the first `limit`
+    translated cues (latest text of each, with its original). Later cues are counted,
+    not kept: the live test records a few lines, never the transcript."""
+
+    def __init__(self, limit: int):
+        self.limit = limit
+        self.first_caption_t = None
+        self.first_translation_t = None
+        self._kept: dict = {}  # cue_id -> {"cue_id", "lang", "original", "translation"}
+        self._originals: dict = {}
+        self._translated: set = set()
+
+    @property
+    def translated_cues(self) -> int:
+        return len(self._translated)
+
+    def add(self, t: float, lines: list[dict]) -> None:
+        if lines and self.first_caption_t is None:
+            self.first_caption_t = t
+        for ln in lines:
+            cue = ln["cue_id"]
+            if ln["type"] in ("primary", "secondary") and ln["text"]:
+                if self.first_translation_t is None:
+                    self.first_translation_t = t
+                self._translated.add(cue)
+                if cue in self._kept or len(self._kept) < self.limit:
+                    entry = self._kept.setdefault(cue, {"cue_id": cue, "lang": None, "original": None, "translation": None})
+                    entry.update(lang=ln["lang"], translation=ln["text"])
+            elif ln["type"] == "original" and (cue in self._kept or len(self._kept) < self.limit):
+                self._originals[cue] = ln["text"]
+        for cue, entry in self._kept.items():
+            if cue in self._originals:
+                entry["original"] = self._originals[cue]
+
+    def lines(self) -> list[dict]:
+        return list(self._kept.values())
+
+
+PAGE_VIDEO_JS = "(document.querySelector('video.html5-main-video') || document.querySelector('video'))"
+PAGE_VIDEO_STATE_JS = ("(() => { const v = " + PAGE_VIDEO_JS + "; return v ? {ready: v.readyState,"
+                       " ad: !!document.querySelector('.ad-showing')} : null; })()")
+
+
+def wait_for_page_video(page, summary: dict, timeout_s: float = 180.0) -> bool:
+    """--url: wait until the page's video can play and no ad is showing (YouTube marks its
+    player .ad-showing). A consent wall or bot check ends the run: summary["blocked"]."""
+    end = time.time() + timeout_s
+    while time.time() < end:
+        try:
+            reason = block_reason(page.url, page.evaluate("document.body ? document.body.innerText.slice(0, 20000) : ''"))
+            if reason:
+                summary["blocked"] = reason
+                summary["error"] = f"blocked: {reason}; not bypassed"
+                return False
+            st = page.evaluate(PAGE_VIDEO_STATE_JS)
+        except Exception as e:  # navigation in progress (a redirect, a consent page)
+            summary["last_page_error"] = str(e).splitlines()[0][:200]
+            st = None
+        if st and st["ad"]:
+            summary["ad_before_start"] = True
+        elif st and st["ready"] >= 3:
+            return True
+        page.wait_for_timeout(500)
+    summary["error"] = f"no playable video on {page.url} after {timeout_s:.0f} s"
+    return False
+
+
+def summary_line(summary: dict) -> str:
+    """The JSON summary, ASCII only: page titles and subtitle lines can be in any script,
+    and a Windows console's code page (GBK, cp1252) cannot print all of them."""
+    return json.dumps(summary, ensure_ascii=True)
+
+
+def read_overlay(cdp) -> list[dict]:
+    root = cdp.send("DOM.getDocument", {"depth": 0})["root"]["nodeId"]
+    nid = cdp.send("DOM.querySelector", {"nodeId": root, "selector": "#subtitle-translator-host"}).get("nodeId")
+    if not nid:
+        return []
+    return overlay_lines(cdp.send("DOM.describeNode", {"nodeId": nid, "depth": -1, "pierce": True})["node"])
+
+
+def test_extension_copy(extension: Path, scratch: Path, extra_origins=()) -> Path:
     """The extension with the test page's origin and tab capture granted (stand-ins
     for the user's activeTab click, caption-mode grant and first-use tabCapture
     prompt, which automation cannot give)."""
@@ -180,7 +329,7 @@ def test_extension_copy(extension: Path, scratch: Path) -> Path:
     shutil.copytree(extension, dst, ignore=shutil.ignore_patterns("tests", "node_modules"))
     mf = dst / "manifest.json"
     m = json.loads(mf.read_text(encoding="utf-8"))
-    m["host_permissions"] = sorted(set(m.get("host_permissions") or []) | set(TEST_ORIGINS))
+    m["host_permissions"] = sorted(set(m.get("host_permissions") or []) | set(TEST_ORIGINS) | set(extra_origins))
     # tab audio capture is optional (asked for on the popup's Start click): grant it at install here
     m["permissions"] = sorted(set(m.get("permissions") or []) | {"tabCapture"})
     mf.write_text(json.dumps(m, indent=2), encoding="utf-8")
@@ -629,7 +778,7 @@ def sw_idle_run(args, page_url: str, scratch: Path, summary: dict) -> bool:
         targets = [t for t in args.targets.split(",") if t]
         cdp.evaluate(ctl, "(async () => { const cur = (await chrome.storage.local.get('settings')).settings || {};"
                           f" await chrome.storage.local.set({{settings: {{...cur, serverUrl: {json.dumps(f'ws://127.0.0.1:{args.port}/ws')},"
-                          f" targetLanguages: {json.dumps(targets)}, captionMode: true}}}}); return true; }})()")
+                          f" ...{json.dumps(target_settings(targets))}, captionMode: true}}}}); return true; }})()")
         end = time.time() + 10
         while time.time() < end and not cdp.evaluate(
                 ctl, "chrome.scripting ? chrome.scripting.getRegisteredContentScripts().then(r => r.length) : 1"):
@@ -752,7 +901,14 @@ def main() -> int:
     ap.add_argument("--enable", action="store_true", help="captions: enable translation on the tab like the popup does")
     ap.add_argument("--no-test-grant", action="store_true",
                     help="load the extension as is (no 127.0.0.1 host permission; the paths that need site access fail)")
+    ap.add_argument("--url", help="audio path: live-caption the first <video> of this real page (the test copy is granted "
+                                  "its origin, standing in for the toolbar click); exit 2 on a consent wall or bot check")
+    ap.add_argument("--start-at", type=float, default=0.0, help="--url: seek the video here (s) before capture starts")
+    ap.add_argument("--lines", type=int, default=0,
+                    help="audio path: read the overlay (CDP) and keep the first N translated lines with their originals")
     args = ap.parse_args()
+    if args.url and args.path != "audio":
+        ap.error("--url needs --path audio")
 
     from playwright.sync_api import sync_playwright
 
@@ -769,18 +925,22 @@ def main() -> int:
                 ctx.close()
             return 0 if summary["ok"] else 1
         if not args.no_test_grant:
-            args.extension = test_extension_copy(args.extension, scratch)
-            summary["test_grant"] = list(TEST_ORIGINS)
+            extra = [origin_pattern(args.url)] if args.url else []
+            args.extension = test_extension_copy(args.extension, scratch, extra)
+            summary["test_grant"] = list(TEST_ORIGINS) + extra
         if args.start_backend:
             backend = start_backend(args.port, scratch, [extension_id_for_path(str(args.extension))])
         health = f"http://127.0.0.1:{args.port}/health/json"
         if not wait_http(health, 120 if args.start_backend else 5):
             summary["error"] = f"backend not reachable at {health}"
             return 1
+        with urllib.request.urlopen(health, timeout=5) as r:
+            summary["run_id"] = json.loads(r.read()).get("run_id")
 
         site = scratch / "site"
         site.mkdir()
-        shutil.copy(args.wav, site / "clip.wav")
+        if not args.url:
+            shutil.copy(args.wav, site / "clip.wav")
         if args.video:
             shutil.copy(args.video, site / ("clip" + args.video.suffix))
         (site / "subs.vtt").write_text(SUBS_VTT, encoding="utf-8")
@@ -815,13 +975,14 @@ def main() -> int:
             ctx = launch(pw, scratch / "profile", ext_id, not args.headful, args.extension,
                          record_dir=args.record, size=size)
             sw = service_worker(ctx)
-            targets = [t for t in args.targets.split(",") if t]
+            auto = args.targets == "auto"  # English first; switched to Chinese if the speech turns out to be English
+            targets = ["en"] if auto else [t for t in args.targets.split(",") if t]
             caption_mode = args.path not in ("audio", "clear-memory", "cloud-keys")  # the audio path must work with caption mode off (D2)
-            sw.evaluate("""async ({url, targets, captionMode, fontSize}) => {
+            sw.evaluate("""async ({url, langs, captionMode, fontSize}) => {
                 const cur = (await chrome.storage.local.get('settings')).settings || {};
                 const extra = fontSize ? {fontSize} : {};
-                await chrome.storage.local.set({settings: {...cur, serverUrl: url, targetLanguages: targets, captionMode, ...extra}});
-            }""", {"url": f"ws://127.0.0.1:{args.port}/ws", "targets": targets, "captionMode": caption_mode,
+                await chrome.storage.local.set({settings: {...cur, serverUrl: url, ...langs, captionMode, ...extra}});
+            }""", {"url": f"ws://127.0.0.1:{args.port}/ws", "langs": target_settings(targets), "captionMode": caption_mode,
                    "fontSize": args.font_size})
             if caption_mode:  # caption mode registers the content scripts for the granted origins
                 end = time.time() + 10
@@ -842,13 +1003,44 @@ def main() -> int:
                         pass
 
             page.on("console", on_console)
-            page.goto(page_url)
-            if args.video and args.path == "audio":  # played after ASR_START
-                page.wait_for_function("document.getElementById('v').readyState >= 3", timeout=15000)
+            if args.url:
+                page.goto(args.url)
+                if not wait_for_page_video(page, summary):
+                    return 2 if summary.get("blocked") else 1
+                page.evaluate(f"(t) => {{ const v = {PAGE_VIDEO_JS}; v.pause(); v.currentTime = t; }}", args.start_at)
+                summary["page"] = {"title": page.title(), "url": page.url}
+                tab_id = sw.evaluate("async (u) => (await chrome.tabs.query({})).find(t => (t.url || '').startsWith(u)).id",
+                                     args.url.split("#")[0])
             else:
-                page.wait_for_function("document.getElementById('v').currentTime > 0.1", timeout=15000)
+                page.goto(page_url)
+                if args.video and args.path == "audio":  # played after ASR_START
+                    page.wait_for_function("document.getElementById('v').readyState >= 3", timeout=15000)
+                else:
+                    page.wait_for_function("document.getElementById('v').currentTime > 0.1", timeout=15000)
+                tab_id = sw.evaluate("async (u) => (await chrome.tabs.query({url: u}))[0].id", page_url)
+            cdp = ctx.new_cdp_session(page) if args.lines else None
+            collector = LineCollector(args.lines) if args.lines else None
+            play_t = None
+            lid_seen: list = []
 
-            tab_id = sw.evaluate("async (u) => (await chrome.tabs.query({url: u}))[0].id", page_url)
+            def tick():
+                """While captions run: read the overlay, and apply --targets auto once the language is known."""
+                if collector is not None and play_t is not None:
+                    try:
+                        collector.add(round(time.time() - play_t, 2), read_overlay(cdp))
+                    except Exception:
+                        summary["overlay_read_errors"] = summary.get("overlay_read_errors", 0) + 1
+                    if args.url and page.evaluate("!!document.querySelector('.ad-showing')"):
+                        summary["ad_during_run"] = True
+                lids = [(r.get("context") or {}) for r in records
+                        if r.get("stage") == "ext_render" and (r.get("context") or {}).get("kind") == "lid"]
+                for c in lids[len(lid_seen):]:
+                    lid_seen.append({"lang": c.get("lang"), "status": c.get("lid_status"),
+                                     "t": round(time.time() - play_t, 2) if play_t else None})
+                    if auto and c.get("lid_status") in ("confirmed", "manual") and auto_target(c["lang"]) != targets[0]:
+                        targets[:] = [auto_target(c["lang"])]
+                        summary["target_switched"] = {"to": targets[0], "after_lid": c.get("lang")}
+                        send_from_extension_page(ctl, {"type": "UPDATE_SETTINGS", "settings": target_settings(targets)})
             ctl = ctx.new_page()
             ctl.goto(f"chrome-extension://{ext_id}/popup/popup.html")
             if args.path in ("clear-memory", "cloud-keys"):
@@ -866,9 +1058,10 @@ def main() -> int:
                 if not (res and res.get("ok")):
                     summary["error"] = f"ASR_START failed: {res}"
                     return 1
-                if args.video:  # capture is running: start the clip now
-                    page.evaluate("document.getElementById('v').play()")
-                    summary["play_started_s"] = round(time.time() - page_opened, 2)
+                if args.video or args.url:  # capture is running: start the clip now
+                    page.evaluate(f"{PAGE_VIDEO_JS}.play()" if args.url else "document.getElementById('v').play()")
+                    play_t = time.time()
+                    summary["play_started_s"] = round(play_t - page_opened, 2)
             elif args.path == "security":
                 ok = security_checks(page, ctl, tab_id, records, args.port, summary)
                 ctx.close()
@@ -891,6 +1084,7 @@ def main() -> int:
                         got_at = time.time()
                         break
                 if not got:
+                    tick()
                     page.wait_for_timeout(250)
             summary["seconds"] = round(time.time() - t0, 1)
             summary["renders"] = [
@@ -905,7 +1099,20 @@ def main() -> int:
                 page.screenshot(path=str(args.screenshot))
                 summary["screenshot"] = str(args.screenshot)
             if got and args.hold:
-                page.wait_for_timeout(int(args.hold * 1000))
+                end = time.time() + args.hold
+                while time.time() < end:
+                    tick()
+                    page.wait_for_timeout(250)
+            if args.path == "audio":
+                tick()
+                summary["lid"] = lid_seen
+                summary["detected_lang"] = next((x["lang"] for x in reversed(lid_seen) if x["status"] in ("confirmed", "manual")), None)
+                summary["targets_final"] = list(targets)
+            if collector is not None:
+                summary["first_caption_after_play_s"] = collector.first_caption_t
+                summary["first_translation_after_play_s"] = collector.first_translation_t
+                summary["lines"] = collector.lines()
+                summary["translated_cues"] = collector.translated_cues
             if args.path == "audio":
                 page.wait_for_timeout(1500)  # let the other target's translation land too
                 summary["tm_rows_after"] = tm_rows(args.port)
@@ -953,7 +1160,7 @@ def main() -> int:
                 backend.wait(timeout=10)
             except Exception:
                 backend.kill()
-        print(json.dumps(summary, ensure_ascii=False))
+        print(summary_line(summary))
         shutil.rmtree(scratch, ignore_errors=True)
 
 

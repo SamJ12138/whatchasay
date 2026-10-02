@@ -74,6 +74,16 @@ def test_readme_opens_with_the_owner_paragraph_verbatim():
     assert "stay on your machine" not in paras[1], paras[1]
 
 
+def test_live_youtube_test_record_has_its_numbers_and_at_most_five_lines():
+    doc = (REPO / "docs" / "live-test-youtube.md").read_text(encoding="utf-8")
+    for field in ("run_id", "Detected language", "Time to first subtitle", "p50", "p95", "youtube.com/watch?v=-tpVpbIxFmI"):
+        assert field in doc, field
+    assert re.search(r"run_\d{8}T\d{6}-[0-9a-f]{6}", doc)
+    # the translated lines are a numbered table; never more than five (no transcript)
+    rows = re.findall(r"^\| [1-9] \|", doc, re.M)
+    assert 1 <= len(rows) <= 5, rows
+
+
 def test_relative_links_in_the_readme_exist():
     links = re.findall(r"\]\((?!https?://|#|mailto:)([^)\s]+)\)", README)
     missing = [l for l in links if not (REPO / l.split("#")[0]).exists()]
