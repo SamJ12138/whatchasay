@@ -2,13 +2,20 @@
 
 [![CI](https://github.com/SamJ12138/whatchasay/actions/workflows/ci.yml/badge.svg)](https://github.com/SamJ12138/whatchasay/actions/workflows/ci.yml)
 
-Live translated subtitles for the audio of any Chrome tab, produced on your own computer.
+I built this for couples who do not share a first language, because my girlfriend
+watches videos I cannot follow and I watch ones she cannot, and most of them either
+have no subtitles or have subtitles that are wrong in ways that matter. whatchasay
+listens to whatever is playing in a Chrome tab and lays live translated subtitles over
+it, so the two of you can sit on the same couch, watch the same thing, and laugh at
+the same moment instead of one person explaining the joke to the other afterwards.
+It runs entirely on your own machine, and nothing you watch leaves your laptop unless
+you decide it should.
 
 It is for videos and live streams that have no subtitles, lectures, and meetings held in a browser tab in a language
 you do not speak. A Chrome extension captures the tab's sound, a local Python program turns English, Mandarin or
 Bengali speech into text and translates it, and the extension draws both lines over the video, usually under a
-second after each sentence ends. Audio and text stay on your machine: the extension only talks to the backend on
-127.0.0.1, and nothing is sent to a cloud service unless you turn a cloud provider on yourself (it is off by default).
+second after each sentence ends. The extension only talks to the backend on 127.0.0.1, and nothing is sent to a
+cloud service unless you turn a cloud provider on yourself (it is off by default).
 
 ![Demo: English speech in a NASA video is captioned live and translated into Chinese over the video](docs/demo.gif)
 

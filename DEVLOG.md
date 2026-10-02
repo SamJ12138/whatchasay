@@ -420,3 +420,9 @@ D4 cloud providers off by default, keys only in backend config.
   0 bytes; converted `model.bin` identical (SHA-256) for all four models, to each other and to the ones in use.
   Whole step 3: 2.3 GB downloaded (was 3.2), 231 s in this session's run; disk after install 2.3 GB (was 4.5).
 
+
+### 2026-10-02 — README opening, live YouTube test, YouTube demo GIF
+- Batch 1 (README opening): the first paragraph is the owner's text, verbatim (why the project exists: couples who
+  do not share a first language). The old one-line tagline is gone; the paragraph after it no longer repeats the
+  "stays on your machine" sentence (its 127.0.0.1 / cloud-off detail stays). `tests/test_docs_media.py` pins the
+  opening paragraph and the no-repeat.

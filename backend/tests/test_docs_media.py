@@ -51,6 +51,29 @@ def test_demo_gif_size_and_length():
     assert 0 < gif_seconds(data) <= 12.0, gif_seconds(data)
 
 
+OPENING = (
+    "I built this for couples who do not share a first language, because my girlfriend watches videos I cannot "
+    "follow and I watch ones she cannot, and most of them either have no subtitles or have subtitles that are wrong "
+    "in ways that matter. whatchasay listens to whatever is playing in a Chrome tab and lays live translated "
+    "subtitles over it, so the two of you can sit on the same couch, watch the same thing, and laugh at the same "
+    "moment instead of one person explaining the joke to the other afterwards. It runs entirely on your own "
+    "machine, and nothing you watch leaves your laptop unless you decide it should."
+)
+
+
+def paragraphs(text: str) -> list[str]:
+    """Prose paragraphs of the README (badges, headings and images skipped), whitespace collapsed."""
+    paras = [" ".join(p.split()) for p in re.split(r"\n\s*\n", text)]
+    return [p for p in paras if p and not p.startswith(("#", "[![", "!["))]
+
+
+def test_readme_opens_with_the_owner_paragraph_verbatim():
+    paras = paragraphs(README)
+    assert paras[0] == OPENING, paras[0]
+    # its last sentence is not said twice in the paragraph after it
+    assert "stay on your machine" not in paras[1], paras[1]
+
+
 def test_relative_links_in_the_readme_exist():
     links = re.findall(r"\]\((?!https?://|#|mailto:)([^)\s]+)\)", README)
     missing = [l for l in links if not (REPO / l.split("#")[0]).exists()]
