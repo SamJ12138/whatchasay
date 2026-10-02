@@ -156,3 +156,13 @@ than this.", "কী মশায় আপনার এত বড় দোক�
 "দিনকাল যা পড়েছে বোঝে নিত" -> "I know what they've read."). The mistakes are the recognizer's and the translator's,
 as before: রাজভোগ is still heard as রাজবুক, and মশায় ("sir") is still a mosquito.
 
+
+## After the overlay batches (2026-10-02, `docs/overlay/README.md`)
+
+The run `docs/demo-youtube.gif` is now cut from: the same command plus `--prime-audio --fullscreen` (the player
+put into fullscreen with YouTube's `f` key, so the subtitles sit over the bottom of the picture; on the normal
+watch page they sit below the player). Run `run_20261002T192730-1b17fa`: Bengali confirmed about 2 s in, the first
+subtitle in the confirmed language 1.9 s after play, the first translation on screen 2.4 s after play, 10 lines in
+45 s, first translated text 2.1 s after a line's first word (p50), final translation 1.1 s after its last word
+(p50), 1.7 draft rewrites per line, no rows written to the translation memory. The pipeline is the one of the
+latency batches; only the overlay changed (translation only, two rows, over the bottom 15 % in fullscreen).

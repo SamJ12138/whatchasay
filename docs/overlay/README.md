@@ -51,3 +51,84 @@ fullscreen runs (0 of 93 and 0 of 95 samples): it was fixed at 15 % of the *view
 above the bottom 15 % band, and on a normal page it hung below the player.
 
 ![Before: the NASA clip on a normal page, three bars over the lower picture and the page text](before-nasa-normal-final.png)
+
+## After (the overlay batches, commits `f0600be`, `2b70045`, `94afd11`)
+
+What changed, in the order the batches made it:
+
+1. **Show less.** The translation only, by default; the source line (the spoken words) is off, and the popup's
+   toggle *Show the spoken words under the translation* or **Alt+O** on the page turns it on (remembered,
+   `showOriginal`). On, it is 0.8x the translation's font and at 0.7 opacity. Every line is at most 2 rows of 42
+   characters (CJK: 22); a longer text keeps its newest words with an ellipsis at the start. The font is 4.5 % of
+   the video element's height (`fontScalePct`), never under 14 px (`fontMinPx`). The background is a rounded box
+   behind the text only (`overlayBgOpacity` 0.6), not a bar across the picture.
+2. **Where the video is not.** When the video does not fill the viewport (under 95 % of its width or 90 % of its
+   height, not fullscreen) the block sits directly below the video's bottom edge, in the page's space; fullscreen,
+   or a video that fills the viewport, or no room below: over the video's bottom with a margin of 2 % of its height,
+   and above the site's control bar while that is showing (YouTube's `.ytp-chrome-bottom` by name, any other
+   site's by its place: a visible element anchored at the video's bottom edge, wider than half the video and under
+   30 % of its height). The block can be dragged; the offset is remembered per site origin and placement mode.
+   The block holds one text per role, the newest: the open line's draft or the last line's final translation, and
+   (source on) the line being recognised or the last line's words. The previous stacking of the last line, the next
+   line's draft and its partial (up to six rows) is gone: that is what keeps the block at two rows per role.
+3. **No jumping.** The stack reserves its height (two rows per configured translation role, two rows of the smaller
+   font when the source line is on), and partial text is updated in the same element, so the block's box does not
+   change while a line streams.
+
+Same clips, layouts, viewport and moments as before; the defaults (source line off), except the last row:
+
+| Clip, layout | run_id | idle | partial | final | max in the run | Block against the video | Screenshots |
+|---|---|---|---|---|---|---|---|
+| NASA, fullscreen | `20261002T192153-7ccd10` | 0.0 % | 1.8 % | 1.8 % | 6.8 % | over its bottom, inside the bottom 15 % in 94 of 94 samples | `after-nasa-fullscreen-*.png` |
+| NASA, normal | `20261002T192235-1c0c81` | 0.0 % | 0.0 % | 0.0 % | 0.0 % | below it in 96 of 96 samples, never intersecting | `after-nasa-normal-*.png` |
+| YouTube, normal | `20261002T192324-2bc1df` | 0.0 % | 0.0 % | 0.0 % | 0.0 % | below it in 95 of 95 samples, never intersecting | `after-youtube-normal-*.png` |
+| YouTube, fullscreen | `20261002T192408-295079` | 0.0 % | 2.4 % | 1.9 % | 6.2 % | inside the bottom 15 % in 93 of 93 samples | `after-youtube-fullscreen-*.png` |
+| NASA, fullscreen, source line on | `20261002T192916-62a7be` | 0.0 % | 2.1 % | 3.9 % | 10.7 % | over its bottom; four rows reserved, so above the 15 % band | `after-nasa-fullscreen-source-*.png` |
+
+Before and after, the final moment / the largest coverage in the run:
+
+| Clip, layout | Before | After (defaults) |
+|---|---|---|
+| NASA, fullscreen | 11.0 % / 20.1 % | 1.8 % / 6.8 % |
+| NASA, normal page | 19.1 % / 38.1 % | 0 / 0 (below the video) |
+| YouTube, normal page | 7.0 % / 36.5 % | 0 / 0 (below the video) |
+| YouTube, fullscreen | 3.3 % / 18.7 % | 1.9 % / 6.2 % |
+
+The "max" figures before were the moments when three bars were up (the last line's translation and source, the
+next line's partial); after, the largest is a two-row draft. With the source line on in fullscreen the final
+moment is 3.9 % (11.0 % before).
+
+![After: the NASA clip on a normal page, the translation below the picture](after-nasa-normal-final.png)
+
+![After: the YouTube page in fullscreen, a draft translation at the bottom](after-youtube-fullscreen-partial.png)
+
+**Holding still.** With the source line on (the line in progress is rewritten at every partial result) the
+block's box was read at each partial-text change, polled every 40 ms: the harness page with the looping English
+sample, 50 consecutive updates, one block height, 0 position changes; the live clip on the YouTube page (run
+`20261002T191908-5c5f3f`), 49 updates over 44 s (then music), one height (89 px), 0 position changes.
+
+**Controls.** With the harness page's control bar showing (`--hover-controls`, the mouse kept over the player)
+the lines never overlapped it in 91 samples (run `20261002T185836-c89f51`); on YouTube in fullscreen with the
+bar showing, 0 overlaps in 74 samples and the block still inside the bottom 15 % (`20261002T190628-ccbc91`).
+
+**Tests.** Layout math and the overlay's rules under node: `extension/tests/overlay-layout.test.js`,
+`overlay-placement.test.js`, `overlay-stable.test.js`. In the browser (slow, `backend/tests/test_overlay_browser.py`):
+below the video and never over it on the page layout; inside the bottom 15 % when it fills the viewport; clear of
+the control bar; one height and no moves across 50 partial updates; the YouTube page behind `ST_YOUTUBE_URL`.
+
+**Settings added** (extension, `chrome.storage.local.settings`; Options → Display):
+
+| Key | Default | |
+|---|---|---|
+| `showOriginal` | `false` | the source line under the translation (popup toggle, Alt+O); was `true` |
+| `fontScalePct` | `4.5` | font size as a percentage of the video element's height |
+| `fontMinPx` | `14` | the smallest font, for small embeds |
+| `overlayBgOpacity` | `0.6` | the rounded box behind each line |
+| `fontSize` | `20` | (existing) px, now only while no video element is known |
+| `maxLines`, `maxCharsLatin`, `maxCharsCJK` | `2`, `42`, `22` | (existing) now also the overlay's own cap per line |
+| `overlayOffsets` (own key) | `{}` | dragged offsets: `{origin: {page: {dx, dy}, overlay: {dx, dy}}}` |
+
+**Reproducing.** `backend/scripts/e2e_extension.py --start-backend --path audio --video CLIP --source en --targets zh
+--prime-audio --size 960x540 --hold 20 --layout page|fill --geometry --shots docs/overlay --shot-name NAME`, and
+`--url URL --source auto --targets auto --headful [--fullscreen]` for the YouTube page; `--show-source`,
+`--hover-controls`, `--partial-updates 50` as above. The NASA clip is the one `make_demo_gif.py` downloads.

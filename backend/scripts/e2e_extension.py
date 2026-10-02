@@ -615,6 +615,7 @@ class GeometryLog:
         self.lines_in_bottom_15 = 0
         self.lines_over_video = 0
         self.controls_overlap = 0
+        self.most_lines = None   # the sample with the most caption lines: types, cues, lengths (for diagnosis)
 
     @staticmethod
     def caption_lines(g: dict) -> list[dict]:
@@ -640,6 +641,9 @@ class GeometryLog:
             self.samples.append({k: g[k] for k in ("t", "coverage", "block")} | {"lines": len(self.caption_lines(g))})
         lines = self.caption_lines(g)
         self.max_coverage = max(self.max_coverage, g["coverage"])
+        if lines and (self.most_lines is None or len(lines) > self.most_lines["n"]):
+            self.most_lines = {"n": len(lines), "t": t, "lines": [{"type": ln["type"], "cue_id": ln["cue_id"], "chars": len(ln["text"]),
+                                                                  "in_progress": ln["in_progress"], "draft": ln["draft"]} for ln in lines]}
         if lines and g["video"]:
             self.with_lines += 1
             v = g["video"]
@@ -696,7 +700,7 @@ class GeometryLog:
                 "partial_updates": {"count": len(self.updates), "heights": heights, "height_changes": max(0, len(heights) - 1),
                                     "position_changes": moves, "first": self.updates[0] if self.updates else None,
                                     "last": self.updates[-1] if self.updates else None},
-                "last_block": last.get("block")}
+                "last_block": last.get("block"), "most_lines": self.most_lines}
 
 
 def test_extension_copy(extension: Path, scratch: Path, extra_origins=()) -> Path:

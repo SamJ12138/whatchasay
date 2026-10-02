@@ -15,10 +15,10 @@ you decide it should.
 
 *The first 9.5 seconds of "10,000 রাজভোগের Order | Ora Char Jon | Movie Scene | Prosenjit | Abhishek Chatterjee |
 Debashree" from the YouTube channel Bengali Movies with English Subtitle
-(<https://www.youtube.com/watch?v=-tpVpbIxFmI>), run on CPU: Bengali is detected 1.6 seconds in, the words appear
-as they are spoken (the grey line ending in …), and each line is translated into English above them. Recorded by
-the browser harness during a live test (`docs/live-test-youtube.md`, run `20261002T172649-3fac9e`), not by hand;
-the translations are as they came out, mistakes included.*
+(<https://www.youtube.com/watch?v=-tpVpbIxFmI>), the player in fullscreen, run on CPU: Bengali is detected
+2 seconds in, a first translation of each line appears in italics while it is still being spoken (ending in …),
+and the finished line replaces it. Recorded by the browser harness during a live test (`docs/live-test-youtube.md`,
+run `20261002T192730-1b17fa`), not by hand; the translations are as they came out, mistakes included.*
 
 It is for videos and live streams that have no subtitles, lectures, and meetings held in a browser tab in a language
 you do not speak. A Chrome extension captures the tab's sound, a local Python program turns English, Mandarin or
@@ -112,15 +112,17 @@ The extension asks for no site access when it is installed.
    change all your data on all websites"); click **Allow**. The extension captures this tab's audio only, and you
    keep hearing it.
 
-What you will see: the words in italics on a grey band, ending in "…", while a sentence is being spoken; after a
-second or two a draft translation in italics above them, which may be rewritten as the sentence grows; then the
-finished sentence with casing and punctuation, with its final translation above it. A line ends when the speaker
-pauses, and after 6 seconds at the latest. The default target languages are English and Chinese; a language equal
-to the spoken one is skipped. With *Auto-detect*, what is recognised before the language is known is a guess: it is
-drawn dimmed above a small *Detecting language…* label, and the first line at full brightness is in the detected
-language.
+What you will see: the translation only, in a small box below the video on a normal page, or over the bottom of
+the picture when the video is fullscreen. After a second or two of a sentence a draft translation appears in
+italics, ending in "…", and may be rewritten as the sentence grows; then the finished sentence's translation
+replaces it. The spoken words themselves are not shown unless you ask: the popup's *Show the spoken words under
+the translation* toggle, or **Alt+O** on the page, adds them under the translation, smaller and dimmer, and the
+choice is remembered. A line ends when the speaker pauses, and after 6 seconds at the latest. The default target
+languages are English and Chinese; a language equal to the spoken one is skipped. With *Auto-detect*, what is
+recognised before the language is known is a guess: it is drawn dimmed above a small *Detecting language…* label,
+and the first line at full brightness is in the detected language.
 
-![Live captions on a NASA ScienceCasts video: the translation into Chinese above the English sentence, the next sentence in progress below](docs/screenshot.png)
+![Live captions on a NASA ScienceCasts video filling the window: the translation into Chinese over the bottom of the picture, the spoken words under it](docs/screenshot.png)
 
 *NASA ScienceCasts, "The Zero Gravity Coffee Cup" (public domain), running on CPU.*
 
@@ -159,9 +161,22 @@ Page subtitles from caption mode and your corrections are kept in `backend/data/
 translations are deleted 30 days after their last use. *Settings → Data Management → Clear translation memory*
 deletes everything in it (translations, corrections, glossary) and compacts the file.
 
+**The overlay.** It shows the translation only, at most two rows of about 42 characters (22 for Chinese, Japanese
+and Korean); a longer line keeps its newest words, with "…" at the start. Its font is 4.5 % of the video's height
+(never under 14 px), each line in a rounded box behind the text; *Settings → Display* has the percentage, the
+minimum and the box's opacity, and the popup's **A+** / **A-** change the percentage. On a normal page the block
+sits just below the video; when the video is fullscreen or fills the window it sits over the bottom of the
+picture and moves up while the player's controls are showing. **Drag it** anywhere with the mouse; the place is
+remembered for that site (separately for the page and the fullscreen layouts). **The spoken words** (the
+recognizer's line, growing as it is spoken) are off by default: the popup's *Show the spoken words under the
+translation* toggle or **Alt+O** on the page turns them on, smaller and dimmer under the translation, and the
+choice is remembered. `docs/overlay/README.md` has the measurements (how much of the picture the overlay covers,
+before and after).
+
 **Keyboard shortcuts.** Alt+L start/stop live captions, Alt+T show/hide the overlay, Alt+S swap the two languages,
-Alt+. larger font (the popup also has a smaller-font button), Alt+E edit the current translation. Change them at
-`chrome://extensions/shortcuts`.
+Alt+. larger font (the popup also has a smaller-font button), Alt+E edit the current translation, Alt+O show/hide
+the spoken words. Change the first four at `chrome://extensions/shortcuts` (Alt+E and Alt+O are handled on the
+page: Chrome allows four changeable shortcuts per extension).
 
 **When something does not work**
 
@@ -283,6 +298,7 @@ Two findings from building it:
 ## Configuration
 
 **In the extension:** the popup's **Settings** link opens the options page: languages, line layout and colours,
+the overlay's font (a percentage of the video's height, its minimum in px) and the box behind the text,
 live-caption language and engine, caption mode, the optional refinement, and data management.
 
 **In the backend:** environment variables, or the same names in `backend/.env` (copy `backend/.env.example`, which
@@ -464,7 +480,11 @@ demo and the screenshot in this README. `--url URL --targets auto --lines 5` liv
 (without it Chrome drops the clip's first few hundred milliseconds from the capture).
 `--correct --correct-text TEXT` corrects the first translated line with Alt+E and reports whether the page's video
 was disturbed by the typing; `--tm FILE` keeps the scratch translation memory between two runs (never a file under
-`backend/data`).
+`backend/data`). `--geometry` reads the overlay's lines and block against the video's rectangle every tick (coverage,
+placement, `--partial-updates N` the block's box at N partial-text changes), `--shots DIR --shot-name NAME`
+screenshots three moments, `--layout page|fill` chooses the harness page (a player in a page column, or the video
+filling the viewport), `--fullscreen` puts a `--url` page's player into fullscreen, `--show-source` turns the spoken
+words on, `--hover-controls` keeps the mouse over the player so its control bar shows (`docs/overlay/README.md`).
 
 **Run logs and the failure report.** Every backend run writes one JSON line per event to
 `backend/logs/run_<run_id>.jsonl` (stage, event, duration, error type; the extension's events arrive through
@@ -518,6 +538,9 @@ Windows (`.github/workflows/ci.yml`). `DEVLOG.md` is the project history; every 
   words into "We were married in July 1955." (`docs/latency.md`).
 - Fast dialogue with pauses under half a second still runs two sentences into one line (up to the 6-second cut;
   `docs/observations.md`, A9, and `docs/latency.md`).
+- The overlay shows one line at a time: the previous sentence's translation stays only until the next sentence's
+  first draft arrives (about 1.3 s into it). Below a video on a normal page the block sits over whatever the page
+  has there (on YouTube, the title); drag it elsewhere if that is in the way.
 - Korean and Portuguese targets stay untranslated with OPUS-MT (no model from English).
 - Sites that protect their audio (DRM) give silence; the popup then says no audio is reaching the capture.
 - Chrome's built-in on-device translator (Chrome 138+, *Prepare on-device translation* in the popup) is wired in but

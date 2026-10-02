@@ -725,3 +725,20 @@ D4 cloud providers off by default, keys only in backend config.
   `20261002T191908-5c5f3f`), 49 updates over 44 s (then music), one height (89 px), 0 position changes
   (`test_the_block_holds_still_on_the_live_clip`, behind `ST_YOUTUBE_URL`, accepts 40+ updates). The harness
   starts the geometry clock at capture for the looping WAV page. Tallies: fast 334, slow 42, node 125.
+- Batch 4 (document and compare; commit "docs: overlay before and after, README, new GIFs"). `docs/overlay/
+  README.md`: the after table (same clips, layouts and moments; defaults, plus one run with the source line on),
+  before / after at the final moment and the run's largest coverage: NASA fullscreen 11.0 / 20.1 % -> 1.8 / 6.8 %,
+  NASA normal page 19.1 / 38.1 % -> 0 / 0 (below the video), YouTube normal 7.0 / 36.5 % -> 0 / 0, YouTube
+  fullscreen 3.3 / 18.7 % -> 1.9 / 6.2 %; source line on in fullscreen 3.9 % at the final moment (11.0 % before);
+  the holding-still and controls numbers, the settings added with their defaults, how to reproduce; 15 after
+  screenshots. README: the opening caption (fullscreen run `20261002T192730-1b17fa`), Quickstart's "What you will
+  see" (translation only; the words via the toggle / Alt+O), "Using it" gained **The overlay** (two rows, the font
+  rule, below / over the video, the controls, the drag, the spoken words) and Alt+O in the shortcuts line (handled
+  on the page: four changeable shortcuts per extension), Configuration's extension line, the harness flags under
+  Development, one limitation line (one line at a time; the block below a video sits over the page's text there,
+  drag it). `docs/demo-youtube.gif` regenerated from the fullscreen run (9.5 s, 4,559,191 bytes);
+  `docs/screenshot.png` and `docs/demo.gif` (NASA clip, source line on, run `20261002T193448-ce54a4`, 12 s,
+  5,021,239 bytes) regenerated too, so the three pictures show the same overlay; `docs/live-test-youtube.md` has
+  the run. Harness: `summary.overlay.most_lines` (the sample with the most caption lines, for diagnosis). Found on
+  the way: a relative `--screenshot` path is resolved against the harness's working directory (it wrote
+  `backend/docs/screenshot.png` once; removed, not committed). Tallies: fast 334, slow 42, node 125.
