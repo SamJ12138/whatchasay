@@ -99,11 +99,31 @@ document.addEventListener('keydown', (e) => {
 </body></html>"""
 
 # --video: a real video, played (with sound) only once live captions are running, so the
-# recording and the screenshot show the clip from its first word.
+# recording and the screenshot show the clip from its first word. Both layouts have a
+# control bar over the bottom of the video that appears on hover, as video sites do
+# (#controls; the overlay must stay clear of it, docs/overlay/README.md).
+CONTROLS_CSS = """.player{position:relative;line-height:0}
+#controls{position:absolute;left:0;right:0;bottom:0;height:48px;background:rgba(20,20,20,.85);opacity:0;transition:opacity .1s}
+.player:hover #controls{opacity:1}"""
+# --layout fill (default): the video fills the viewport, as in fullscreen.
 DEMO_PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Demo video</title>
 <style>html,body{margin:0;height:100%;background:#111}body{display:flex;align-items:center;justify-content:center}
-video{width:100%;max-height:100%;background:#000}</style></head>
-<body><video id="v" src="/clip{ext}" playsinline></video></body></html>"""
+.player{width:100%;height:100%;display:flex;align-items:center;justify-content:center}
+video{width:100%;max-height:100%;background:#000}""" + CONTROLS_CSS + """</style></head>
+<body><div class="player"><video id="v" src="/clip{ext}" playsinline></video><div id="controls"></div></div></body></html>"""
+# --layout page: a normal page, the video in a column with text around it (most sites).
+PAGE_LAYOUT = """<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Video page</title>
+<style>html,body{margin:0;background:#f4f4f4;color:#222;font:15px/1.5 sans-serif}
+header{background:#222;color:#fff;padding:12px 24px;font-size:18px}
+main{width:640px;margin:16px auto}.player{width:640px}video{width:640px;height:360px;background:#000;display:block}
+h1{font-size:20px;margin:12px 0 4px}p{margin:8px 0}""" + CONTROLS_CSS + """</style></head>
+<body><header>Video page</header><main>
+<div class="player"><video id="v" src="/clip{ext}" playsinline></video><div id="controls"></div></div>
+<h1>A video on a normal page</h1>
+<p>The player does not fill the window: the page has a header above it and text below it, like a video on most
+sites. The subtitle block belongs in this space, not over the picture.</p>
+<p>More text so the page is taller than the window and can scroll.</p><p>&nbsp;</p><p>&nbsp;</p><p>&nbsp;</p>
+</main></body></html>"""
 
 CAPTION_PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8"><title>caption harness</title></head>
 <body><h1>caption harness</h1>
@@ -471,6 +491,211 @@ def read_overlay(cdp) -> tuple[list[dict], str | None]:
         return [], None
     node = cdp.send("DOM.describeNode", {"nodeId": nid, "depth": -1, "pierce": True})["node"]
     return overlay_lines(node), overlay_label(node)
+
+
+# ---------------------------------------------------------------------------
+# Overlay geometry (docs/overlay/README.md): where the subtitle block and its lines are
+# on the page, against the video's rectangle, read through the closed shadow root with
+# CDP box models. Coverage = the part of the video's area under the lines' boxes.
+# ---------------------------------------------------------------------------
+
+def rect_of_quad(quad: list) -> dict:
+    xs, ys = quad[0::2], quad[1::2]
+    return {"x": min(xs), "y": min(ys), "w": max(xs) - min(xs), "h": max(ys) - min(ys)}
+
+
+def rect_intersection(a: dict, b: dict) -> dict | None:
+    x0, y0 = max(a["x"], b["x"]), max(a["y"], b["y"])
+    x1, y1 = min(a["x"] + a["w"], b["x"] + b["w"]), min(a["y"] + a["h"], b["y"] + b["h"])
+    return {"x": x0, "y": y0, "w": x1 - x0, "h": y1 - y0} if x1 > x0 and y1 > y0 else None
+
+
+def union_area(rects: list[dict]) -> float:
+    """Area of the union of rectangles (coordinate compression; boxes may overlap)."""
+    rects = [r for r in rects if r and r["w"] > 0 and r["h"] > 0]
+    if not rects:
+        return 0.0
+    xs = sorted({v for r in rects for v in (r["x"], r["x"] + r["w"])})
+    ys = sorted({v for r in rects for v in (r["y"], r["y"] + r["h"])})
+    area = 0.0
+    for i in range(len(xs) - 1):
+        for j in range(len(ys) - 1):
+            cx, cy = (xs[i] + xs[i + 1]) / 2, (ys[j] + ys[j + 1]) / 2
+            if any(r["x"] <= cx <= r["x"] + r["w"] and r["y"] <= cy <= r["y"] + r["h"] for r in rects):
+                area += (xs[i + 1] - xs[i]) * (ys[j + 1] - ys[j])
+    return area
+
+
+def bounding_rect(rects: list[dict]) -> dict | None:
+    rects = [r for r in rects if r]
+    if not rects:
+        return None
+    x0, y0 = min(r["x"] for r in rects), min(r["y"] for r in rects)
+    x1, y1 = max(r["x"] + r["w"] for r in rects), max(r["y"] + r["h"] for r in rects)
+    return {"x": x0, "y": y0, "w": x1 - x0, "h": y1 - y0}
+
+
+def coverage_of(lines: list[dict], video: dict | None) -> float:
+    """Fraction of the video's area under the caption lines' boxes (notices excluded)."""
+    if not video or video["w"] <= 0 or video["h"] <= 0:
+        return 0.0
+    boxes = [rect_intersection(ln["box"], video) for ln in lines if ln.get("box") and ln["type"] in LINE_TYPES]
+    return round(union_area(boxes) / (video["w"] * video["h"]), 4)
+
+
+VIDEO_RECT_JS = """(v) => { if (!v) return null; const r = v.getBoundingClientRect();
+  return {video: {x: r.left, y: r.top, w: r.width, h: r.height}, viewport: {w: innerWidth, h: innerHeight},
+          fullscreen: !!document.fullscreenElement}; }"""
+
+
+def read_overlay_geometry(cdp, page, video_expr: str) -> dict:
+    """One sample: the video's rect (viewport coordinates), every subtitle line with its
+    border box, the subtitle block's box (the fixed block that holds the lines, when the
+    overlay has one), the extras (notices, the language label) and the coverage."""
+    out = {"video": None, "viewport": None, "fullscreen": False, "lines": [], "block": None, "extras": [], "coverage": 0.0}
+    v = page.evaluate(f"(() => {{ const f = {VIDEO_RECT_JS}; return f({video_expr}); }})()")
+    if v:
+        out.update(v)
+    root = cdp.send("DOM.getDocument", {"depth": 0})["root"]["nodeId"]
+    nid = cdp.send("DOM.querySelector", {"nodeId": root, "selector": "#subtitle-translator-host"}).get("nodeId")
+    if not nid:
+        return out
+    node = cdp.send("DOM.describeNode", {"nodeId": nid, "depth": -1, "pierce": True})["node"]
+
+    def text_of(n):
+        return (n.get("nodeValue") or "") if n.get("nodeType") == 3 else "".join(text_of(c) for c in n.get("children") or [])
+
+    def box_of(n):
+        try:
+            return rect_of_quad(cdp.send("DOM.getBoxModel", {"backendNodeId": n["backendNodeId"]})["model"]["border"])
+        except Exception:
+            return None
+
+    def walk(n):
+        if n.get("nodeType") == 1:
+            a = n.get("attributes") or []
+            attrs = dict(zip(a[::2], a[1::2]))
+            classes = attrs.get("class", "").split()
+            if "subtitle-block" in classes:
+                out["block"] = box_of(n)
+            if "subtitle-line" in classes:
+                kind = next((c for c in classes if c in LINE_TYPES), None)
+                entry = {"type": kind or "notice", "text": text_of(n), "box": box_of(n), "cue_id": attrs.get("data-cue-id"),
+                         "in_progress": "in-progress" in classes, "draft": "draft" in classes}
+                (out["lines"] if kind else out["extras"]).append(entry)
+                return
+        for c in (n.get("shadowRoots") or []) + (n.get("children") or []):
+            walk(c)
+
+    walk(node)
+    out["coverage"] = coverage_of(out["lines"], out["video"])
+    return out
+
+
+class GeometryLog:
+    """Samples of the overlay's geometry while captions run, and what the brief asks of
+    them: the three moments (idle, a partial mid-sentence, a final translation) with a
+    screenshot each, the block against the video (page vs fullscreen placement), and the
+    block's box across consecutive partial updates (it must not move or grow)."""
+
+    MOMENTS = ("idle", "partial", "final")
+
+    def __init__(self, shots_dir: Path | None, shot_name: str | None, partial_updates: int):
+        self.shots_dir, self.shot_name = shots_dir, shot_name
+        self.partial_updates = partial_updates
+        self.samples: list[dict] = []
+        self.moments: dict = {}
+        self.updates: list[dict] = []       # block box at each partial-text change
+        self._last_partial_text = None
+        self.max_coverage = 0.0
+        self.with_lines = 0
+        self.block_intersects_video = 0
+        self.block_outside_video = 0
+        self.block_in_bottom_15 = 0
+        self.lines_in_bottom_15 = 0
+        self.lines_over_video = 0
+        self.controls_overlap = 0
+
+    @staticmethod
+    def caption_lines(g: dict) -> list[dict]:
+        return [ln for ln in g["lines"] if ln["type"] in LINE_TYPES]
+
+    def moment_of(self, g: dict, t: float) -> str | None:
+        lines = self.caption_lines(g)
+        if "idle" not in self.moments and t >= 0.3:
+            return "idle"
+        if "partial" not in self.moments:
+            prog = [ln for ln in lines if ln["in_progress"] and len(ln["text"]) >= 20]
+            if prog and not any(ln["type"] in ("primary", "secondary") and not ln["draft"] for ln in lines):
+                return "partial"
+        if "final" not in self.moments:
+            if any(ln["type"] in ("primary", "secondary") and not ln["draft"] and ln["text"] for ln in lines):
+                return "final"
+        return None
+
+    def add(self, g: dict, t: float, controls: dict | None = None) -> None:
+        g = dict(g, t=t)
+        if len(self.samples) < 2000:
+            self.samples.append({k: g[k] for k in ("t", "coverage", "block")} | {"lines": len(self.caption_lines(g))})
+        lines = self.caption_lines(g)
+        self.max_coverage = max(self.max_coverage, g["coverage"])
+        if lines and g["video"]:
+            self.with_lines += 1
+            v = g["video"]
+            boxes = [ln["box"] for ln in lines if ln["box"]]
+            block = g["block"] or bounding_rect(boxes)
+            if block:
+                if rect_intersection(block, v):
+                    self.block_intersects_video += 1
+                else:
+                    self.block_outside_video += 1
+                if block["y"] >= v["y"] + 0.85 * v["h"] - 0.5 and block["y"] + block["h"] <= v["y"] + v["h"] + 0.5:
+                    self.block_in_bottom_15 += 1
+            if any(rect_intersection(b, v) for b in boxes):
+                self.lines_over_video += 1
+                if all(b["y"] >= v["y"] + 0.85 * v["h"] - 0.5 for b in boxes if rect_intersection(b, v)):
+                    self.lines_in_bottom_15 += 1
+            if controls and any(rect_intersection(b, controls) for b in boxes):
+                self.controls_overlap += 1
+        # consecutive partial updates: the in-progress line's text changed
+        prog = next((ln for ln in lines if ln["in_progress"]), None)
+        if prog and prog["text"] != self._last_partial_text:
+            self._last_partial_text = prog["text"]
+            if len(self.updates) < max(self.partial_updates, 0):
+                self.updates.append({"t": t, "block": g["block"] or bounding_rect([ln["box"] for ln in lines if ln["box"]]),
+                                     "chars": len(prog["text"])})
+
+    def shot_path(self, moment: str) -> Path | None:
+        if not self.shots_dir or not self.shot_name:
+            return None
+        return self.shots_dir / f"{self.shot_name}-{moment}.png"
+
+    def record_moment(self, moment: str, g: dict, t: float, shot: Path | None) -> None:
+        self.moments[moment] = {"t": t, "coverage": g["coverage"], "video": g["video"], "block": g["block"],
+                                "lines": [{"type": ln["type"], "chars": len(ln["text"]), "box": ln["box"],
+                                           "in_progress": ln["in_progress"], "draft": ln["draft"]} for ln in self.caption_lines(g)],
+                                "extras": [{"chars": len(e["text"]), "box": e["box"]} for e in g["extras"]],
+                                "shot": str(shot) if shot else None}
+
+    def summary(self) -> dict:
+        heights = sorted({round(u["block"]["h"], 1) for u in self.updates if u["block"]})
+        moves = 0
+        prev = None
+        for u in self.updates:
+            b = u["block"]
+            if b and prev and (abs(b["x"] - prev["x"]) > 0.5 or abs(b["y"] - prev["y"]) > 0.5):
+                moves += 1
+            prev = b or prev
+        last = self.samples[-1] if self.samples else {}
+        return {"samples": len(self.samples), "with_lines": self.with_lines, "max_coverage": self.max_coverage,
+                "moments": self.moments,
+                "block_intersects_video": self.block_intersects_video, "block_outside_video": self.block_outside_video,
+                "block_in_bottom_15": self.block_in_bottom_15, "lines_over_video": self.lines_over_video,
+                "lines_in_bottom_15": self.lines_in_bottom_15, "controls_overlap": self.controls_overlap,
+                "partial_updates": {"count": len(self.updates), "heights": heights, "height_changes": max(0, len(heights) - 1),
+                                    "position_changes": moves, "first": self.updates[0] if self.updates else None,
+                                    "last": self.updates[-1] if self.updates else None},
+                "last_block": last.get("block")}
 
 
 def test_extension_copy(extension: Path, scratch: Path, extra_origins=()) -> Path:
@@ -1071,7 +1296,25 @@ def main() -> int:
                          "so the tab's audio output is already running (as over a video that is already playing)")
     ap.add_argument("--lines", type=int, default=0,
                     help="audio path: read the overlay (CDP) and keep the first N translated lines with their originals")
+    ap.add_argument("--layout", choices=("fill", "page"), default="fill",
+                    help="--video: fill = the video fills the viewport (as in fullscreen); page = a normal page, "
+                         "the video in a column with text around it")
+    ap.add_argument("--fullscreen", action="store_true",
+                    help="--url: put the page's player into fullscreen (YouTube's f key) before the clip plays")
+    ap.add_argument("--geometry", action="store_true",
+                    help="audio path: sample the overlay's geometry against the video rect every tick "
+                         "(summary.overlay: coverage, block placement)")
+    ap.add_argument("--shots", type=Path, help="--geometry: screenshot the three moments (idle, partial, final) into this folder")
+    ap.add_argument("--shot-name", help="--shots: file name prefix (<name>-idle.png, ...)")
+    ap.add_argument("--partial-updates", type=int, default=0,
+                    help="--geometry: poll fast and record the block's box at the first N partial-text changes")
+    ap.add_argument("--hover-controls", action="store_true",
+                    help="audio path: keep the mouse over the player so the site's control bar is showing")
     args = ap.parse_args()
+    if args.shots and not args.geometry:
+        args.geometry = True
+    if args.partial_updates and not args.geometry:
+        args.geometry = True
     if args.url and args.path != "audio":
         ap.error("--url needs --path audio")
     if args.tm:
@@ -1121,7 +1364,7 @@ def main() -> int:
         page = {"audio": AUDIO_PAGE, "captions": CAPTION_PAGE, "sw-idle": IDLE_PAGE, "clear-memory": CAPTION_PAGE, "cloud-keys": CAPTION_PAGE,
                 "security": SECURITY_PAGE.replace("{frame_url}", f"http://127.0.0.1:{http_port2}/frame.html")}[args.path]
         if args.video and args.path == "audio":
-            page = DEMO_PAGE.replace("{ext}", args.video.suffix)
+            page = (PAGE_LAYOUT if args.layout == "page" else DEMO_PAGE).replace("{ext}", args.video.suffix)
         (site / "index.html").write_text(page, encoding="utf-8")
         page_url = f"http://127.0.0.1:{http_port}/index.html"
 
@@ -1189,11 +1432,50 @@ def main() -> int:
                 else:
                     page.wait_for_function("document.getElementById('v').currentTime > 0.1", timeout=15000)
                 tab_id = sw.evaluate("async (u) => (await chrome.tabs.query({url: u}))[0].id", page_url)
-            cdp = ctx.new_cdp_session(page) if args.lines else None
+            cdp = ctx.new_cdp_session(page) if (args.lines or args.geometry) else None
             collector = LineCollector(args.lines) if args.lines else None
             dimming = DimmingLog() if args.lines else None
+            geometry = GeometryLog(args.shots, args.shot_name, args.partial_updates) if args.geometry else None
+            video_expr = PAGE_VIDEO_JS if args.url else "document.getElementById('v')"
+            controls_expr = "null" if args.url else "document.getElementById('controls')"
+            if args.shots:
+                args.shots.mkdir(parents=True, exist_ok=True)
             play_t = None
             lid_seen: list = []
+
+            def controls_rect():
+                """The site's control bar when it is showing (the harness pages' #controls; on
+                YouTube .ytp-chrome-bottom unless the player has hidden it), else None."""
+                try:
+                    return page.evaluate("""([sel, yt]) => {
+                        let el = sel ? document.getElementById(sel) : null;
+                        if (yt) { const p = document.querySelector('.html5-video-player');
+                                  if (p && !p.classList.contains('ytp-autohide')) el = p.querySelector('.ytp-chrome-bottom'); }
+                        if (!el) return null;
+                        const cs = getComputedStyle(el); if (cs.opacity === '0' || cs.visibility === 'hidden') return null;
+                        const r = el.getBoundingClientRect(); return r.height ? {x: r.left, y: r.top, w: r.width, h: r.height} : null; }""",
+                                         [None if args.url else "controls", bool(args.url)])
+                except Exception:
+                    return None
+
+            def sample_geometry():
+                """One geometry sample (and the moment's screenshot, when it is one)."""
+                if geometry is None or play_t is None:
+                    return
+                try:
+                    t = round(time.time() - play_t, 2)
+                    g = read_overlay_geometry(cdp, page, video_expr)
+                    moment = geometry.moment_of(g, t)
+                    if moment:
+                        shot = geometry.shot_path(moment)
+                        if shot:
+                            page.screenshot(path=str(shot))
+                            g = read_overlay_geometry(cdp, page, video_expr)  # what the screenshot shows
+                        geometry.record_moment(moment, g, t, shot)
+                    geometry.add(g, t, controls_rect() if args.hover_controls else None)
+                except Exception as e:
+                    summary["geometry_errors"] = summary.get("geometry_errors", 0) + 1
+                    summary["geometry_last_error"] = str(e).splitlines()[0][:200]
 
             def lid_certain() -> bool:
                 """The content script has rendered a confirmed (or user-chosen) language."""
@@ -1214,6 +1496,7 @@ def main() -> int:
                         summary["overlay_read_errors"] = summary.get("overlay_read_errors", 0) + 1
                     if args.url and page.evaluate("!!document.querySelector('.ad-showing')"):
                         summary["ad_during_run"] = True
+                sample_geometry()
                 lids = [(r.get("context") or {}) for r in records
                         if r.get("stage") == "ext_render" and (r.get("context") or {}).get("kind") == "lid"]
                 for c in lids[len(lid_seen):]:
@@ -1244,6 +1527,18 @@ def main() -> int:
                     if args.prime_audio:
                         page.evaluate(PRIME_AUDIO_JS)
                         summary["prime_audio"] = True
+                    if args.fullscreen and args.url:
+                        # YouTube's own shortcut; a trusted key press carries the user activation
+                        # the Fullscreen API needs
+                        page.bring_to_front()
+                        page.evaluate(f"{PAGE_VIDEO_JS}.focus()")
+                        page.keyboard.press("f")
+                        page.wait_for_timeout(800)
+                        summary["fullscreen"] = page.evaluate("!!document.fullscreenElement")
+                    if args.hover_controls:
+                        v = page.evaluate(f"(() => {{ const f = {VIDEO_RECT_JS}; return f({video_expr}); }})()")
+                        if v and v["video"]:
+                            page.mouse.move(v["video"]["x"] + v["video"]["w"] / 2, v["video"]["y"] + v["video"]["h"] * 0.6)
                     page.evaluate(f"{PAGE_VIDEO_JS}.play()" if args.url else "document.getElementById('v').play()")
                     play_t = time.time()
                     summary["play_started_s"] = round(play_t - page_opened, 2)
@@ -1287,10 +1582,21 @@ def main() -> int:
                 end = time.time() + args.hold
                 while time.time() < end:
                     tick()
-                    page.wait_for_timeout(250)
+                    if geometry is not None and args.partial_updates and len(geometry.updates) < args.partial_updates:
+                        # between ticks: fast samples so consecutive partial updates are each seen
+                        for _ in range(5):
+                            page.wait_for_timeout(40)
+                            sample_geometry()
+                    else:
+                        page.wait_for_timeout(250)
             if args.path == "audio":
                 tick()
                 summary["lid"] = lid_seen
+                if geometry is not None:
+                    summary["overlay"] = geometry.summary()
+                    summary["layout"] = "url" if args.url else args.layout
+                    if args.hover_controls:
+                        summary["controls_rect"] = controls_rect()
                 summary["detected_lang"] = next((x["lang"] for x in reversed(lid_seen) if x["status"] in ("confirmed", "manual")), None)
                 summary["targets_final"] = list(targets)
             if collector is not None:

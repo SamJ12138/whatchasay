@@ -651,3 +651,19 @@ D4 cloud providers off by default, keys only in backend config.
   at 1.9 s after play (first live test: 5.4-10.7 s); 13 lines in 45 s, 1.2 non-append revisions per line
   (`docs/live-test-youtube.md`, last section). Tallies: fast 329, slow 35, node 92.
 
+
+### 2026-10-02 — A smaller overlay, where the video is not (overlay batches)
+- Batch 0 (see it first; `docs/overlay/README.md`). The browser harness gained `--geometry` (every tick: the
+  overlay's lines and block with their CDP box models against the video's rectangle, through the closed shadow
+  root; `summary.overlay` with the coverage = union of the lines' boxes clipped to the video, placement counts and
+  the block's box at the first N partial-text changes, `--partial-updates N`), `--shots DIR --shot-name NAME` (a
+  screenshot at the first qualifying sample of three moments: idle 0.3 s after play, a line in progress of 20+
+  characters with no final translation up, the first final translation), `--layout page` (a 640x360 player in a
+  page column, next to the existing fill page; both pages have a hover control bar `#controls`), `--fullscreen`
+  (YouTube's `f` key, trusted, `document.fullscreenElement` checked) and `--hover-controls`. Pure parts tested in
+  `tests/test_harness_url.py`. Baseline, four runs (run_ids in the README), coverage at the final moment / max in
+  the run: NASA fullscreen 11.0 / 20.1 %, NASA normal page 19.1 / 38.1 %, YouTube normal 7.0 / 36.5 %, YouTube
+  fullscreen 3.3 / 18.7 %; the block intersected the video in every sample with a line, in both layouts, and sat
+  15 % up the *viewport*, never in the bottom 15 % of the video in fullscreen. 12 screenshots
+  `docs/overlay/before-*.png` (3.3 MB). The harness's models root for these runs is a scratch folder with the
+  punctuation model (`backend/data/` has none and is never written).

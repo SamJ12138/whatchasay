@@ -219,3 +219,81 @@ def test_line_latency_summary_from_the_content_scripts_records():
         "first_confirmed_after_play_s": 5.3, "first_confirmed_since_session_ms": 5450,
     }
     assert h.line_latency_summary([], play_t=None)["lines"] == 0
+
+
+# ---- overlay geometry (docs/overlay/README.md) ----
+
+def _box(x, y, w, h):
+    return {"x": x, "y": y, "w": w, "h": h}
+
+
+def test_union_area_counts_overlap_once():
+    assert h.union_area([_box(0, 0, 10, 10), _box(5, 5, 10, 10)]) == 175
+    assert h.union_area([_box(0, 0, 10, 10), _box(0, 0, 10, 10)]) == 100
+    assert h.union_area([]) == 0
+
+
+def test_coverage_is_the_part_of_the_video_under_the_caption_lines():
+    video = _box(0, 0, 100, 100)
+    lines = [{"type": "primary", "box": _box(10, 80, 80, 10)},   # 8% of the video
+             {"type": "original", "box": _box(10, 95, 80, 10)},  # half of it below the video: 4%
+             {"type": "notice", "box": _box(0, 0, 100, 100)}]    # notices are not counted
+    assert h.coverage_of(lines, video) == 0.12
+    assert h.coverage_of(lines, None) == 0.0
+
+
+def _g(lines, video=_box(0, 0, 100, 100), block=None):
+    return {"video": video, "viewport": {"w": 100, "h": 100}, "fullscreen": False, "lines": lines, "block": block,
+            "extras": [], "coverage": h.coverage_of(lines, video)}
+
+
+def _line(kind, text, box, in_progress=False, draft=False):
+    return {"type": kind, "text": text, "box": box, "cue_id": "asr_0", "in_progress": in_progress, "draft": draft}
+
+
+def test_geometry_log_finds_the_three_moments_once_each():
+    g = h.GeometryLog(None, None, 0)
+    assert g.moment_of(_g([]), 0.1) is None            # too early for the idle shot
+    assert g.moment_of(_g([]), 0.4) == "idle"
+    g.record_moment("idle", _g([]), 0.4, None)
+    short = _line("partial", "where did", _box(0, 80, 40, 10), in_progress=True)
+    assert g.moment_of(_g([short]), 1.0) is None       # a partial that short is not mid-sentence yet
+    partial = _line("partial", "where did you put the keys", _box(0, 80, 80, 10), in_progress=True)
+    assert g.moment_of(_g([partial]), 1.5) == "partial"
+    g.record_moment("partial", _g([partial]), 1.5, None)
+    final = [_line("primary", "你把钥匙放在哪里了?", _box(0, 70, 80, 10)), _line("original", "Where did you put the keys?", _box(0, 85, 80, 10))]
+    assert g.moment_of(_g(final), 3.0) == "final"
+    g.record_moment("final", _g(final), 3.0, None)
+    assert g.moment_of(_g(final), 4.0) is None
+    assert g.moments["final"]["coverage"] == 0.16
+    assert [ln["chars"] for ln in g.moments["final"]["lines"]] == [10, 27]  # lengths only, never the text
+
+
+def test_geometry_log_places_the_block_against_the_video():
+    g = h.GeometryLog(None, None, 0)
+    video = _box(0, 0, 100, 100)
+    below = _line("primary", "below the video", _box(10, 104, 80, 10))
+    g.add(_g([below], video, block=_box(10, 102, 80, 20)), 1.0)
+    inside = _line("primary", "in the bottom 15%", _box(10, 88, 80, 8))
+    g.add(_g([inside], video, block=_box(10, 86, 80, 12)), 2.0)
+    high = _line("primary", "too high", _box(10, 50, 80, 10))
+    g.add(_g([high], video, block=_box(10, 50, 80, 10)), 3.0)
+    s = g.summary()
+    assert (s["block_outside_video"], s["block_intersects_video"], s["block_in_bottom_15"]) == (1, 2, 1)
+    assert (s["lines_over_video"], s["lines_in_bottom_15"]) == (2, 1)
+    assert s["max_coverage"] == 0.08
+
+
+def test_geometry_log_records_the_block_at_each_partial_text_change():
+    g = h.GeometryLog(None, None, partial_updates=3)
+    block = _box(10, 80, 80, 20)
+    for i, text in enumerate(["a", "a", "a b", "a b c", "a b c d"]):
+        g.add(_g([_line("partial", text, _box(10, 85, 20 + 10 * i, 10), in_progress=True)], block=block), i * 0.1)
+    s = g.summary()["partial_updates"]
+    assert s["count"] == 3  # "a" repeated is not an update; the cap holds
+    assert s["heights"] == [20] and s["height_changes"] == 0 and s["position_changes"] == 0
+    g2 = h.GeometryLog(None, None, partial_updates=5)
+    g2.add(_g([_line("partial", "x", None, in_progress=True)], block=_box(10, 80, 80, 20)), 0)
+    g2.add(_g([_line("partial", "x y", None, in_progress=True)], block=_box(10, 70, 80, 30)), 1)
+    s2 = g2.summary()["partial_updates"]
+    assert s2["height_changes"] == 1 and s2["position_changes"] == 1
