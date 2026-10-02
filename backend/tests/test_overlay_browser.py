@@ -76,3 +76,35 @@ def test_on_the_youtube_page(fullscreen):
     else:
         assert ov["block_intersects_video"] == 0, ov
         assert ov["max_coverage"] == 0.0, ov
+
+
+def partial_updates_run(*args, n=50, at_least=50):
+    """The block's box at the first n partial-text changes (fast polling between ticks)."""
+    summary, proc = run_harness("--path", "audio", "--source", "en", "--targets", "zh", "--size", "960x540",
+                                "--show-source", "--hold", "50", "--partial-updates", str(n), *args)
+    assert summary["ok"], (summary, proc.stderr[-2000:])
+    pu = summary["overlay"]["partial_updates"]
+    assert pu["count"] >= at_least, pu   # enough consecutive updates were seen
+    return pu, summary
+
+
+def test_the_block_holds_still_across_50_partial_updates():
+    """Batch 3: with the source line on, the English sample loops and the line in progress
+    is rewritten every partial result; the block's box must not change height, and its
+    position changes are counted (expected: none; the block is anchored to the video)."""
+    pu, _ = partial_updates_run()
+    assert pu["height_changes"] == 0, pu
+    assert len(pu["heights"]) == 1, pu
+    assert pu["position_changes"] == 0, pu
+
+
+@pytest.mark.skipif(not YOUTUBE_URL, reason="set ST_YOUTUBE_URL (network, headful browser)")
+def test_the_block_holds_still_on_the_live_clip():
+    # the scene's dialogue gives 47-49 partial updates in 75 s (then music); the looping
+    # sample above gives the full 50
+    pu, summary = partial_updates_run("--url", YOUTUBE_URL, "--source", "auto", "--targets", "auto", "--prime-audio",
+                                      "--timeout", "60", "--hold", "75", "--headful", at_least=40)
+    if summary.get("blocked"):
+        pytest.skip(f"page blocked: {summary['blocked']}")
+    assert pu["height_changes"] == 0, pu
+    assert pu["position_changes"] <= 2, pu   # the player's control bar coming and going is the only mover

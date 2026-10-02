@@ -1545,6 +1545,8 @@ def main() -> int:
                     page.evaluate(f"{PAGE_VIDEO_JS}.play()" if args.url else "document.getElementById('v').play()")
                     play_t = time.time()
                     summary["play_started_s"] = round(play_t - page_opened, 2)
+                else:  # the WAV page autoplays (and loops): the geometry clock starts with capture
+                    play_t = time.time()
             elif args.path == "security":
                 ok = security_checks(page, ctl, tab_id, records, args.port, summary)
                 ctx.close()

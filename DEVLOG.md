@@ -710,3 +710,18 @@ D4 cloud providers off by default, keys only in backend config.
   never overlaps it; the YouTube page behind `ST_YOUTUBE_URL` (normal: 0 intersections; fullscreen: 74 of 74 in
   the bottom 15 %, run `20261002T190628-ccbc91` with the bar showing, 0 overlaps). The fill page's video element
   now fills the viewport for an audio-only clip too (`object-fit: contain`). Tallies: fast 334, slow 40, node 120.
+- Batch 3 (stop the jumping; commit "fix: stable overlay geometry during streaming"). The stack has a reserved
+  height (`reservedHeight()`: maxLines rows of the translation font for each configured translation role, plus
+  maxLines rows of the source font when the source line is on, each with its box padding, plus the gaps), set in
+  the style sheet and inline; `blockHeight()` for placement is the same number, so the block's box is fixed
+  whatever is drawn; the rows pack against the video (`justify-content: flex-end` over it, `flex-start` below
+  it). `_updateDisplay` no longer rebuilds: `_reconcile` keeps a drawn line whose classes, cue, role, language
+  and state match the wanted one and only updates its text, so a growing partial or a newer draft changes in
+  place; the final and the next line get fresh elements (their listeners belong to their cue); the line being
+  edited is never reused. Node tests `tests/overlay-stable.test.js` (fake DOM gained `removeChild`). Measured
+  (`--partial-updates 50`, fast polling, source line on): harness page with the looping English sample, 50
+  consecutive partial updates, one block height, 0 position changes (test
+  `test_the_block_holds_still_across_50_partial_updates`); the live clip on the YouTube page (run
+  `20261002T191908-5c5f3f`), 49 updates over 44 s (then music), one height (89 px), 0 position changes
+  (`test_the_block_holds_still_on_the_live_clip`, behind `ST_YOUTUBE_URL`, accepts 40+ updates). The harness
+  starts the geometry clock at capture for the looping WAV page. Tallies: fast 334, slow 42, node 125.

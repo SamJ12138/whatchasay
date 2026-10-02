@@ -108,6 +108,7 @@ class SubtitleOverlay {
     this._createOverlay();
     this._setupResizeObserver();
     this._injectStyles();
+    this.subtitleStack.style.height = `${this.reservedHeight()}px`;
     this._loadOffsets();
     this._updatePosition();
   }
@@ -420,6 +421,7 @@ class SubtitleOverlay {
     on = !!on;
     if (on === this.showOriginal) return on;
     this.showOriginal = on;
+    this._updateStyles();   // the reserved rows change
     this._updateDisplay();
     return on;
   }
@@ -613,6 +615,11 @@ class SubtitleOverlay {
         flex-direction: column-reverse;
       }
 
+      /* the rows pack against the video: at the top of the stack below it, at the bottom over it */
+      .mode-page .subtitle-stack {
+        justify-content: flex-start;
+      }
+
       .overlay-extras {
         display: flex;
         flex-direction: column;
@@ -645,6 +652,8 @@ class SubtitleOverlay {
 
       .subtitle-stack {
         max-width: 100%;
+        height: ${this.reservedHeight()}px;
+        justify-content: flex-end;
         display: flex;
         flex-direction: column;
         align-items: center;
@@ -773,6 +782,7 @@ class SubtitleOverlay {
     if (style) {
       style.textContent = this._getStyles();
     }
+    if (this.subtitleStack) this.subtitleStack.style.height = `${this.reservedHeight()}px`;
   }
 
   /**
@@ -788,8 +798,7 @@ class SubtitleOverlay {
     // discard) the line being edited; the display catches up when the edit ends.
     if (this.editMode && this._editingLine && this._editingLine.isConnected) return;
 
-    // Clear existing
-    this.subtitleStack.innerHTML = '';
+    const fresh = [];   // the lines wanted, top to bottom; reconciled with what is drawn below
 
     // The cue being edited, else the most recent cue
     const lastCue = this.editMode && this.currentCues.has(this.editCueId)
@@ -817,13 +826,13 @@ class SubtitleOverlay {
     for (const [role, lang] of [['primary', primary], ['secondary', secondary]]) {
       if (!lang || lang === 'none') continue;
       if (openDraft && this._usable(openDraft.translations[lang])) {
-        this.subtitleStack.appendChild(this._createDraftLine(openDraft.translations[lang], role, openCue, lang, openDimmed));
+        fresh.push(this._createDraftLine(openDraft.translations[lang], role, openCue, lang, openDimmed));
         shown = true;
       } else if (cueData && usable(lang)) {
-        this.subtitleStack.appendChild(dim(this._createSubtitleLine(this._translationText(translations[lang]), role, cueId, lang, revised)));
+        fresh.push(dim(this._createSubtitleLine(this._translationText(translations[lang]), role, cueId, lang, revised)));
         shown = true;
       } else if (lastDraft && this._usable(lastDraft.translations[lang])) {
-        this.subtitleStack.appendChild(this._createDraftLine(lastDraft.translations[lang], role, cueId, lang, lastDraft.provisional || cueData.provisional));
+        fresh.push(this._createDraftLine(lastDraft.translations[lang], role, cueId, lang, lastDraft.provisional || cueData.provisional));
         shown = true;
       }
     }
@@ -837,12 +846,37 @@ class SubtitleOverlay {
       line.textContent = this._fit(this.partial.text, this.partial.lang);
       line.dataset.cueId = this.partial.cueId;
       line.dataset.state = 'in-progress';
-      this.subtitleStack.appendChild(line);
+      fresh.push(line);
     } else if (cueData && cueData.original && (this.showOriginal || !shown)) {
-      this.subtitleStack.appendChild(dim(this._createSubtitleLine(cueData.original, 'original', cueId, null, revised, cueData.sourceLang)));
+      fresh.push(dim(this._createSubtitleLine(cueData.original, 'original', cueId, null, revised, cueData.sourceLang)));
     }
 
+    this._reconcile(fresh);
     this._renderExtras();
+  }
+
+  /**
+   * Put the wanted lines on screen with the least change: a drawn line of the same kind
+   * (classes, cue, role, language) keeps its element and only its text is updated, so a
+   * growing partial or a newer draft changes in place; anything else is replaced. The
+   * line being edited is never reused (its listeners and contenteditable are its own).
+   */
+  _reconcile(fresh) {
+    const stack = this.subtitleStack;
+    const same = (a, b) => a.className === b.className && a.dataset.cueId === b.dataset.cueId
+      && a.dataset.type === b.dataset.type && a.dataset.lang === b.dataset.lang && a.dataset.state === b.dataset.state
+      && !a.className.split(/\s+/).includes('editing');
+    let i = 0;
+    for (; i < fresh.length; i++) {
+      const have = stack.children[i];
+      if (have && same(have, fresh[i])) {
+        if (have.textContent !== fresh[i].textContent) have.textContent = fresh[i].textContent;
+        continue;
+      }
+      break;
+    }
+    while (stack.children.length > i) stack.removeChild(stack.children[stack.children.length - 1]);
+    for (; i < fresh.length; i++) stack.appendChild(fresh[i]);
   }
 
   /**
@@ -1028,15 +1062,31 @@ class SubtitleOverlay {
   }
 
   /**
-   * The block's height for placement: its rendered height, else what the configured
-   * rows take (two rows of the translation's font plus padding).
+   * The height the stack reserves, in px: maxLines rows for each translation role that
+   * is configured, and maxLines rows of the source font when the source line is on,
+   * each with its line box's padding, plus the gaps between them. The stack is given
+   * this height, so the block never changes height while text streams (batch 3).
    */
-  blockHeight() {
-    const h = this.block && this.block.offsetHeight;
-    if (h > 0) return h;
+  reservedHeight() {
     const rows = Math.max(1, this.settings.maxLines || 2);
     const text = this.roleStyle('primary').fontPx;
-    return Math.round(rows * text * this.settings.lineHeight + text * 0.3);
+    const source = this.roleStyle('original').fontPx;
+    const rowBox = (px) => rows * px * this.settings.lineHeight + px * 0.3;   // padding 0.15em top and bottom
+    let roles = 1;
+    if (this.secondaryLang && this.secondaryLang !== 'none' && this.secondaryLang !== this.primaryLang) roles = 2;
+    let h = roles * rowBox(text);
+    if (this.showOriginal) h += rowBox(source);
+    const parts = roles + (this.showOriginal ? 1 : 0);
+    h += (parts - 1) * text * 0.15;   // the gap between the roles' boxes
+    return Math.ceil(h);
+  }
+
+  /**
+   * The block's height for placement: the reserved height (the rendered one is the same
+   * once the style sheet is applied).
+   */
+  blockHeight() {
+    return this.reservedHeight();
   }
 
   /**

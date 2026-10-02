@@ -20,6 +20,7 @@ class FakeElement {
     };
   }
   appendChild(child) { this.children.push(child); child.isConnected = true; return child; }
+  removeChild(child) { const i = this.children.indexOf(child); if (i >= 0) { this.children.splice(i, 1); child.isConnected = false; } return child; }
   set innerHTML(html) { if (html === '') { for (const c of this.children) c.isConnected = false; this.children = []; } }
   attachShadow() { return new FakeElement('#shadow-root'); }
   querySelector(tag) { return this.children.find((c) => c.tagName === String(tag).toUpperCase()) || null; }
