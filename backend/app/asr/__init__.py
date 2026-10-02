@@ -69,7 +69,8 @@ def _restore_text(text: str, lang: str, final: bool) -> str:
 def get_lid() -> SpokenLanguageId:
     global _lid
     if _lid is None:
-        _lid = SpokenLanguageId(settings.asr.models_dir, num_threads=settings.asr.num_threads)
+        _lid = SpokenLanguageId(settings.asr.models_dir, num_threads=settings.asr.num_threads,
+                                min_confidence=settings.asr.lid_min_confidence)
     return _lid
 
 

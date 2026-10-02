@@ -235,6 +235,9 @@ class ASRConfig(BaseSettings):
     rule2_min_trailing_silence: float = Field(default=0.6)
     rule3_min_utterance_length: float = Field(default=10.0)
     lid_window_s: float = Field(default=2.5)
+    # Spoken-language ID picks the likeliest of `languages` (renormalised over them); below this
+    # it stays undecided (provisional language kept). docs/observations.md A7
+    lid_min_confidence: float = Field(default=0.6)
     partial_interval_ms: int = Field(default=120)
     warmup_languages: List[str] = Field(default=["en", "zh", "bn"], description="Recognizers loaded at startup so auto-detect switches are instant")
 

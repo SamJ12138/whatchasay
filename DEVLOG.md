@@ -426,3 +426,25 @@ D4 cloud providers off by default, keys only in backend config.
   do not share a first language). The old one-line tagline is gone; the paragraph after it no longer repeats the
   "stays on your machine" sentence (its 127.0.0.1 / cloud-off detail stays). `tests/test_docs_media.py` pins the
   opening paragraph and the no-repeat.
+- Batch 2 (spoken-language ID constrained to the supported languages; owner's design): the first live runs on the
+  YouTube clip (`docs/live-test-youtube.md`) found whisper-tiny calling the Bengali film audio Hindi or Nepali in
+  2 of 3 complete runs (`run_20261002T133703-391c87`: `ne` then `hi`; `run_20261002T133849-8532a3`: `hi` twice;
+  `run_20261002T133353-85b0c2` got `bn`). Both answers are outside {en, zh, bn}, so the session kept the
+  provisional English (`fallback`), the English target was skipped, nothing was translated. `asr/lid.py` now runs
+  the same whisper-tiny ONNX files with onnxruntime (whisper's log-mel front end in numpy, encoder + one decoder
+  step after start-of-transcript) to get its probability for every language, and picks the argmax over the
+  allowed languages, renormalised, if it reaches `asr.lid_min_confidence` (0.6); below it the session stays
+  provisional exactly as an undecided attempt did. Every call logs stage `lid_scores` (new, `docs/pipeline-stages.md`
+  a7.1): whisper's unconstrained top 3, the constrained distribution, the best one, its confidence, the floor.
+  Measured on the session's real LID windows (both attempts, starts 0 / 0.3 / 0.7 s): en sample constrained en >=
+  0.999, zh sample zh >= 0.951, bn sample bn 0.738-0.942, the clip bn 0.967-0.999 while whisper's own top is `hi`
+  in 5 of 6 windows (up to 0.82). The onnxruntime front end agrees with sherpa-onnx's own answer except two near
+  ties. Tests: `tests/test_lid_constrained.py` (fast: the choice, the floor, `lid_scores` on every call, the
+  metadata tables, the mel shape, the setting) and `tests/test_lid_real.py` (slow: the three sample WAVs and the
+  clip through the real session, 3 runs each, all must confirm the right language; RED before: the clip gave
+  fallback / bn / fallback). The clip's first 20 s (16 kHz WAV) were recorded locally from the playing video in the
+  browser and are not in the repository (`ST_LID_CLIP_WAV`; skipped without it). `docs/observations.md` A7 and a
+  README limitation: whisper-tiny language ID is unreliable on Bengali; set the spoken language in the popup.
+  Harness fixes found on the way (in the next batch): `--targets` was never applied (the extension rebuilds
+  `targetLanguages` from `primaryLang` / `secondaryLang`), and the summary line could not be printed on a GBK
+  console once it held Bengali.

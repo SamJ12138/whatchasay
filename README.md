@@ -323,6 +323,7 @@ objects are JSON; relative paths are relative to `backend/`. Every setting:
 | `SUBTITLE_ASR__RULE2_MIN_TRAILING_SILENCE` | `0.6` | End a sentence after this much silence following speech |
 | `SUBTITLE_ASR__RULE3_MIN_UTTERANCE_LENGTH` | `10.0` | End it anyway after this long, even mid-sentence |
 | `SUBTITLE_ASR__LID_WINDOW_S` | `2.5` | Seconds of voiced audio before spoken-language ID runs |
+| `SUBTITLE_ASR__LID_MIN_CONFIDENCE` | `0.6` | Spoken-language ID answers only at or above this confidence among the spoken languages |
 | `SUBTITLE_ASR__PARTIAL_INTERVAL_MS` | `120` | Minimum gap between partial captions (ms) |
 | `SUBTITLE_ASR__WARMUP_LANGUAGES` | `["en", "zh", "bn"]` | Recognizers loaded at startup so a language switch is instant |
 
@@ -446,6 +447,10 @@ Windows (`.github/workflows/ci.yml`). `DEVLOG.md` is the project history; every 
 - A sentence longer than 10 seconds of continuous speech is cut and its parts are translated separately.
 - With *Auto-detect*, the first one or two seconds may show text in the wrong language until detection switches;
   choosing the spoken language avoids it.
+- Spoken-language detection (whisper-tiny) is unreliable on Bengali: on its own it often takes Bengali for Hindi or
+  Nepali. The backend now picks the likeliest of English, Mandarin and Bengali, and stays on its first guess when
+  that is not clear enough; if the captions are in the wrong language, set the spoken language under *Live Captions*
+  in the popup instead of *Auto-detect*.
 - Korean and Portuguese targets stay untranslated with OPUS-MT (no model from English).
 - Sites that protect their audio (DRM) give silence; the popup then says no audio is reaching the capture.
 - Chrome's built-in on-device translator (Chrome 138+, *Prepare on-device translation* in the popup) is wired in but
