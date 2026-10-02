@@ -48,7 +48,8 @@ Measured on this machine: the source-language caption appears at ~0.4 s, the tra
    First run installs dependencies and downloads models (several minutes); later runs take ~10 s.
 2. Open `chrome://extensions`, enable **Developer mode**, **Load unpacked** → select the `extension` folder.
 3. Open a video:
-   - with subtitles: translations appear above them automatically;
+   - with subtitles: click the extension icon → turn on **Translate subtitles on this tab**; translations then appear
+     above the subtitles (the extension contacts the backend only for tabs you switched on);
    - without subtitles: click the extension icon → **Start Live Captions** (or press **Alt+L**).
      Pick the spoken language or leave *Auto-detect* (captions start immediately and switch language if needed).
 
@@ -96,7 +97,9 @@ extension/                MV3 extension: background.js (tabCapture), offscreen.j
 
 ```bash
 cd backend
-venv\Scripts\python -m pytest tests -v        # integration tests run automatically if the server is on :8765
+venv\Scripts\python -m pytest -v             # fast suite: no models, no server, no network
+venv\Scripts\python -m pytest -m slow -v     # real models + Chromium harness (scripts/e2e_extension.py)
+cd ..\extension && node --test               # extension modules
 venv\Scripts\python scripts\e2e_ws_asr.py data\models\asr\sherpa-onnx-streaming-zipformer-bn-vosk-2026-02-09\test_wavs\0.wav auto en,zh
 ```
 

@@ -241,8 +241,14 @@ class CacheConfig(BaseSettings):
 
 
 class ServerConfig(BaseSettings):
-    host: str = Field(default="127.0.0.1")
+    host: str = Field(default="127.0.0.1", description="loopback only (security.check_bind_host)")
     port: int = Field(default=8765)
+    # Origins allowed to call the backend (security.py): the unpacked extension next
+    # to this backend (id derived from its path), these extension ids, and the
+    # backend's own loopback origin. SUBTITLE_SERVER__EXTENSION_IDS='["<id>"]'
+    allow_local_extension: bool = Field(default=True)
+    extension_ids: List[str] = Field(default_factory=list)
+    extra_origins: List[str] = Field(default_factory=list)
     debug: bool = Field(default=False)
     ws_ping_interval: float = Field(default=30.0)
     ws_ping_timeout: float = Field(default=10.0)

@@ -5,8 +5,12 @@ end to end, with no human click. Two paths:
                    tab plays a WAV -> tabCapture (offscreen doc, AudioWorklet) -> /ws/asr
                    -> ASR + MT in the backend -> offscreen -> service worker -> content script
   --path captions  existing subtitles:
-                   <video> with a WebVTT <track> -> subtitle detector -> /ws (cue) -> MT
-                   -> content script overlay
+                   <video> with a WebVTT <track> -> subtitle detector -> service worker
+                   socket /ws (cue) -> MT -> content script overlay
+  --path security  E16/E17/W8 in the browser: no /ws connection before the tab is
+                   enabled; the page's own scripts cannot open /ws or POST /translate;
+                   after enabling, one connection from the extension; a cue posted
+                   by a cross-origin iframe is ignored, a same-origin one accepted
 
 How the user gesture is avoided (audio): Chromium's `--allowlisted-extension-id=<id>`
 switch lets that extension call chrome.tabCapture.getMediaStreamId without the
@@ -21,8 +25,8 @@ sent from an extension page exactly like the popup does.
 Success = the content script of the test tab logs an `ext_render` record for a
 translation (extension/obs.js writes every record to console.debug with the
 [ST-OBS] prefix). For the caption path, `--enable` first enables translation on
-the tab the way the popup does (needed once the extension stops connecting on
-every page).
+the tab the way the popup does (SET_TAB_ENABLED from an extension page); without
+it the extension never connects (E17).
 
 Needs: a Python with `playwright` (pip install playwright; the Chromium build
 in %LOCALAPPDATA%/ms-playwright is used), and either a backend already running
@@ -70,6 +74,9 @@ CAPTION_PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8"><ti
 </video>
 <script>const v=document.getElementById('v');v.play().catch(e=>console.log('play failed',e));</script>
 </body></html>"""
+
+SECURITY_PAGE = CAPTION_PAGE.replace("</body>", '<iframe id="xo" src="{frame_url}" width="200" height="60"></iframe></body>')
+FRAME_PAGE = """<!doctype html><html><body>cross-origin frame</body></html>"""
 
 SUBS_VTT = """WEBVTT
 
@@ -127,10 +134,10 @@ def start_backend(port: int, scratch: Path) -> subprocess.Popen:
                             stdout=log, stderr=subprocess.STDOUT)
 
 
-def launch(pw, user_dir: Path, ext_id: str | None, headless: bool):
+def launch(pw, user_dir: Path, ext_id: str | None, headless: bool, extension: Path = EXTENSION):
     args = [
-        f"--disable-extensions-except={EXTENSION}",
-        f"--load-extension={EXTENSION}",
+        f"--disable-extensions-except={extension}",
+        f"--load-extension={extension}",
         "--autoplay-policy=no-user-gesture-required",
     ]
     if ext_id:
@@ -148,9 +155,72 @@ def send_from_extension_page(ctl, message: dict):
     return ctl.evaluate("(m) => new Promise(r => chrome.runtime.sendMessage(m, r))", message)
 
 
+def backend_connections(port: int) -> int:
+    with urllib.request.urlopen(f"http://127.0.0.1:{port}/stats", timeout=5) as r:  # no Origin: allowed
+        return json.loads(r.read())["connections"]
+
+
+def security_checks(page, ctl, tab_id, records, port, summary) -> bool:
+    """E16 / E17 / W8 in a real browser. Fills summary["checks"]; True if all pass."""
+    checks = summary.setdefault("checks", {})
+
+    def ws_successes():
+        return [r for r in records if r.get("stage") == "ext_ws" and r.get("event") == "success"
+                and (r.get("context") or {}).get("path") == "/ws"]
+
+    def detected(cue_id):
+        return any(r.get("stage") == "ext_caption_detect" and (r.get("context") or {}).get("cue_id") == cue_id
+                   for r in records)
+
+    page.wait_for_timeout(4000)  # page loaded, video playing, subtitles cueing
+    checks["E17_no_connection_before_enable"] = not ws_successes() and backend_connections(port) == 0
+    summary["before_enable_connections"] = backend_connections(port)
+    checks["E17_no_detection_before_enable"] = not any(r.get("stage") == "ext_caption_detect" for r in records)
+
+    page_ws = page.evaluate("""(port) => new Promise(r => {
+        const ws = new WebSocket('ws://127.0.0.1:' + port + '/ws');
+        ws.onopen = () => { ws.close(); r('open'); };
+        ws.onerror = () => r('refused');
+        setTimeout(() => r('timeout'), 5000);
+    })""", port)
+    page_post = page.evaluate("""(port) => fetch('http://127.0.0.1:' + port + '/translate', {method: 'POST',
+        headers: {'Content-Type': 'application/json'}, body: JSON.stringify({text: 'hi', target_languages: ['zh']})})
+        .then(r => 'status ' + r.status, e => 'blocked')""", port)
+    checks["W8_page_cannot_open_ws"] = page_ws == "refused"
+    checks["W8_page_cannot_post_translate"] = page_post == "blocked"
+    summary["page_attempts"] = {"ws": page_ws, "post": page_post}
+
+    res = send_from_extension_page(ctl, {"type": "SET_TAB_ENABLED", "tabId": tab_id, "enabled": True})
+    page.bring_to_front()
+    # the socket lives in the service worker (its ext_ws records do not reach the page console),
+    # so "connected" is read from the backend's own count
+    deadline = time.time() + 20
+    while time.time() < deadline and backend_connections(port) != 1:
+        page.wait_for_timeout(250)
+    summary["after_enable"] = {"reply": res, "connections": backend_connections(port),
+                               "tab_records": [(r.get("context") or {}).get("action") for r in records if r.get("stage") == "ext_tab"]}
+    checks["E17_connects_after_enable"] = bool(res and res.get("ok")) and backend_connections(port) == 1
+    page.wait_for_timeout(1000)  # config message + first cues
+
+    forged = {"__subtrans": "cue", "cue": {"cueId": "forged-cross-origin", "text": "FORGED CUE", "startTime": 0, "endTime": 1}}
+    same = {"__subtrans": "cue", "cue": {"cueId": "same-origin-cue", "text": "Same origin cue", "startTime": 0, "endTime": 1}}
+    frame = next(f for f in page.frames if "frame.html" in f.url)
+    frame.evaluate("(m) => parent.postMessage(m, '*')", forged)
+    page.evaluate("(m) => window.postMessage(m, '*')", same)
+    page.wait_for_timeout(2000)
+    checks["E16_cross_origin_cue_ignored"] = not detected("forged-cross-origin")
+    checks["E16_same_origin_cue_accepted"] = detected("same-origin-cue")
+
+    send_from_extension_page(ctl, {"type": "SET_TAB_ENABLED", "tabId": tab_id, "enabled": False})
+    page.wait_for_timeout(1500)
+    checks["E17_disable_closes_connection"] = backend_connections(port) == 0
+    summary["errors"] = [r.get("error_message") for r in records if r.get("event") == "fail"][:5]
+    return all(checks.values())
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--path", choices=("audio", "captions"), default="audio")
+    ap.add_argument("--path", choices=("audio", "captions", "security"), default="audio")
     ap.add_argument("--wav", type=Path, default=DEFAULT_WAV)
     ap.add_argument("--port", type=int, default=8765)
     ap.add_argument("--start-backend", action="store_true")
@@ -158,6 +228,7 @@ def main() -> int:
     ap.add_argument("--targets", default="en,zh")
     ap.add_argument("--timeout", type=float, default=45.0)
     ap.add_argument("--headful", action="store_true")
+    ap.add_argument("--extension", type=Path, default=EXTENSION, help="extension folder to load (default: ../extension)")
     ap.add_argument("--enable", action="store_true", help="captions: enable translation on the tab like the popup does")
     args = ap.parse_args()
 
@@ -177,20 +248,24 @@ def main() -> int:
         site = scratch / "site"
         site.mkdir()
         shutil.copy(args.wav, site / "clip.wav")
-        (site / "index.html").write_text(AUDIO_PAGE if args.path == "audio" else CAPTION_PAGE, encoding="utf-8")
         (site / "subs.vtt").write_text(SUBS_VTT, encoding="utf-8")
+        (site / "frame.html").write_text(FRAME_PAGE, encoding="utf-8")
         srv, http_port = serve_dir(site)
+        srv2, http_port2 = serve_dir(site)  # a second origin for the cross-origin iframe
+        page = {"audio": AUDIO_PAGE, "captions": CAPTION_PAGE,
+                "security": SECURITY_PAGE.replace("{frame_url}", f"http://127.0.0.1:{http_port2}/frame.html")}[args.path]
+        (site / "index.html").write_text(page, encoding="utf-8")
         page_url = f"http://127.0.0.1:{http_port}/index.html"
 
         with sync_playwright() as pw:
             # 1st launch: learn the unpacked extension's id
-            ctx = launch(pw, scratch / "profile", None, not args.headful)
+            ctx = launch(pw, scratch / "profile", None, not args.headful, args.extension)
             ext_id = service_worker(ctx).url.split("/")[2]
             ctx.close()
             summary["extension_id"] = ext_id
 
             # 2nd launch: allowlist it for tabCapture without a gesture
-            ctx = launch(pw, scratch / "profile", ext_id, not args.headful)
+            ctx = launch(pw, scratch / "profile", ext_id, not args.headful, args.extension)
             sw = service_worker(ctx)
             targets = [t for t in args.targets.split(",") if t]
             sw.evaluate("""async ({url, targets}) => {
@@ -222,9 +297,15 @@ def main() -> int:
                 if not (res and res.get("ok")):
                     summary["error"] = f"ASR_START failed: {res}"
                     return 1
+            elif args.path == "security":
+                ok = security_checks(page, ctl, tab_id, records, args.port, summary)
+                ctx.close()
+                srv.shutdown()
+                srv2.shutdown()
+                summary["ok"] = ok
+                return 0 if ok else 1
             elif args.enable:
-                res = ctl.evaluate("(tabId) => new Promise(r => chrome.tabs.sendMessage(tabId, {type: 'TOGGLE_TAB', enabled: true}, {frameId: 0}, r))", tab_id)
-                summary["enable"] = res
+                summary["enable"] = send_from_extension_page(ctl, {"type": "SET_TAB_ENABLED", "tabId": tab_id, "enabled": True})
             page.bring_to_front()
 
             kinds = ("translation", "revision") if args.path == "audio" else ("backend",)
@@ -255,6 +336,7 @@ def main() -> int:
                 send_from_extension_page(ctl, {"type": "ASR_STOP"})
             ctx.close()
             srv.shutdown()
+            srv2.shutdown()
         return 0 if summary["ok"] else 1
     finally:
         if backend is not None:

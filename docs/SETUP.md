@@ -89,3 +89,18 @@ Paste keys in the Options page (stored locally, sent only to the local backend):
 | Captions appear but no translation | target language equals the spoken language, or the backend is not running |
 | Bengali translation slow (>0.6 s) | use Chrome on-device translation (popup → Prepare), or the Q4_K_M model |
 | Port 8765 busy | `Stop_Subtitle_Translator.bat`, or `python run.py --port 8766` and update the server URL in Options |
+
+## Who can reach the backend
+
+The backend binds `127.0.0.1` only (`run.py` refuses any other `--host`). Every HTTP request and WebSocket handshake
+that carries an `Origin` header must come from the extension (`chrome-extension://<id>`) or the backend's own page
+(`http://127.0.0.1:<port>`, the `/debug` console); anything else gets 403 and CORS never reflects it. The id of the
+unpacked extension in `../extension` is derived from its folder path automatically. If you load the extension from
+another folder or install it from a store, add its id (shown on `chrome://extensions`):
+
+```
+SUBTITLE_SERVER__EXTENSION_IDS='["abcdefghijklmnopabcdefghijklmnop"]'
+```
+
+Translation of page subtitles is off on every tab until you turn on **Translate subtitles on this tab** in the popup;
+only then does the extension open a connection for that tab. Live captions (Alt+L / popup) work independently.

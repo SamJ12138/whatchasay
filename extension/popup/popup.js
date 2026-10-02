@@ -31,12 +31,19 @@ document.addEventListener('DOMContentLoaded', async () => {
   const LANG_NAMES = { auto: 'Auto-detect', en: 'English', zh: 'Chinese', bn: 'Bengali' };
 
   let settings = await getSettings();
-  toggleOverlay.checked = settings.enabled !== false;
   toggleRefiner.checked = settings.refinerEnabled === true;
   liveLang.value = settings.asrSourceLang || 'auto';
 
   let liveState = { capturing: false, tabId: null };
   const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  // "Translate subtitles on this tab": per tab, off until the user turns it on (E17)
+  toggleOverlay.checked = false;
+  if (activeTab?.id) {
+    chrome.runtime.sendMessage({ type: 'GET_TAB_STATE', tabId: activeTab.id }, (st) => {
+      void chrome.runtime.lastError;
+      toggleOverlay.checked = !!(st && st.enabled);
+    });
+  }
 
   updateStatus();
   updateLiveStatus();
@@ -44,9 +51,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   window.addEventListener('unload', () => clearInterval(statusInterval));
 
   // ---- quick toggles ----
-  toggleOverlay.addEventListener('change', async (e) => {
-    await updateSettings({ enabled: e.target.checked });
-    sendCommand('toggle-overlay');
+  toggleOverlay.addEventListener('change', (e) => {
+    if (!activeTab?.id) return;
+    chrome.runtime.sendMessage({ type: 'SET_TAB_ENABLED', tabId: activeTab.id, enabled: e.target.checked },
+      () => void chrome.runtime.lastError);
   });
 
   toggleRefiner.addEventListener('change', async (e) => {

@@ -27,6 +27,7 @@ from .cache import get_translation_memory, get_translation_cache
 from .websocket_handler import websocket_endpoint, manager, format_result, apply_cloud_keys
 from . import asr as asr_pkg
 from . import obs
+from .security import OriginGuard, allowed_origins, origin_allowed
 
 logging.basicConfig(
     level=logging.DEBUG if settings.server.debug else logging.INFO,
@@ -132,7 +133,23 @@ class ObsMiddleware:
 
 
 app = FastAPI(title="Subtitle Translator", description="Real-time local subtitle transcription and translation", version="2.0.0", lifespan=lifespan)
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+class _AllowedOrigins:
+    """CORSMiddleware calls `origin in allow_origins`; answer from security.allowed_origins()
+    so a --port override or a config change is honoured without rebuilding the app."""
+
+    def __contains__(self, origin) -> bool:
+        return isinstance(origin, str) and origin_allowed(origin)
+
+    def __iter__(self):
+        return iter(sorted(allowed_origins()))
+
+
+# Order (outermost first): ObsMiddleware -> OriginGuard -> CORS -> app. The guard
+# refuses foreign origins (403, WebSockets before the upgrade); CORS then only
+# ever echoes an allowed origin, never "*".
+app.add_middleware(CORSMiddleware, allow_origins=_AllowedOrigins(), allow_credentials=False,
+                   allow_methods=["GET", "POST", "OPTIONS"], allow_headers=["Content-Type", "X-Session-Id"])
+app.add_middleware(OriginGuard)
 app.add_middleware(ObsMiddleware)
 
 

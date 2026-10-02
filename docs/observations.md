@@ -59,7 +59,7 @@ before one obs bug was fixed (see "Bugs I introduced"). Both runs used a scratch
 | W5 | `websocket_handler.py:100-103`, `:115-119` | Send to a gone connection → `False`; send error → ERROR + `False`; every caller ignores the return value | `ws_reply` skip / fail `process`, degraded | Stop work for closed connections (drop pending batch items) | open |
 | W6 | `websocket_handler.py:391`, `:447` | `correction` / `config` handler errors are returned as `{status:'error'}` **inside a `result` envelope**; the client (`websocket-client.js`) resolves it as success, so `main.js` updates its cache as if the correction were saved | `tm_store` fail (correction) / `config` fail | Send an `error` envelope | fixed, Batch 2: handler errors use the error envelope with error_type; client surfaces unsolicited errors |
 | W7 | `websocket_handler.py:403` | Per-connection `config` overwrites the server-wide default target languages (known bug #6). Seen in both runs: the `/ws` probe changed it to `["en","bn"]`, then the headless-Chromium tab changed it to `["en","zh"]` | `config` success `scope=global` with `before` / `after` | Keep per-connection only | open |
-| W8 | `main.py:131` | CORS reflects any origin with credentials (known bug #5) | `http` lines show the request but not the Origin | Allow only `chrome-extension://<id>` and the backend's own origin | open |
+| W8 | `main.py:131` | CORS reflects any origin with credentials (known bug #5) | `http` lines show the request but not the Origin | Allow only `chrome-extension://<id>` and the backend's own origin | fixed, Batch 3: Origin allow-list (extension id + own loopback) on HTTP and both WebSockets, 403 before upgrade; CORS never reflects; loopback bind enforced |
 | W9 | `main.py:440-442` | Ollama probe in `/health/json`: `except … pass` | `health_probe` fail, degraded | Fine, logged | open |
 | W10 | `main.py:50`, `:55` | MT / ASR warmup failure: server starts anyway | `startup` fail, degraded | Fine; surface in `/health/json` | open |
 
@@ -104,8 +104,8 @@ before one obs bug was fixed (see "Bugs I introduced"). Both runs used a scratch
 | E13 | `websocket-client.js:422` | Gives up after 10 reconnects for the life of the page | `ext_ws` fail `give_up` | Keep retrying slowly while the page has video | open |
 | E14 | `content-scripts/main.js:253` | Not connected → source text shown untranslated, no request | `ext_cue_request` skip `process`, degraded | Show a notice | open |
 | E15 | `main.js:283` | Request failure (timeout / closed) → source text shown | `ext_cue_request` fail, degraded | Same | open |
-| E16 | `main.js:88` | `message` listener accepts cues from any frame or origin (known, PROJECT_REPORT §10 #15) | not logged | Check `e.origin` / `e.source` | open |
-| E17 | `main.js:78` | Connects to the backend on every top-level page (seen in the run: one `ws_connection` per page load) | `ext_ws` success per page | Connect only when a video is present | open |
+| E16 | `main.js:88` | `message` listener accepts cues from any frame or origin (known, PROJECT_REPORT §10 #15) | not logged | Check `e.origin` / `e.source` | fixed, Batch 3: window messages only from the page's own origin; sub-frames relay cues via the service worker |
+| E17 | `main.js:78` | Connects to the backend on every top-level page (seen in the run: one `ws_connection` per page load) | `ext_ws` success per page | Connect only when a video is present | fixed, Batch 3: per-tab enable (popup); no detection or connection before; the /ws socket lives in the service worker |
 
 ---
 
@@ -180,3 +180,4 @@ with the server up.
 | 0 | chore: phase-1 diff audit, audio-path harness | §6 audio path not run | `docs/phase1-diff-audit.md`: one phase-1 behaviour change (lifespan aborted startup when the pipeline failed to build) reverted with a test |
 | 1 | test: inventory, fakes, in-process app client, node tests for extension | none (scaffolding) | fast suite no longer needs the server or models; `docs/test-inventory.md` |
 | 2 | fix: no failed translation is stored or reported as success (T1-T8, T12, W6) | T1-T8, T11, T12, W6, P6 | per-target status ok/fallback/untranslated/error on `/translate`, `/ws`, `/ws/asr`; TM `engine` column (additive migration) |
+| 3 | fix: origin checks on HTTP, ws and postMessage; localhost bind (W8, E16, E17) | W8, E16, E17 | `/ws` socket moved from the content script to the service worker (a content-script socket carries the page origin); browser harness `--path security` (8 checks) |

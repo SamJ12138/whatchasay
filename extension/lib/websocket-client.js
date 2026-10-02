@@ -1,5 +1,11 @@
 /**
- * WebSocket Client for Backend Communication
+ * WebSocket client for the backend's /ws (subtitle cues).
+ *
+ * Runs in the service worker (one instance per enabled tab, see
+ * lib/tab-connections.js), so the handshake's Origin is the extension's
+ * chrome-extension://<id>, which the backend allows; a socket opened from a
+ * content script would carry the web page's origin and be refused (W8).
+ * Content scripts talk to it through content-scripts/backend-port.js.
  *
  * Handles:
  * - Connection to local translation backend
@@ -12,6 +18,7 @@ class SubtitleWebSocket {
   constructor() {
     this.ws = null;
     this.serverUrl = 'ws://127.0.0.1:8765/ws';
+    this.sessionId = null; // obs session of the tab this socket serves (sent in the handshake)
     this.connected = false;
     this.connecting = false;
     this.reconnectAttempts = 0;
@@ -57,7 +64,7 @@ class SubtitleWebSocket {
     }
 
     this.connecting = true;
-    const obs = window.STObs;
+    const obs = globalThis.STObs;
     const t0 = performance.now();
     let opened = false;
 
@@ -139,7 +146,7 @@ class SubtitleWebSocket {
 
   /** Append the tab's obs session id to the handshake (browsers cannot set WS headers). */
   _urlWithSession(url) {
-    const sid = window.STObs && window.STObs.getSession();
+    const sid = this.sessionId || (globalThis.STObs && globalThis.STObs.getSession());
     if (!sid) return url;
     return url + (url.includes('?') ? '&' : '?') + 'session_id=' + encodeURIComponent(sid);
   }
@@ -338,7 +345,7 @@ class SubtitleWebSocket {
    * Send a message through WebSocket.
    */
   _sendMessage(message) {
-    const obs = window.STObs;
+    const obs = globalThis.STObs;
     if (!this.connected) {
       // Queue message for later
       if (this.messageQueue.length < this.maxQueueSize) {
@@ -425,7 +432,7 @@ class SubtitleWebSocket {
    * Schedule reconnection attempt.
    */
   _scheduleReconnect() {
-    const obs = window.STObs;
+    const obs = globalThis.STObs;
     if (this.reconnectAttempts >= this.maxReconnectAttempts) {
       console.log('[WS] Max reconnect attempts reached');
       // disconnect() also sets attempts to max; only a real give-up is a failure
@@ -456,5 +463,5 @@ class SubtitleWebSocket {
   }
 }
 
-// Export singleton instance
-window.subtitleWS = new SubtitleWebSocket();
+globalThis.SubtitleWebSocket = SubtitleWebSocket;
+if (typeof module !== 'undefined' && module.exports) module.exports = { SubtitleWebSocket };

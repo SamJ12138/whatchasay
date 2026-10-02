@@ -9,9 +9,29 @@
  */
 
 import './obs.js';
+import './content-scripts/ws-protocol.js';
+import './lib/websocket-client.js';
+import './lib/tab-connections.js';
 
 const obs = globalThis.STObs;
 obs.init({ context: 'background' });
+
+// Per-tab backend connections (E17, W8): a tab talks to /ws only after the user
+// enabled translation on it, and the socket lives here so its Origin is the
+// extension. See lib/tab-connections.js.
+const tabConnections = new globalThis.STTabConnections({
+  createSocket: () => new globalThis.SubtitleWebSocket(),
+  getServerUrl: async () => (await getSettings()).serverUrl,
+  persist: (ids) => chrome.storage.session.set({ enabledTabs: ids }).catch((e) =>
+    obs.log('ext_settings', 'fail', { error_type: 'unknown', error_message: 'enabledTabs save: ' + (e.message || e) })),
+  log: (action, tabId, reason) => obs.log('ext_tab', action === 'refuse' ? 'skip' : 'success',
+    { action, tab_id: tabId, reason: reason || undefined }),
+});
+tabConnections.restoreFrom(chrome.storage.session.get('enabledTabs').then((r) => r.enabledTabs || []));
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.name === 'st-ws') tabConnections.attachPort(port);
+});
+chrome.tabs.onRemoved.addListener((tabId) => tabConnections.forget(tabId));
 
 // Relay failures can repeat for every caption; log the first and then every 100th.
 const relayFails = { count: 0 };
@@ -374,6 +394,36 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           .catch((e) => logRelayFail('ext_relay', e, { session_id: asrState.sessionId, msg_type: message.event && message.event.type, hop: 'sw->tab' }));
       } else {
         logRelayFail('ext_relay', new Error('no captured tab id; caption event dropped'), { session_id: asrState.sessionId, hop: 'sw->tab' });
+      }
+      return false;
+    }
+    // ---- per-tab translation (E17) ----
+    case 'GET_TAB_STATE': {
+      const tabId = message.tabId || sender.tab?.id;
+      tabConnections.ready.then(() => sendResponse({ enabled: tabConnections.isEnabled(tabId) }));
+      return true;
+    }
+    case 'SET_TAB_ENABLED': {
+      // only the extension's own pages (popup, options) may switch a tab on: a content
+      // script (sender.url = the web page) cannot enable itself
+      if (!(sender.url || '').startsWith(chrome.runtime.getURL(''))) {
+        sendResponse({ ok: false, error: 'not allowed from a content script' });
+        return false;
+      }
+      const tabId = message.tabId;
+      tabConnections.ready.then(() => {
+        tabConnections.setEnabled(tabId, !!message.enabled);
+        chrome.tabs.sendMessage(tabId, { type: 'TAB_ENABLED', enabled: !!message.enabled }).catch(() => {});
+        sendResponse({ ok: true, enabled: !!message.enabled });
+      });
+      return true;
+    }
+    case 'FRAME_CUE': {
+      // a sub-frame's detector (embedded player) -> the tab's top frame, only for enabled tabs (E16)
+      const tabId = sender.tab?.id;
+      if (tabId != null && sender.frameId !== 0 && tabConnections.isEnabled(tabId)) {
+        chrome.tabs.sendMessage(tabId, { type: 'FRAME_CUE', kind: message.kind, cue: message.cue }, { frameId: 0 })
+          .catch((e) => logRelayFail('ext_relay', e, { msg_type: 'FRAME_CUE', hop: 'sw->tab' }));
       }
       return false;
     }

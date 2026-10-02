@@ -41,7 +41,8 @@
       "js": [
         "obs.js",
         "content-scripts/ws-protocol.js",
-        "content-scripts/websocket-client.js",
+        "content-scripts/guards.js",
+        "content-scripts/backend-port.js",
         "content-scripts/subtitle-detector.js",
         "content-scripts/overlay.js",
         "content-scripts/main.js"

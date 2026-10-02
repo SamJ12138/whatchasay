@@ -49,3 +49,9 @@ def test_page_subtitles_are_translated_over_ws():
     summary, proc = run_harness("--path", "captions", "--enable")
     assert summary["ok"], (summary, proc.stderr[-2000:])
     assert "zh" in summary["first_translation"]["targets"]
+
+
+def test_origins_and_per_tab_enable_in_the_browser():
+    summary, proc = run_harness("--path", "security")
+    assert summary["ok"], (summary, proc.stderr[-2000:])
+    assert all(summary["checks"].values()), summary["checks"]

@@ -33,8 +33,8 @@ test('garbage is invalid, never thrown', () => {
 });
 
 test('the content-script client resolves and rejects pending requests through the parser', async () => {
-  const ctx = loadScripts(['content-scripts/ws-protocol.js', 'content-scripts/websocket-client.js']);
-  const ws = ctx.subtitleWS;
+  const ctx = loadScripts(['content-scripts/ws-protocol.js', 'lib/websocket-client.js']);
+  const ws = new ctx.SubtitleWebSocket();
   ws.connected = true;
   ws.ws = { send() {}, readyState: 1 };
   const ok = ws._sendRequest('r1', { type: 'cue' }, 1000);
@@ -77,8 +77,8 @@ test('usableTranslation: ok and fallback are shown, untranslated and error are n
 });
 
 test('the client reports an unsolicited error envelope through onError', () => {
-  const ctx = loadScripts(['content-scripts/ws-protocol.js', 'content-scripts/websocket-client.js']);
-  const ws = ctx.subtitleWS;
+  const ctx = loadScripts(['content-scripts/ws-protocol.js', 'lib/websocket-client.js']);
+  const ws = new ctx.SubtitleWebSocket();
   const errors = [];
   ws.onError((e) => errors.push(e));
   ws._handleMessage(JSON.stringify({ type: 'error', correlation_id: 'unknown', payload: { error: 'Invalid JSON', error_type: 'parse' } }));

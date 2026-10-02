@@ -22,7 +22,8 @@
 
   // State
   let settings = null;
-  let enabled = true;
+  let enabled = true;        // overlay shown (Alt+T)
+  let tabEnabled = false;    // user enabled translation on this tab (popup); only then is /ws used (E17)
   let connected = false;
   const translationCache = new Map();   // raw cue text -> translations
   const cueTextById = new Map();        // cueId -> raw cue text (for revisions)
@@ -64,11 +65,22 @@
 
   async function init() {
     if (!IS_TOP) {
-      // Frames still run detection so embedded players work, but forward cues to the top frame.
+      // Frames run detection so embedded players work and hand their cues to the top
+      // frame through the service worker (not window.postMessage, E16), only while
+      // translation is enabled on this tab.
       if (detector) {
-        detector.onCue((cue) => window.top.postMessage({ __subtrans: 'cue', cue }, '*'));
-        detector.onCueEnd((cue) => window.top.postMessage({ __subtrans: 'cueEnd', cue }, '*'));
-        detector.start();
+        const relay = (kind) => (cue) => {
+          try { chrome.runtime.sendMessage({ type: 'FRAME_CUE', kind, cue }).catch(() => {}); } catch (_) {}
+        };
+        detector.onCue(relay('cue'));
+        detector.onCueEnd(relay('cueEnd'));
+        chrome.runtime.onMessage.addListener((m) => {
+          if (m && m.type === 'TAB_ENABLED') { if (m.enabled) detector.start(); else detector.stop(); }
+        });
+        chrome.runtime.sendMessage({ type: 'GET_TAB_STATE' }, (st) => {
+          void chrome.runtime.lastError;
+          if (st && st.enabled) detector.start();
+        });
       }
       return;
     }
@@ -81,24 +93,27 @@
         applyOverlaySettings();
       }
 
-      if (settings.autoConnect !== false) {
-        await connectToBackend();
-      }
-
       if (detector) {
         detector.onCue(handleNewCue);
         detector.onCueEnd(handleCueEnd);
-        if (enabled) detector.start();
       }
 
+      // Cues posted by same-origin frames only (E16); cross-origin frames use FRAME_CUE.
       window.addEventListener('message', (e) => {
+        if (!window.STGuards || !window.STGuards.trustedFrameMessage(e, window.location.origin)) return;
         const d = e.data;
-        if (!d || !d.__subtrans) return;
         if (d.__subtrans === 'cue') handleNewCue(d.cue);
         else if (d.__subtrans === 'cueEnd') handleCueEnd(d.cue);
       });
 
       chrome.runtime.onMessage.addListener(handleMessage);
+
+      // Nothing is detected and no backend connection exists until the user
+      // enables translation on this tab (popup); the worker remembers the choice.
+      chrome.runtime.sendMessage({ type: 'GET_TAB_STATE' }, (st) => {
+        void chrome.runtime.lastError;
+        if (st && st.enabled) setTabEnabled(true);
+      });
       setupKeyboardShortcuts();
 
       // Ask background whether live captions are already running for this tab
@@ -249,8 +264,22 @@
   // Existing-subtitle path
   // ---------------------------------------------------------------------------
 
+  function setTabEnabled(on) {
+    if (on === tabEnabled) return;
+    tabEnabled = on;
+    obs.log('ext_tab', 'success', { action: on ? 'enabled' : 'disabled' });
+    if (on) {
+      if (detector && enabled) detector.start();
+      connectToBackend();
+    } else {
+      if (detector) detector.stop();
+      if (ws) ws.disconnect();
+      connected = false;
+    }
+  }
+
   async function handleNewCue(cue) {
-    if (!enabled) return;
+    if (!enabled || !tabEnabled) return;
     if (live.active) {
       obs.log('ext_caption_detect', 'skip', { cue_id: cue.cueId, error_message: 'live captions own the overlay; cue ignored' });
       return; // live captions own the overlay while running
@@ -460,6 +489,7 @@
         sendResponse({
           connected,
           enabled,
+          tabEnabled,
           detectionMethod: detector ? detector.getMethod() : null,
           cacheSize: translationCache.size,
           stats: ws ? ws.getStats() : {},
@@ -475,7 +505,7 @@
         break;
 
       case 'PAGE_LOADED':
-        if (detector) { detector.stop(); detector.start(); }
+        if (detector && tabEnabled) { detector.stop(); detector.start(); }
         sendResponse({ success: true });
         break;
 
@@ -511,6 +541,18 @@
         sendResponse({ success: true });
         break;
 
+      // ---- per-tab translation (E17) and sub-frame cues (E16), from the service worker ----
+      case 'TAB_ENABLED':
+        setTabEnabled(!!message.enabled);
+        sendResponse({ success: true });
+        break;
+
+      case 'FRAME_CUE':
+        if (message.kind === 'cueEnd') handleCueEnd(message.cue);
+        else if (message.cue && typeof message.cue.text === 'string') handleNewCue(message.cue);
+        sendResponse({ success: true });
+        break;
+
       default:
         sendResponse({ error: 'Unknown message type' });
     }
@@ -521,7 +563,7 @@
     switch (command) {
       case 'toggle-overlay':
         enabled = !enabled;
-        if (enabled) { overlay.show(); detector.start(); } else { overlay.hide(); detector.stop(); }
+        if (enabled) { overlay.show(); if (tabEnabled) detector.start(); } else { overlay.hide(); detector.stop(); }
         break;
       case 'swap-order':
         overlay.swapOrder();
@@ -574,7 +616,7 @@
         obs.log('ext_ws_request', 'fail', { msg_type: 'config', error_type: reqErrorType(err), error_message: err.message || String(err) });
       });
     }
-    if (settings.serverUrl && settings.serverUrl !== ws.serverUrl) {
+    if (tabEnabled && settings.serverUrl && settings.serverUrl !== ws.serverUrl) {
       ws.disconnect();
       connectToBackend();
     }

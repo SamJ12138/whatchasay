@@ -167,3 +167,15 @@ Browser: load `extension/` unpacked → YouTube video without captions → popup
   `/ws` handler errors (correction, config) now use the error envelope with `error_type`; the extension parser surfaces
   unsolicited errors, treats legacy `{status:"error"}` results as errors, draws only ok/fallback targets and caches only
   all-ok results. `pytest-timeout` added (a hung WebSocket receive now fails the test).
+- Batch 3 (W8, E16, E17): `app/security.py` — `OriginGuard` middleware refuses HTTP requests and WebSocket handshakes
+  (403 before the upgrade) whose `Origin` is not the extension or the backend's own loopback origin; requests without an
+  Origin (curl, scripts) pass. The unpacked extension's id is derived from `../extension`'s path exactly as Chrome does
+  (verified: `<extension-id>` on this machine); more ids via `SUBTITLE_SERVER__EXTENSION_IDS`. CORS
+  echoes only allowed origins, no credentials. `run.py` refuses a non-loopback `--host`. Extension: the caption path's
+  `/ws` socket moved into the service worker (`lib/websocket-client.js` + `lib/tab-connections.js`; content scripts use
+  `content-scripts/backend-port.js` over a runtime Port), because a socket opened by a content script carries the web
+  page's Origin and would be refused. A tab connects only after the user enables it in the popup ("Translate subtitles
+  on this tab"; `SET_TAB_ENABLED` accepted only from extension pages; state in `chrome.storage.session`); no detection
+  before that. Window messages are accepted only from the page's own origin (`content-scripts/guards.js`); sub-frame
+  detectors relay cues through the worker (`FRAME_CUE`). Browser harness `--path security`: 8 checks pass (old
+  extension fails 3: detects on load, accepts a cross-origin cue, no per-tab enable).

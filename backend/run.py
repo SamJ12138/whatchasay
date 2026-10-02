@@ -7,7 +7,7 @@ Handles warmup, signal handling, and graceful shutdown.
 
 Usage:
     python run.py                    # Default settings
-    python run.py --host 0.0.0.0     # Bind to all interfaces
+    python run.py --host 127.0.0.1   # loopback only; any other host is refused (app/security.py)
     python run.py --port 8080        # Custom port
     python run.py --no-warmup        # Skip model warmup
     python run.py --debug            # Enable debug mode
@@ -131,6 +131,8 @@ def run_server(args: argparse.Namespace) -> None:
         # Warmup happens inside the app lifespan (main.py); this just disables it.
         settings.features.warmup_on_start = False
 
+    # the allowed own-origin (/debug page) follows the port actually bound
+    settings.server.port = args.port
     print_banner(args.host, args.port)
     
     # Configure uvicorn
@@ -172,6 +174,15 @@ def main() -> None:
     logger.info("Starting Subtitle Translator Backend...")
     
     from app import obs
+    from app.security import check_bind_host
+
+    try:
+        check_bind_host(args.host)
+    except ValueError as e:
+        logger.error(str(e))
+        obs.log("startup", "fail", error_type="input_invalid", component="run.py", host=args.host,
+                error_message=str(e), degraded="process exits with code 2")
+        sys.exit(2)
 
     obs.log("startup", "start", component="run.py", host=args.host, port=args.port, debug=args.debug,
             no_warmup=args.no_warmup, fast_mode=args.fast_mode, log_file=str(obs.log_path()))
