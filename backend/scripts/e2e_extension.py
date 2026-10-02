@@ -89,7 +89,13 @@ DEFAULT_WAV = BACKEND / "data/models/asr/sherpa-onnx-streaming-zipformer-en-2023
 
 AUDIO_PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8"><title>audio harness</title></head>
 <body><h1>audio harness</h1><video id="v" src="/clip.wav" autoplay loop controls></video>
-<script>const v=document.getElementById('v');v.play().catch(e=>console.log('play failed',e));</script>
+<script>const v=document.getElementById('v');v.play().catch(e=>console.log('play failed',e));
+// player shortcuts on the document, as video sites have them (YouTube: m mutes, space pauses, j rewinds)
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'm') v.muted = !v.muted;
+  else if (e.key === ' ') { if (v.paused) v.play(); else v.pause(); }
+  else if (e.key === 'j') v.currentTime = Math.max(0, v.currentTime - 10);
+});</script>
 </body></html>"""
 
 # --video: a real video, played (with sound) only once live captions are running, so the
@@ -352,6 +358,42 @@ class LineCollector:
         return list(self._kept.values())
 
 
+def correction_target(lines: list[dict]) -> dict | None:
+    """The cue Alt+E would edit, as drawn: the translated line on screen (not dimmed,
+    provisional lines are not offered) with its original."""
+    tr = next((ln for ln in lines if ln["type"] in ("primary", "secondary") and ln["text"] and not ln.get("dimmed")), None)
+    if tr is None:
+        return None
+    orig = next((ln["text"] for ln in lines if ln["type"] == "original" and ln["cue_id"] == tr["cue_id"]), None)
+    return {"cue_id": tr["cue_id"], "lang": tr["lang"], "original": orig, "translation": tr["text"]}
+
+
+VIDEO_STATE_JS = "(v => v ? {muted: v.muted, paused: v.paused, t: v.currentTime, loop: v.loop} : null)"
+
+
+def page_untouched(before: dict | None, after: dict | None, elapsed_s: float) -> bool:
+    """Typing a correction must not operate the page (on YouTube m mutes, j and l seek 10 s,
+    space pauses): same muted / paused state, and the video's clock moved with the wall
+    clock (not checked for a looping clip, whose clock wraps)."""
+    if not before or not after:
+        return False
+    if before["muted"] != after["muted"] or before["paused"] != after["paused"]:
+        return False
+    if before.get("loop") or before["paused"]:
+        return True
+    return abs((after["t"] - before["t"]) - elapsed_s) < 3.0
+
+
+def harness_tm_path(path: Path) -> Path:
+    """--tm: a translation memory kept between runs (a correction made in one run, used
+    in the next). Never the user's own: anything under backend/data is refused."""
+    resolved = Path(path).resolve()
+    data = (BACKEND / "data").resolve()
+    if resolved == data or data in resolved.parents:
+        raise ValueError(f"--tm must not be inside {data} (the real translation memory lives there)")
+    return resolved
+
+
 PAGE_VIDEO_JS = "(document.querySelector('video.html5-main-video') || document.querySelector('video'))"
 PAGE_VIDEO_STATE_JS = ("(() => { const v = " + PAGE_VIDEO_JS + "; return v ? {ready: v.readyState,"
                        " ad: !!document.querySelector('.ad-showing')} : null; })()")
@@ -412,12 +454,12 @@ def test_extension_copy(extension: Path, scratch: Path, extra_origins=()) -> Pat
     return dst.resolve()
 
 
-def start_backend(port: int, scratch: Path, extension_ids=()) -> subprocess.Popen:
+def start_backend(port: int, scratch: Path, extension_ids=(), tm: Path | None = None) -> subprocess.Popen:
     py = BACKEND / ("venv/Scripts/python.exe" if os.name == "nt" else "venv/bin/python")
     env = dict(os.environ)
     if extension_ids:
         env["SUBTITLE_SERVER__EXTENSION_IDS"] = json.dumps(list(extension_ids))
-    env["SUBTITLE_CACHE__TM_DATABASE_PATH"] = str(scratch / "tm.db")
+    env["SUBTITLE_CACHE__TM_DATABASE_PATH"] = str(tm or scratch / "tm.db")
     env["SUBTITLE_DATA_DIR"] = str(scratch / "data")
     env["SUBTITLE_SERVER__PORT"] = str(port)
     log = open(scratch / "backend.log", "w", encoding="utf-8")
@@ -965,6 +1007,9 @@ def main() -> int:
     ap.add_argument("--size", help="viewport and recording size, e.g. 1280x720")
     ap.add_argument("--screenshot", type=Path, help="audio path: save a screenshot after the first translation")
     ap.add_argument("--correct", action="store_true", help="audio path: after the first translation, correct it with Alt+E")
+    ap.add_argument("--correct-text", default="corrected by the harness", help="--correct: the translation typed in its place")
+    ap.add_argument("--tm", type=Path, help="--start-backend: keep the translation memory in this file between runs "
+                                            "(default: a scratch file, deleted); not under backend/data")
     ap.add_argument("--font-size", type=int, help="overlay font size in px (the Options page setting; default 20)")
     ap.add_argument("--hold", type=float, default=0.0, help="audio path: keep captioning this many seconds after the first translation")
     ap.add_argument("--port", type=int, default=8765)
@@ -985,6 +1030,11 @@ def main() -> int:
     args = ap.parse_args()
     if args.url and args.path != "audio":
         ap.error("--url needs --path audio")
+    if args.tm:
+        try:
+            args.tm = harness_tm_path(args.tm)
+        except ValueError as e:
+            ap.error(str(e))
 
     from playwright.sync_api import sync_playwright
 
@@ -1005,7 +1055,7 @@ def main() -> int:
             args.extension = test_extension_copy(args.extension, scratch, extra)
             summary["test_grant"] = list(TEST_ORIGINS) + extra
         if args.start_backend:
-            backend = start_backend(args.port, scratch, [extension_id_for_path(str(args.extension))])
+            backend = start_backend(args.port, scratch, [extension_id_for_path(str(args.extension))], tm=args.tm)
         health = f"http://127.0.0.1:{args.port}/health/json"
         if not wait_http(health, 120 if args.start_backend else 5):
             summary["error"] = f"backend not reachable at {health}"
@@ -1209,19 +1259,27 @@ def main() -> int:
                                      if r.get("stage") == "ext_render" and (r.get("context") or {}).get("kind") == "final"][:5]
                 if got and args.correct:
                     summary["corrections_before"] = tm_corrections(args.port)
+                    # the cue Alt+E will edit, and the page's video before any key is typed
+                    target = correction_target(read_overlay(cdp or ctx.new_cdp_session(page))[0])
+                    video_js = VIDEO_STATE_JS + "(" + (PAGE_VIDEO_JS if args.url else "document.getElementById('v')") + ")"
+                    video_before, typed_t0 = page.evaluate(video_js), time.time()
                     # Alt+E on a live-captions-only tab (no caption socket): edit the translation on screen
                     # and press Enter; the correction must reach the backend's TM (through the worker)
                     # the clip keeps playing: new captions arrive while the line is being edited
                     page.keyboard.press("Alt+e")
                     page.wait_for_timeout(300)
                     page.keyboard.press("Control+a")
-                    page.keyboard.type("corrected by the harness")
+                    page.keyboard.type(args.correct_text)
                     page.keyboard.press("Enter")
+                    video_after, typed_s = page.evaluate(video_js), time.time() - typed_t0
                     end = time.time() + 8
-                    while time.time() < end and tm_corrections(args.port) == 0:
+                    while time.time() < end and tm_corrections(args.port) == summary["corrections_before"]:
                         page.wait_for_timeout(250)
                     summary["corrections_after"] = tm_corrections(args.port)
-                    summary["correction_saved"] = summary["corrections_after"] == 1
+                    summary["correction_saved"] = summary["corrections_after"] == summary["corrections_before"] + 1
+                    summary["correction"] = {"target": target, "typed": args.correct_text,
+                                             "video_before": video_before, "video_after": video_after,
+                                             "page_untouched": page_untouched(video_before, video_after, typed_s)}
             if got:
                 # D3: an audio session leaves no rows in the persistent TM
                 summary["ok"] = args.path != "audio" or summary["tm_rows_after"] == summary["tm_rows_before"]

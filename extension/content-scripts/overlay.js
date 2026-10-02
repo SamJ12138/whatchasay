@@ -687,6 +687,12 @@ class SubtitleOverlay {
           this.disableEditMode();
         }
       });
+      // What is typed here is text, not the page's keyboard shortcuts: a video site's player
+      // listens on the document (YouTube: m mutes, j rewinds, space pauses) and would act on
+      // every letter of the correction.
+      for (const type of ['keydown', 'keypress', 'keyup']) {
+        line.addEventListener(type, (e) => e.stopPropagation());
+      }
 
       // Focus after render
       setTimeout(() => line.focus(), 0);

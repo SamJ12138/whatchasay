@@ -506,3 +506,22 @@ D4 cloud providers off by default, keys only in backend config.
   slow `test_first_confirmed_subtitle_is_the_first_undimmed_one[en-zh, bn-en]` in Chromium (RED before:
   `undimmed_before_confirmed` from 1.63 s with confirmation at 4.27 s; after, bn sample: 11 dimmed samples, all
   Latin script, first undimmed line Bengali at 4.54 s = the confirmation). `docs/observations.md` A8.
+- Batch 2 (glossary on a real error; `docs/live-test-youtube.md`, last section). Task: add রাজভোগ → rajbhog through
+  the normal user path, rerun the live test once, compare line 1. Result: **not possible, and line 1 was not
+  fixed.** (a) The glossary is storage only: a table and two functions in `cache/translation_memory.py` that nothing
+  calls; no endpoint, no Options field, the pipeline never reads it (observations T13). (b) The path that exists,
+  Alt+E on line 1: before "একটা রাজবুক দেখান্ত" → "A Royal Book Shower" (`run_20261002T145420-461f73`), typed "Show me a
+  rajbhog.", saved (`user_corrections` 0 → 1); the one rerun with that memory (`run_20261002T145713-909850`) wrote
+  line 1 as a 10 s run-on, so the stored sentence never came back and nothing changed. The recognizer wrote the same
+  two seconds five different ways in five passes, and three local playbacks of the recorded audio differed again
+  (T14): sentence-level corrections cannot follow live ASR; they hold for page subtitles. (c) Found by the first
+  Alt+E run and fixed here, test first: keys typed into a correction reached YouTube's player (video muted, paused,
+  back at 0:00); the edited line now stops keydown / keypress / keyup (`overlay.js`; observations E18); second live
+  run `run_20261002T145640-dd1c94`: video untouched. Harness: `--correct-text`, `--tm FILE` (scratch memory kept
+  between runs, refused under `backend/data`), summary `correction` = {target cue, typed text, video state before /
+  after, `page_untouched`}; its test page has player shortcuts (m, space, j) so the slow Alt+E test fails when
+  typing leaks. Offline checks for the fix (scratch, not in the repo): sherpa-onnx hotwords for রাজভোগ did nothing
+  at score 1.5 and lost the first sentence at 2.5 / 4.0; OPUS-MT bn→en does not know the correctly spelled word
+  ("bar", "kings") and mangles a Latin spelling in the source ("rajbug", "rajbeg"), so a glossary needs both a
+  replacement on the recognised text and a placeholder through MT. Live page, provisional text (Batch 1): dimmed
+  from 1.1-1.25 s, first undimmed line at the 5.1-5.3 s confirmation, no violation in 381 samples.

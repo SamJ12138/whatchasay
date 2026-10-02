@@ -47,7 +47,8 @@ if it is at least 0.6 (`asr.lid_min_confidence`); whisper's unconstrained top 3 
 
 - **Time to first subtitle** is the first line in the overlay after the play started (read every 250 ms). For the
   first 5 seconds that line comes from the provisional English recognizer, so it is the wrong language; after the
-  language ID the overlay is reset and the Bengali captions start, with the buffered audio replayed.
+  language ID the overlay is reset and the Bengali captions start, with the buffered audio replayed. (Since
+  `d6cb5e2` that line is drawn dimmed under *Detecting language…*; numbers from this page in the last section.)
 - **Translate p50 / p95** are the backend's `translate` stage in each run log (`backend/scripts/failure_report.py
   backend/logs/run_<run_id>.jsonl`); over all 28 translations: p50 41.3 ms, p95 115.8 ms. Run A's first sentence ran
   10 s without a pause and was cut there (the 10 s utterance limit), hence its late first translation.
@@ -71,3 +72,61 @@ What went wrong in them: the sweet in the title, রাজভোগ (*rajbhog*),
 every time; মশায় ("sir") became "mosquito"; line 2 is several sentences spoken without a pause, which OPUS-MT
 turns into one sentence that loses the meaning. Lines 3 and 4 carry the scene (it would cost too much to make them
 bigger; "I need ten thousand tomorrow").
+
+## A glossary entry or a correction for রাজভোগ (2026-10-02, after `d6cb5e2`)
+
+The task: add রাজভোগ → rajbhog the way a user would, run the live test once more, compare line 1.
+
+**The glossary cannot do it.** There is nowhere to enter a term: the Options page has no glossary, and Alt+E edits a
+whole translated line. The translation memory has a `glossary` table and two functions for it
+(`backend/app/cache/translation_memory.py`), but nothing calls them and the translation pipeline never reads the
+table. An entry would not act on this error anyway: the recognizer never writes রাজভোগ (below), and the translator
+does not know the word even when it is spelled right. `docs/observations.md` T13 has the details and what the fix
+would be.
+
+**What the user path does offer: Alt+E on line 1.** Same command as above with `--correct --correct-text "Show me a
+rajbhog." --tm FILE` (a scratch translation memory kept between the runs), then the live test again with that file.
+
+| | run_id | Line 1, Bengali (recognised) | Line 1, English on screen |
+|---|---|---|---|
+| Before | `run_20261002T145420-461f73` | একটা রাজবুক দেখান্ত | A Royal Book Shower |
+| Correction | same run | (Alt+E on that line) | typed: Show me a rajbhog. Saved: `/stats` `user_corrections` 0 → 1 |
+| After (one rerun, 90 s) | `run_20261002T145713-909850` | একটা রাজবুক দেখা তো এর থেকে বড়সায় জের হয় না এর থেকে তো বয়সাই হয় না কী মশায় আপনার এত বড় দোকান আরেক থেকে বড় চাই যে রাজব | Seeing a book is no big deal, you're not even older than it's yours in a mosquito that wants to be bigger than that of the old man. |
+
+**Line 1 was not fixed.** A correction is stored for the source sentence exactly as it was recognised, and it is used
+again only when that sentence comes back letter for letter. The recognizer wrote the same two seconds of speech
+differently in every pass:
+
+| Pass | What it wrote for the scene's first sentence |
+|---|---|
+| run C above (`run_20261002T141338-35728b`) | একটা রাজবুক দেখা তো |
+| `run_20261002T145420-461f73` | একটা রাজবুক দেখান্ত |
+| `run_20261002T145640-dd1c94` | একটা রাজবুক দেখান্ত এর থেকে বড়সায় জের হয় না এর থেকে তো বয়স হয় না (run together with the next sentence) |
+| `run_20261002T145713-909850` (the rerun) | the 10-second line in the table, cut by the utterance limit in the middle of a word ("…যে রাজব", then "গাবে না…") |
+| the recorded 20 s through the recognizer alone, offline | কাজ বুক দেখা তো |
+
+The recorded audio played from a local page three times (spoken language set to Bengali twice, Auto-detect once)
+lost the first sentence at the start of capture and wrote the rest differently each time, so no setting was found
+in which a stored sentence returns. Corrections hold where
+the source text repeats exactly: page subtitles in caption mode, and a sentence the recognizer happens to write the
+same way twice (`tests/test_live_corrections.py`). `docs/observations.md` T14.
+
+**Found by the first Alt+E run: typing the correction operated YouTube's player.** The keys bubbled out of the overlay
+to the page, where `m` mutes, space pauses and `j` rewinds ten seconds; after "Show me a rajbhog." the video was
+muted, paused and at 0:00 (`run_20261002T145420-461f73`: before `{muted: false, paused: false, t: 6.8}`, after
+`{muted: true, paused: true, t: 0.04}`). Fixed (the edited line stops its key events; observations E18), and run
+again on a fresh scratch memory: `run_20261002T145640-dd1c94`, video untouched (`t` 8.45 → 8.82, not muted, not
+paused). That second run's line 1 was the merged sentence, so the rerun above used the first run's memory, whose
+correction is on the short sentence.
+
+**Provisional text on this page** (the overlay read through CDP every 250 ms, three runs): first caption 1.1-1.25 s
+after play, dimmed, Latin script (the English recognizer's guess), in 15-16 samples per run; language confirmed at
+5.1-5.3 s; the first undimmed line appeared in that same sample; no undimmed line before it and no dimmed line or
+label after it (381 samples in the 90 s rerun).
+
+Two offline checks on what a fix has to deal with (scratch scripts, not in the repository):
+
+- Recognizer biasing (sherpa-onnx hotwords, `modified_beam_search`, hotword রাজভোগ) on the recorded 20 s: no effect at
+  score 1.5; at 2.5 and 4.0 the first sentence disappeared; রাজভোগ never came out.
+- OPUS-MT bn→en on line 1 with the word replaced: রাজভোগ (spelled right) → "See you in a bar."; `rajbhog` put into
+  the Bengali sentence → "I've met a rajbug". Line 4 the same way: "ten thousand kings", "ten thousand rajbeg".

@@ -164,3 +164,35 @@ def test_target_settings_use_the_settings_pages_keys():
     (background.js migrateSettings), so the harness sets those, like the Settings page."""
     assert h.target_settings(["en"]) == {"primaryLang": "en", "secondaryLang": "none", "targetLanguages": ["en"]}
     assert h.target_settings(["zh", "bn"]) == {"primaryLang": "zh", "secondaryLang": "bn", "targetLanguages": ["zh", "bn"]}
+
+
+def test_correction_target_is_the_translated_cue_on_screen():
+    """What Alt+E will edit: the cue whose translation is on screen, with its original."""
+    lines = [{"type": "primary", "cue_id": "asr_0", "lang": "en", "text": "A royal book.", "dimmed": False},
+             {"type": "original", "cue_id": "asr_0", "lang": None, "text": "একটা রাজবুক দেখা তো", "dimmed": False},
+             {"type": "partial", "cue_id": "asr_1", "lang": None, "text": "এর থেকে", "dimmed": False}]
+    assert h.correction_target(lines) == {"cue_id": "asr_0", "lang": "en", "original": "একটা রাজবুক দেখা তো",
+                                          "translation": "A royal book."}
+    assert h.correction_target(lines[2:]) is None                      # nothing translated on screen
+    assert h.correction_target([dict(ln, dimmed=True) for ln in lines]) is None  # provisional lines are not offered
+
+
+def test_kept_translation_memory_is_never_the_users_own(tmp_path):
+    """--tm keeps a correction between two harness runs; backend/data is refused."""
+    assert h.harness_tm_path(tmp_path / "live.db") == (tmp_path / "live.db").resolve()
+    for bad in (h.BACKEND / "data" / "translation_memory.db", h.BACKEND / "data" / "x" / "tm.db", h.BACKEND / "data"):
+        with pytest.raises(ValueError):
+            h.harness_tm_path(bad)
+
+
+@pytest.mark.parametrize("before,after,elapsed,ok", [
+    ({"muted": False, "paused": False, "t": 12.0, "loop": False}, {"muted": False, "paused": False, "t": 14.1, "loop": False}, 2.0, True),
+    ({"muted": False, "paused": False, "t": 12.0, "loop": False}, {"muted": True, "paused": False, "t": 14.0, "loop": False}, 2.0, False),   # m
+    ({"muted": False, "paused": False, "t": 12.0, "loop": False}, {"muted": False, "paused": True, "t": 12.4, "loop": False}, 2.0, False),   # space
+    ({"muted": False, "paused": False, "t": 12.0, "loop": False}, {"muted": False, "paused": False, "t": 4.0, "loop": False}, 2.0, False),   # j
+    ({"muted": False, "paused": False, "t": 6.1, "loop": True}, {"muted": False, "paused": False, "t": 1.5, "loop": True}, 2.0, True),       # wrapped
+    (None, {"muted": False, "paused": False, "t": 1.0, "loop": False}, 2.0, False),
+])
+def test_page_untouched_by_typing_a_correction(before, after, elapsed, ok):
+    assert h.page_untouched(before, after, elapsed) is ok
+

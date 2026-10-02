@@ -100,3 +100,32 @@ test('an edited line yields a correction for its own language', () => {
   assert.deepEqual({ ...got[0].correctedTranslation }, { zh: '钥匙你放哪儿了?', bn: 'চাবি কোথায়?' });
   assert.deepEqual({ ...got[0].originalTranslation }, { zh: '你把钥匙放在哪里了?', bn: 'চাবি কোথায়?' });
 });
+
+
+// Found by the live test on YouTube: the page's player listens for keys on the document
+// (m mutes, j rewinds 10 s, space pauses), and the keys typed into a correction bubbled out
+// of the overlay to it. Typing "Show me a rajbhog." left the video muted, paused and at 0:00.
+test('keys typed into a correction do not reach the page', () => {
+  const { loadScripts } = require('./load.js');
+  const { fakeDom } = require('./fake-dom.js');
+  const dom = fakeDom();
+  const ctx = loadScripts(['content-scripts/ws-protocol.js', 'content-scripts/overlay.js'],
+    { window: {}, document: dom.document, ResizeObserver: dom.ResizeObserver });
+  const overlay = ctx.window.subtitleOverlay;
+  overlay.primaryLang = 'en';
+  overlay.secondaryLang = 'none';
+  overlay.init();
+  overlay.showTranslation('asr_0', 'একটা রাজবুক দেখা তো', { en: { single_line: 'A royal book.', display_text: 'A royal book.' } }, { sourceLang: 'bn' });
+  overlay.enableEditMode('asr_0');
+  const line = overlay.subtitleStack.children.find((el) => el.classList.contains('editing'));
+  assert.ok(line, 'no line in edit mode');
+  const typed = (type, key) => {
+    let stopped = false;
+    line.dispatch(type, { key, shiftKey: false, preventDefault() {}, stopPropagation() { stopped = true; } });
+    assert.ok(stopped, `${type} "${key}" typed into the correction propagates to the page`);
+  };
+  for (const type of ['keydown', 'keypress', 'keyup']) {
+    for (const key of ['m', 'j', ' ']) typed(type, key);
+  }
+  typed('keydown', 'Enter');  // ends the edit
+});

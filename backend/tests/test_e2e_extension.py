@@ -65,10 +65,12 @@ def test_mandarin_tab_audio_with_the_licensed_model():
 def test_alt_e_correction_on_a_live_captions_only_tab_is_saved():
     """Follow-up 2: the tab has no caption socket (caption mode off); Alt+E, type, Enter
     must store the correction in the backend's TM (content script -> worker -> POST
-    /corrections)."""
-    summary, proc = run_harness("--path", "audio", "--correct")
+    /corrections). The test page has player shortcuts on the document like a video site
+    (m mutes, space pauses, j rewinds): typing the correction must not operate them."""
+    summary, proc = run_harness("--path", "audio", "--correct", "--correct-text", "hm, just a moment")
     assert summary["ok"], (summary, proc.stderr[-2000:])
     assert summary["correction_saved"], summary
+    assert summary["correction"]["page_untouched"], summary["correction"]
 
 
 @pytest.mark.parametrize("lang,target", [("en", "zh"), ("bn", "en")])

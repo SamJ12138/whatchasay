@@ -426,6 +426,9 @@ driven over raw CDP because Playwright keeps workers alive), `permissions`, `cle
 `--start-backend` to start a backend with scratch data. `--video FILE --record DIR --screenshot FILE` produce the
 demo and the screenshot in this README. `--url URL --targets auto --lines 5` live-captions a real page's video
 (`docs/live-test-youtube.md`); it stops with exit code 2 on a consent wall or bot check instead of getting past it.
+`--correct --correct-text TEXT` corrects the first translated line with Alt+E and reports whether the page's video
+was disturbed by the typing; `--tm FILE` keeps the scratch translation memory between two runs (never a file under
+`backend/data`).
 
 **Run logs and the failure report.** Every backend run writes one JSON line per event to
 `backend/logs/run_<run_id>.jsonl` (stage, event, duration, error type; the extension's events arrive through

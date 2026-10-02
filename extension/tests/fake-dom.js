@@ -12,6 +12,7 @@ class FakeElement {
     this.className = '';
     this.textContent = '';
     this.isConnected = false;
+    this.listeners = {};
     const el = this;
     this.classList = {
       add(c) { if (!this.contains(c)) el.className = (el.className + ' ' + c).trim(); },
@@ -22,7 +23,9 @@ class FakeElement {
   set innerHTML(html) { if (html === '') { for (const c of this.children) c.isConnected = false; this.children = []; } }
   attachShadow() { return new FakeElement('#shadow-root'); }
   querySelector(tag) { return this.children.find((c) => c.tagName === String(tag).toUpperCase()) || null; }
-  addEventListener() {}
+  addEventListener(type, fn) { (this.listeners[type] = this.listeners[type] || []).push(fn); }
+  dispatch(type, event) { for (const fn of this.listeners[type] || []) fn(event); return event; }
+  blur() { this.dispatch('blur', {}); }
   remove() { this.isConnected = false; }
   focus() {}
 }

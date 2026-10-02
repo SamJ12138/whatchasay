@@ -120,7 +120,7 @@ ran without the server's real engines except `test_pipeline`.
 | `extension/tests/options-asr.test.js` (2) | the ASR engine select offers only auto / sherpa-zipformer; no extension source mentions Whisper | node |
 | `extension/tests/options-shortcuts.test.js` (+1) | the popup's shortcut list shows exactly the bound keys | node |
 
-## Added with provisional subtitles (2026-10-02)
+## Added with provisional subtitles and the correction check (2026-10-02)
 
 | File :: test | Asserts | Suite |
 |---|---|---|
@@ -128,3 +128,6 @@ ran without the server's real engines except `test_pipeline`.
 | `test_app_inprocess` :: `test_ws_asr_translation_carries_the_language_status_of_its_sentence[auto/en]` | a `/ws/asr` translation repeats its final's `lang_status` (`provisional` with auto-detect before LID, `manual` with a declared language) | fast |
 | `test_harness_url` (+7) | the harness reads `dimmed` per overlay line and the language label; `script_of` names a line's writing system; `DimmingLog` passes a correct run and names each violation (undimmed before confirmation, dimmed without label, dimmed or labelled after confirmation), keeping scripts and times, never text | fast |
 | `test_e2e_extension` :: `test_first_confirmed_subtitle_is_the_first_undimmed_one[en-zh/bn-en]` | Chromium, Auto-detect, the en and bn sample WAVs played from their first word: the overlay read through CDP every 250 ms has dimmed, labelled text before the content script renders the confirmed language and none after; for bn the dimmed text is Latin script and the first undimmed line Bengali | **slow** |
+| `extension/tests/corrections.test.js` (+1) | keys typed into a correction (`m`, `j`, space, Enter; keydown / keypress / keyup) are stopped at the edited line and do not reach the page | node |
+| `test_harness_url` (+8) | `correction_target` = the translated, undimmed cue on screen with its original; `--tm` refuses any path under `backend/data`; `page_untouched` tells a muted, paused or rewound video from an undisturbed one (a looping clip's clock is not compared) | fast |
+| `test_e2e_extension` :: `test_alt_e_correction_on_a_live_captions_only_tab_is_saved` (extended) | the test page has player shortcuts on the document (m, space, j); typing "hm, just a moment" into the correction leaves the video as it was | **slow** |
