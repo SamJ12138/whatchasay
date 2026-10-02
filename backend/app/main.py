@@ -28,6 +28,7 @@ from .cache import get_translation_memory, get_translation_cache
 from .websocket_handler import websocket_endpoint, manager, format_result, ignore_cloud_keys, save_correction
 from .translation.cloud_translator import cloud_receivers
 from . import asr as asr_pkg
+from .asr.draft import DraftScheduler
 from . import obs
 from .security import OriginGuard, allowed_origins, origin_allowed
 
@@ -208,6 +209,8 @@ async def ws_asr(websocket: WebSocket):
       {type:'lid', lang, source}
       {type:'partial', utterance_id, text, lang, t0, t1}
       {type:'final',   utterance_id, text, lang, t0, t1}
+      {type:'draft', utterance_id, cue_id, source_text, translations{lang:{...}}}   translation of the stable
+                      prefix of a line that is still open (asr/draft.py); replaced by its `translation`
       {type:'translation', utterance_id, cue_id, revision, translations{lang:{lines,single_line,display_text}}, mt_ms}
       {type:'revision', ...same as translation with revision 2}
       {type:'error', error}
@@ -327,9 +330,35 @@ async def ws_asr(websocket: WebSocket):
                 obs.log_exc("refine", e, path="/ws/asr", utterance_id=msg["utterance_id"],
                             degraded="refine error logged at DEBUG only; fast translation stays")
 
+    async def translate_draft(key: Any, text: str, msg: Dict[str, Any]) -> None:
+        """The stable prefix of an open line, translated per target and sent as a draft,
+        unless the line's final arrived first (its translation is the one that counts)."""
+        lang = msg["lang"]
+
+        async def one(target: str) -> None:
+            cue = SubtitleCue(text=text, start_time=msg["t0"], end_time=msg["t1"], source_lang=lang)
+            result = await pipeline.translate_cue(cue, [target], skip_post_edit=True, policy=memory)
+            tr = format_result(result)["translations"].get(target)
+            if not tr or tr.get("status") not in ("ok", "fallback") or not drafts.is_open(key):
+                return
+            await send({"type": "draft", "utterance_id": key, "cue_id": "asr_%s" % key, "source_text": text,
+                        "source_lang": lang, "lang_status": msg.get("lang_status"), "translations": {target: tr},
+                        "w_first": msg.get("w_first"), "w_last": msg.get("w_last"), "server_ts": time.time()})
+
+        await asyncio.gather(*(one(t) for t in session.config.target_langs if t != lang))
+
+    drafts = DraftScheduler(translate_draft, settings.asr.draft_debounce_ms / 1000)
+
     def _handle_events(msgs: List[Dict[str, Any]]) -> List[asyncio.Task]:
         tasks = []
         for m in msgs:
+            stable = m.pop("stable_text", None)
+            if m.get("type") == "final":
+                drafts.close(m.get("utterance_id"))
+            elif m.get("type") == "reset":
+                drafts.reset()
+            elif stable:
+                drafts.offer(m.get("utterance_id"), stable, m)
             if m.get("type") == "final":
                 obs.log("segment", "success" if m.get("text") else "skip", utterance_id=m.get("utterance_id"),
                         lang=m.get("lang"), audio_s=round((m.get("t1") or 0) - (m.get("t0") or 0), 2),
@@ -405,6 +434,7 @@ async def ws_asr(websocket: WebSocket):
         obs.log_exc("ws_connection", e, path="/ws/asr", duration_ms=(time.perf_counter() - conn_t0) * 1000,
                     degraded="connection loop ended by exception")
     finally:
+        drafts.cancel()
         session.close()
         if memory.cache is not None:
             memory.cache.clear()
@@ -417,7 +447,7 @@ async def ws_asr(websocket: WebSocket):
             obs.log("ws_connection", "success" if normal else "fail", duration_ms=(time.perf_counter() - conn_t0) * 1000,
                     error_type=None if normal else "process",
                     error_message=None if normal else f"client closed with code {close_code}",
-                    path="/ws/asr", close_code=close_code, frames=asr_summary.total, **st)
+                    path="/ws/asr", close_code=close_code, frames=asr_summary.total, drafts=drafts.started, **st)
 
 
 # ============================================================================

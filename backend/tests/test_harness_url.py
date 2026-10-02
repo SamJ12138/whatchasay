@@ -206,7 +206,8 @@ def test_line_latency_summary_from_the_content_scripts_records():
         return {"stage": "line_latency", "event": "success", "context": ctx}
 
     records = [
-        rec(kind="line", cue_id="asr_0", lang="bn", first_display_ms=480, final_ms=760, first_translation_ms=3100, draft_shown=False),
+        rec(kind="line", cue_id="asr_0", lang="bn", first_display_ms=480, final_ms=760, first_translation_ms=3100, draft_shown=True,
+            drafts=4, translation_revisions=3, non_append_revisions=1),
         {"stage": "ext_render", "event": "success", "context": {"kind": "final"}},
         rec(kind="first_confirmed", lang="bn", since_session_ms=5450, at_ms=1700000005300),
         rec(kind="line", cue_id="asr_1", lang="bn", first_display_ms=900, final_ms=1200, first_translation_ms=None, draft_shown=False),
@@ -214,6 +215,7 @@ def test_line_latency_summary_from_the_content_scripts_records():
     out = h.line_latency_summary(records, play_t=1700000000.0)
     assert out == {
         "lines": 2, "lang": ["bn", "bn"], "first_display_ms": [480, 900], "final_ms": [760, 1200], "first_translation_ms": [3100, None],
-        "drafts_shown": 0, "first_confirmed_after_play_s": 5.3, "first_confirmed_since_session_ms": 5450,
+        "drafts_shown": 1, "drafts": [4, None], "translation_revisions": [3, None], "non_append_revisions": [1, None],
+        "first_confirmed_after_play_s": 5.3, "first_confirmed_since_session_ms": 5450,
     }
     assert h.line_latency_summary([], play_t=None)["lines"] == 0

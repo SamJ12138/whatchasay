@@ -18,7 +18,10 @@ Language handling
                         discarded.
 
 Messages (JSON, sent by the WebSocket endpoint):
-    {type:'partial', utterance_id, text, lang, lang_status, confirmed, t0, t1, w_first, w_last, w_session}
+    {type:'partial', utterance_id, text, lang, lang_status, confirmed, t0, t1, w_first, w_last, w_session
+                     [, stable_text]}   stable_text: the leading words of the open line that were the same
+                     in the last `draft_stable_partials` partials (asr/draft.py), restored like `text`;
+                     the endpoint translates it as a draft and does not send the field on
     {type:'final',   utterance_id, text, lang, lang_status, confirmed, t0, t1, w_first, w_last, w_session[, raw_text]}
 
 Latency clock (docs/latency.md): w_first / w_last are the wall-clock times (epoch
@@ -54,6 +57,7 @@ from typing import Callable, Dict, List, Optional
 
 import numpy as np
 
+from .draft import stable_prefix
 from .engine import AsrEvent, AsrSession, SAMPLE_RATE, StreamingASREngine, pcm16_to_float32
 from .. import obs
 
@@ -70,6 +74,7 @@ class SessionConfig:
     lid_min_rms: float = 0.004    # frames quieter than this do not count as voiced
     lid_max_buffer_s: float = 12.0
     partial_interval_ms: int = 120
+    draft_stable_partials: int = 3  # a word is stable after this many partials in a row; 0 = no drafts
 
 
 class StreamingASRSession:
@@ -101,6 +106,9 @@ class StreamingASRSession:
 
         self._last_partial_sent = 0.0
         self._pending_partial: Optional[AsrEvent] = None
+        # raw text of the open line's recent partials, for its stable prefix
+        self._partial_history: List[str] = []
+        self._history_utterance: Optional[int] = None
         self.started_at = time.time()
         self.samples_received = 0
         # latency clock: when each frame arrived (end sample -> wall time), and where on the
@@ -153,6 +161,8 @@ class StreamingASRSession:
         self._asr_origin = self.samples_received
         self._last_partial_sent = 0.0
         self._pending_partial = None
+        self._partial_history = []
+        self._history_utterance = None
         logger.info("ASR session: lang=%s engine=%s", lang, self.engine.name)
 
     def startup_messages(self) -> List[dict]:
@@ -321,6 +331,7 @@ class StreamingASRSession:
         out: List[dict] = []
         now = time.time()
         for ev in events:
+            self._note_for_stability(ev)
             if ev.kind == "partial":
                 if (now - self._last_partial_sent) * 1000 < self.config.partial_interval_ms:
                     self._pending_partial = ev
@@ -340,17 +351,27 @@ class StreamingASRSession:
             out.append(self._event_msg(ev, capture_ts))
         return out
 
-    def _restore(self, ev: AsrEvent) -> str:
-        if self.restore_text is None or not ev.text:
-            return ev.text
+    def _note_for_stability(self, ev: AsrEvent) -> None:
+        """Every partial the recognizer produced (sent or throttled) counts towards a word's
+        stability; a final or a new line starts the history again."""
+        if ev.kind != "partial" or ev.utterance_id != self._history_utterance:
+            self._partial_history = []
+            self._history_utterance = ev.utterance_id if ev.kind == "partial" else None
+        if ev.kind == "partial" and (not self._partial_history or self._partial_history[-1] != ev.text):
+            self._partial_history.append(ev.text)
+            del self._partial_history[:-max(1, self.config.draft_stable_partials)]
+
+    def _restore(self, text: str, lang: str, final: bool) -> str:
+        if self.restore_text is None or not text:
+            return text
         try:
-            return self.restore_text(ev.text, ev.lang, ev.kind == "final") or ev.text
+            return self.restore_text(text, lang, final) or text
         except Exception as e:  # the hook should not raise; never lose a caption over it
-            obs.log_exc("punctuate", e, api="process", lang=ev.lang, degraded="text kept as is")
-            return ev.text
+            obs.log_exc("punctuate", e, api="process", lang=lang, degraded="text kept as is")
+            return text
 
     def _event_msg(self, ev: AsrEvent, capture_ts: Optional[float] = None) -> dict:
-        text = self._restore(ev)
+        text = self._restore(ev.text, ev.lang, ev.kind == "final")
         msg = {
             "type": ev.kind,
             "utterance_id": ev.utterance_id,
@@ -368,6 +389,10 @@ class StreamingASRSession:
         }
         if ev.kind == "final" and text != ev.text:
             msg["raw_text"] = ev.text
+        if ev.kind == "partial" and self.config.draft_stable_partials > 0 and ev.utterance_id == self._history_utterance:
+            stable = stable_prefix(self._partial_history, self.config.draft_stable_partials)
+            if stable:
+                msg["stable_text"] = self._restore(stable, ev.lang, False)
         return msg
 
     # ------------------------------------------------------------------ close

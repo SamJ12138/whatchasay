@@ -468,6 +468,14 @@
         scheduleLiveHide(cueId, 8000);
         break;
       }
+      case 'draft': {
+        // translation of the stable prefix of the line still being recognised
+        const cueId = 'asr_' + ev.utterance_id;
+        if (overlay.showDraft(cueId, ev.translations, { sourceLang: ev.source_lang, langStatus: ev.lang_status })) {
+          logLineLatency(lineLatency.translation(cueId, Object.assign({}, ev, { draft: true })), ev);
+        }
+        break;
+      }
       case 'reset':
         // language switched after auto-detect: provisional captions are discarded,
         // and so is anything of theirs that arrives later

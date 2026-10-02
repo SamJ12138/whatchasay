@@ -167,15 +167,16 @@ fr = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(fr)
 
 
-def _line(sid, first, final, first_tr=None, **ctx):
+def _line(sid, first, final, first_tr=None, non_append=0, **ctx):
     return {"layer": "extension", "stage": "line_latency", "event": "success", "session_id": sid,
-            "context": {"kind": "line", "first_display_ms": first, "final_ms": final, "first_translation_ms": first_tr, **ctx}}
+            "context": {"kind": "line", "first_display_ms": first, "final_ms": final, "first_translation_ms": first_tr,
+                        "non_append_revisions": non_append, **ctx}}
 
 
 def test_failure_report_summarises_line_latency_per_run_and_per_session():
     recs = [
-        _line("s1", 400, 900, 1500), _line("s1", 600, 1100, 1700), _line("s1", 800, 1300, 2100),
-        _line("s2", 1000, 2000, 2500),
+        _line("s1", 400, 900, 1500, non_append=1), _line("s1", 600, 1100, 1700, non_append=3), _line("s1", 800, 1300, 2100),
+        _line("s2", 1000, 2000, 2500, non_append=2),
         {"layer": "extension", "stage": "line_latency", "event": "success", "session_id": "s1",
          "context": {"kind": "first_confirmed", "since_session_ms": 5300, "lang": "bn"}},
         {"layer": "backend", "stage": "translate", "event": "success", "session_id": "s1", "duration_ms": 40, "context": {}},
@@ -186,6 +187,8 @@ def test_failure_report_summarises_line_latency_per_run_and_per_session():
     assert out["final_ms"] == {"n": 4, "p50": 1100, "p95": 2000}
     assert out["first_translation_ms"] == {"n": 4, "p50": 1700, "p95": 2500}
     assert out["first_confirmed_ms"] == [5300]
+    assert out["non_append_revisions"] == {"lines": 4, "mean": 1.5, "max": 3}
+    assert out["sessions"]["s1"]["non_append_revisions"] == {"lines": 3, "mean": 1.33, "max": 3}
     assert out["sessions"]["s1"]["lines"] == 3 and out["sessions"]["s1"]["first_display_ms"]["p50"] == 600
     assert out["sessions"]["s1"]["first_confirmed_ms"] == 5300
     assert out["sessions"]["s2"]["final_ms"]["p50"] == 2000
@@ -222,9 +225,11 @@ def test_table_row_and_run_log_stats(tmp_path, monkeypatch):
     summary = {"ok": True, "run_id": "R1", "detected_lang": "bn", "run_log": stats,
                "line_latency": {"lines": 3, "lang": ["en", "bn", "bn"], "first_display_ms": [300, 2691, 741],
                                 "final_ms": [900, 380, 690], "first_translation_ms": [None, 7900, 9810],
+                                "non_append_revisions": [0, 1, 2], "drafts": [0, 3, 4],
                                 "first_confirmed_after_play_s": 5.54}}
     r = lt.row("clip", summary)
     assert r["lines"] == 2   # the provisional English recognizer's line is not a subtitle line
+    assert r["non_append_revisions_per_line"] == 1.5 and r["drafts_per_line"] == 3.5
     assert (r["first_display_p50_ms"], r["first_display_max_ms"]) == (741, 2691)
     assert (r["first_translation_p50_ms"], r["final_p50_ms"], r["first_confirmed_s"]) == (7900, 380, 5.54)
     md = lt.markdown([r])

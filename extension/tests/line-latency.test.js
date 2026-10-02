@@ -33,6 +33,7 @@ test('a line reports first_display from its first text and final from its last t
   assert.deepEqual(rec, {
     kind: 'line', cue_id: 'asr_0', lang: 'en', lang_status: 'manual',
     first_display_ms: 500, final_ms: 800, first_translation_ms: 3200, draft_shown: false, targets: ['zh'],
+    drafts: 0, translation_revisions: 0, non_append_revisions: 0,
   });
   // one record per line
   assert.equal(t.translation('asr_0', { w_first: 1000.0, w_last: 1002.4, targets_pending: 0, translations: { zh: {} } }), null);
@@ -62,6 +63,41 @@ test('a draft translation counts as the first translated text, not as the final 
   assert.equal(rec.first_translation_ms, 900);
   assert.equal(rec.final_ms, 500);
   assert.equal(rec.draft_shown, true);
+});
+
+const shown = (lang, text, extra) => Object.assign({ translations: { [lang]: { display_text: text, single_line: text } } }, extra);
+
+test('flicker: a change of the displayed translation that is not a pure append is counted per line', () => {
+  const { clock, t } = tracker();
+  clock.ms = 1000300;
+  t.text('asr_0', { w_first: 1000.0, w_last: 1000.2, lang: 'bn', lang_status: 'manual' });
+  const draft = (text) => t.translation('asr_0', shown('en', text, { w_first: 1000.0, w_last: 1001.0, draft: true }));
+  clock.ms = 1000900; draft('It is');                       // first text: not a change
+  clock.ms = 1001500; draft('It is too');                   // append
+  clock.ms = 1002100; draft('It is too expensive');         // append
+  clock.ms = 1002700; draft('To raise it is too expensive'); // rewritten: the viewer has to read it again
+  clock.ms = 1003300; draft('To raise it is too expensive'); // the same text again: no change
+  clock.ms = 1004000;
+  const rec = t.translation('asr_0', shown('en', 'It is too expensive to raise it.', { w_first: 1000.0, w_last: 1003.5, targets_pending: 0 }));
+  assert.equal(rec.drafts, 5);
+  assert.equal(rec.translation_revisions, 4);               // 3 drafts changed the text, then the final did
+  assert.equal(rec.non_append_revisions, 2);                // the rewrite, and the final
+  assert.equal(rec.draft_shown, true);
+});
+
+test('flicker: sentence-final punctuation of a draft does not make the next one a rewrite', () => {
+  const { clock, t } = tracker();
+  clock.ms = 1000300;
+  t.text('asr_0', { w_first: 1000.0, w_last: 1000.2, lang: 'bn', lang_status: 'manual' });
+  clock.ms = 1000900;
+  t.translation('asr_0', shown('en', 'I need.', { w_first: 1000.0, w_last: 1000.8, draft: true }));
+  clock.ms = 1001500;
+  t.translation('asr_0', shown('zh', '我需要。', { w_first: 1000.0, w_last: 1000.8, draft: true }));
+  clock.ms = 1002500;
+  t.translation('asr_0', shown('en', 'I need ten thousand tomorrow.', { w_first: 1000.0, w_last: 1002.0, targets_pending: 1 }));
+  const rec = t.translation('asr_0', shown('zh', '我需要一万个。', { w_first: 1000.0, w_last: 1002.0, targets_pending: 0 }));
+  assert.equal(rec.translation_revisions, 2);               // one per target
+  assert.equal(rec.non_append_revisions, 0);
 });
 
 test('a line with nothing to translate is complete at its final caption', () => {

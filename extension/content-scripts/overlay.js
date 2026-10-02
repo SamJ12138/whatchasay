@@ -59,6 +59,11 @@ class SubtitleOverlay {
 
     // Live-caption state
     this.partial = null;   // { cueId, text, lang, provisional } - unstable ASR hypothesis
+    // Draft translations of lines still open (the backend translates their stable prefix):
+    // cueId -> { translations: {lang: t}, provisional }. Drawn until the line's final
+    // translation in that language arrives.
+    this.drafts = new Map();
+    this._openDraftCue = null;
     this.notice = null;    // { text, kind } - short status line (warnings, detected language)
     this._noticeTimer = null;
 
@@ -130,6 +135,15 @@ class SubtitleOverlay {
     if (this.partial && this.partial.cueId === cueId) {
       this.partial = null;
     }
+    // ...and a final translation replaces the draft in its language
+    const draft = this.drafts.get(cueId);
+    if (draft) {
+      for (const lang of Object.keys(draft.translations)) {
+        if (this._usable((translations || {})[lang])) delete draft.translations[lang];
+      }
+      if (!Object.keys(draft.translations).length) this.drafts.delete(cueId);
+    }
+    if (this._openDraftCue === cueId) this._openDraftCue = null;
 
     // Update display
     this._updateDisplay();
@@ -149,6 +163,42 @@ class SubtitleOverlay {
     this.partial = { cueId, text, lang, provisional: drawn === 'dim' };
     this._updateDisplay();
     return true;
+  }
+
+  /**
+   * Draft translation of a live line that is still being recognised (backend 'draft':
+   * the translation of the line's stable prefix). Drawn above the growing source text,
+   * marked as a draft; a newer draft replaces it, the final translation ends it.
+   * Returns false when nothing was drawn: a draft from a replaced recognizer, a target
+   * that already has its final translation, or an unusable target.
+   */
+  showDraft(cueId, translations, options = {}) {
+    if (!this.container) {
+      this.init();
+    }
+    const drawn = options.langStatus ? this._treatment(options.langStatus, options.sourceLang) : 'normal';
+    if (drawn === 'drop') return false;
+    const cue = this.currentCues.get(cueId);
+    const fresh = {};
+    for (const [lang, t] of Object.entries(translations || {})) {
+      if (!this._usable(t)) continue;
+      if (cue && this._usable(cue.translations[lang])) continue;  // the final translation is there
+      fresh[lang] = t;
+    }
+    if (!Object.keys(fresh).length) return false;
+    const existing = this.drafts.get(cueId);
+    this.drafts.delete(cueId);
+    this.drafts.set(cueId, { translations: Object.assign({}, existing ? existing.translations : {}, fresh), provisional: drawn === 'dim' });
+    while (this.drafts.size > 4) this.drafts.delete(this.drafts.keys().next().value);
+    if (!cue) this._openDraftCue = cueId;
+    this._updateDisplay();
+    return true;
+  }
+
+  // Only ok / fallback targets are translations; untranslated (source placeholder) and
+  // error targets are not drawn as a language line.
+  _usable(t) {
+    return globalThis.STWsProtocol ? globalThis.STWsProtocol.usableTranslation(t) : !!t;
   }
 
   /**
@@ -175,6 +225,10 @@ class SubtitleOverlay {
       }
       if (this.partial && this.partial.provisional) {
         if (keep) this.partial.provisional = false; else this.partial = null;
+      }
+      for (const [id, d] of Array.from(this.drafts.entries())) {
+        if (!d.provisional) continue;
+        if (keep) d.provisional = false; else this.drafts.delete(id);
       }
     }
     this._updateDisplay();
@@ -251,6 +305,7 @@ class SubtitleOverlay {
    */
   hideTranslation(cueId) {
     this.currentCues.delete(cueId);
+    this.drafts.delete(cueId);
     this._updateDisplay();
   }
 
@@ -260,6 +315,8 @@ class SubtitleOverlay {
   clear() {
     this.currentCues.clear();
     this.partial = null;
+    this.drafts.clear();
+    this._openDraftCue = null;
     this._updateDisplay();
   }
 
@@ -497,6 +554,13 @@ class SubtitleOverlay {
         animation: none;
       }
 
+      /* the translation of the part of an open line that has stopped changing; replaced at the endpoint */
+      .subtitle-line.draft {
+        font-style: italic;
+        opacity: 0.8;
+        animation: none;
+      }
+
       /* the mark of a line in progress; drawn by the style sheet so the text stays the recognizer's */
       .subtitle-line.in-progress::after {
         content: ' …';
@@ -595,9 +659,9 @@ class SubtitleOverlay {
     const primary = this.primaryOnTop ? this.primaryLang : this.secondaryLang;
     const secondary = this.primaryOnTop ? this.secondaryLang : this.primaryLang;
 
-    // Only ok / fallback targets are translations; untranslated (source placeholder)
-    // and error targets are not drawn as a language line.
-    const usable = (lang) => globalThis.STWsProtocol ? globalThis.STWsProtocol.usableTranslation(translations[lang]) : !!translations[lang];
+    const usable = (lang) => this._usable(translations[lang]);
+    // a live line whose final translation is still on its way keeps its draft until then
+    const draft = this.drafts.get(cueId);
 
     // Add primary translation
     if (usable(primary)) {
@@ -609,6 +673,8 @@ class SubtitleOverlay {
         revised
       );
       this.subtitleStack.appendChild(dim(line));
+    } else if (draft && this._usable(draft.translations[primary])) {
+      this.subtitleStack.appendChild(this._createDraftLine(draft.translations[primary], 'primary', cueId, primary, draft.provisional || cueData.provisional));
     }
 
     // Add secondary translation (if configured and different from primary)
@@ -621,6 +687,8 @@ class SubtitleOverlay {
         revised
       );
       this.subtitleStack.appendChild(dim(line));
+    } else if (secondary && secondary !== 'none' && draft && this._usable(draft.translations[secondary])) {
+      this.subtitleStack.appendChild(this._createDraftLine(draft.translations[secondary], 'secondary', cueId, secondary, draft.provisional || cueData.provisional));
     }
 
     // Add original if enabled (always for live captions that have no translation yet)
@@ -637,6 +705,20 @@ class SubtitleOverlay {
    * Render the partial (unstable) caption, the language label and any notice below the stack.
    */
   _renderExtras() {
+    // the open line: its draft translation(s), then its growing source text
+    const openCue = this.partial ? this.partial.cueId : this._openDraftCue;
+    const draft = openCue && !this.currentCues.has(openCue) ? this.drafts.get(openCue) : null;
+    if (draft) {
+      const primary = this.primaryOnTop ? this.primaryLang : this.secondaryLang;
+      const secondary = this.primaryOnTop ? this.secondaryLang : this.primaryLang;
+      const dimmed = draft.provisional || !!(this.partial && this.partial.provisional);
+      if (this._usable(draft.translations[primary])) {
+        this.subtitleStack.appendChild(this._createDraftLine(draft.translations[primary], 'primary', openCue, primary, dimmed));
+      }
+      if (secondary && secondary !== 'none' && this._usable(draft.translations[secondary])) {
+        this.subtitleStack.appendChild(this._createDraftLine(draft.translations[secondary], 'secondary', openCue, secondary, dimmed));
+      }
+    }
     if (this.partial && this.partial.text) {
       const line = document.createElement('div');
       // the line still being recognised: its text grows with every partial result
@@ -659,6 +741,20 @@ class SubtitleOverlay {
       line.textContent = this.notice.text;
       this.subtitleStack.appendChild(line);
     }
+  }
+
+  /**
+   * A draft translation line: the role's colour, marked as a draft in progress, not editable.
+   */
+  _createDraftLine(translation, type, cueId, langCode, dimmed) {
+    const line = document.createElement('div');
+    line.className = `subtitle-line ${type} draft in-progress` + (dimmed ? ' provisional' : '');
+    line.textContent = translation.display_text || translation.single_line;
+    line.dataset.cueId = cueId;
+    line.dataset.type = type;
+    line.dataset.lang = langCode;
+    line.dataset.state = 'draft';
+    return line;
   }
 
   /**

@@ -250,6 +250,14 @@ class ASRConfig(BaseSettings):
     # it stays undecided (provisional language kept). docs/observations.md A7
     lid_min_confidence: float = Field(default=0.6)
     partial_interval_ms: int = Field(default=120)
+    # Incremental translation (asr/draft.py): the stable prefix of a line that is still open is
+    # translated and shown as a draft. A word is stable after this many partials in a row (0 = no
+    # drafts); the prefix is re-translated at most once per debounce. Nearly every new draft
+    # rewrites the one before it (the translation of a longer prefix is a different sentence), so
+    # these two set how often the viewer has to re-read: 3 / 1500 ms keeps the live clip at 1.6
+    # non-append revisions per line; 2 / 300 ms gave 3.8-4.2 (docs/latency.md).
+    draft_stable_partials: int = Field(default=3)
+    draft_debounce_ms: int = Field(default=1500)
     warmup_languages: List[str] = Field(default=["en", "zh", "bn"], description="Recognizers loaded at startup so auto-detect switches are instant")
 
     @field_validator("zh_model")

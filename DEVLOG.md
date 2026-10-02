@@ -595,3 +595,22 @@ D4 cloud providers off by default, keys only in backend config.
   the decode-chunk lag, 0.3-0.75 s); `tests/test_segmentation_real.py` asserts what does drop, the wait from a
   line's first word to its final (9.76 -> 6.52 s on the English sample, 9.64 -> 5.60 s on the clip), and that first
   display stays under 1 s before and after. Tallies: fast 301, slow 30, node 82.
+- Batch 2 (incremental translation; commit "feat: incremental translation of stable prefixes"). While a line is open,
+  `StreamingASRSession` keeps the raw text of its last N partials and puts the stable prefix (`asr/draft.py`
+  `stable_prefix`: leading words unchanged in N consecutive partials, CJK characters as words, restored like the
+  caption) on each partial as `stable_text`; `/ws/asr` hands it to a `DraftScheduler` (newest prefix only, one start
+  per debounce, nothing after the line's final) and sends the result as a `draft` message; the overlay draws it
+  above the growing source text (`showDraft`: class `draft in-progress`, per target, kept at the final caption until
+  that target's final translation arrives, never over a final translation, dimmed and discarded with a provisional
+  recognizer); the offscreen document suppresses drafts like translations when Chrome's on-device translator
+  handles the session. Flicker: `line-latency.js` counts per line the changes of the displayed translation and the
+  ones that are not a pure append (`translation_revisions`, `non_append_revisions`, `drafts`); in
+  `failure_report.py` section 6, the harness summary and the latency table. Measured on the live clip, 3 browser
+  runs per setting (`docs/latency.md`): with the brief's defaults (N 2, 300 ms) 3.8-4.2 non-append revisions per
+  line, because nearly every draft rewrites the previous one (verb-final Bengali; the same in the other directions);
+  chosen defaults `asr.draft_stable_partials` 3 and `asr.draft_debounce_ms` 1500: 1.6 per line in 3 of 3 runs, first
+  translated text p50 4.0-4.7 s -> 2.07 s after the first word, translate calls 0.2-0.25 -> 0.7 per second, translate
+  p95 43-130 ms on the CPU (bound 150). The MT engine is untouched. **Conflict with the brief:** its defaults
+  (2 / 300 ms) miss its own flicker budget by a factor of two; the budget is met only by showing fewer drafts.
+  Not built: a minimum prefix length (a line's first draft is usually one word). Tallies: fast 315, node 92.
+

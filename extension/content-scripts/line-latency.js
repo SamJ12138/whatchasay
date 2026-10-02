@@ -14,6 +14,11 @@
  *                         targets; a line with nothing to translate: its final caption)
  *   first_translation_ms  first word's audio -> first translated text on screen
  *
+ * Flicker, per line: how often the translation on screen changed (translation_revisions:
+ * a draft or the final replacing other text) and how many of those changes were not a
+ * pure append (non_append_revisions: the new text does not start with the old one, its
+ * closing punctuation aside), i.e. the viewer had to read it again.
+ *
  * createTracker(now) -> {
  *   start()                        a live session begins
  *   reset()                        the recognizer was replaced (utterance ids restart)
@@ -27,6 +32,8 @@
 (function (root) {
   const certain = (status) => status === 'confirmed' || status === 'manual';
   const num = (v) => typeof v === 'number' && isFinite(v);
+  // what a translation engine puts at the end of a sentence, and a prefix's translation gets too
+  const CLOSING = /[\s.,!?;:\u3002\uff01\uff1f\uff0c\u3001\u2026\u0964\u0965'"\u201d\u2019)\]]+$/;
 
   function createTracker(now) {
     const clock = now || (() => Date.now());
@@ -47,7 +54,8 @@
       let ln = lines.get(cueId);
       if (!ln && create && num(ev.w_first)) {
         ln = { wFirst: ev.w_first, wLast: null, lang: ev.lang || null, langStatus: null, shownAt: firstDrawn(ev.w_first, t),
-               finalTextAt: null, firstTranslationAt: null, draftShown: false, targets: [], done: false };
+               finalTextAt: null, firstTranslationAt: null, draftShown: false, targets: [], done: false,
+               shown: {}, drafts: 0, revisions: 0, nonAppend: 0 };
         lines.set(cueId, ln);
         if (lines.size > 50) lines.delete(lines.keys().next().value);
       }
@@ -81,7 +89,17 @@
         const t = clock();
         const targets = Object.keys(ev.translations || {});
         if (targets.length && ln.firstTranslationAt === null) ln.firstTranslationAt = t;
-        if (ev.draft) { ln.draftShown = true; return null; }
+        for (const tgt of targets) {
+          const tr = ev.translations[tgt] || {};
+          const text = tr.display_text || tr.single_line || '';
+          const before = ln.shown[tgt];
+          if (before !== undefined && text !== before) {
+            ln.revisions++;
+            if (!text.startsWith(before.replace(CLOSING, ''))) ln.nonAppend++;
+          }
+          ln.shown[tgt] = text;
+        }
+        if (ev.draft) { ln.draftShown = true; ln.drafts++; return null; }
         for (const tgt of targets) if (!ln.targets.includes(tgt)) ln.targets.push(tgt);
         if (ev.targets_pending > 0 || !num(ln.wLast)) return null;
         ln.done = true;
@@ -93,6 +111,7 @@
           final_ms: Math.round(completeAt - ln.wLast * 1000),
           first_translation_ms: ln.firstTranslationAt === null ? null : Math.round(ln.firstTranslationAt - ln.wFirst * 1000),
           draft_shown: ln.draftShown, targets: ln.targets.slice(),
+          drafts: ln.drafts, translation_revisions: ln.revisions, non_append_revisions: ln.nonAppend,
         };
       },
 

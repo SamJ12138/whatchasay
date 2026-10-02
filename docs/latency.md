@@ -117,3 +117,43 @@ claims):
 
 The live clip's line 2 (9.3 s: "এর থেকে বড় সাইজের হয় না … দিনকাল যা পড়েছে") is now three lines, cut where the speakers
 pause, and the rest of the clip two more.
+
+## Batch 2: incremental translation (2026-10-02)
+
+While a line is still open the backend translates its **stable prefix** and sends it as a `draft`; the overlay
+draws the draft (italic, with the in-progress ellipsis) above the growing source text, and the final translation
+replaces it at the endpoint. A word is stable once it was the same in `SUBTITLE_ASR__DRAFT_STABLE_PARTIALS`
+consecutive partial results; the prefix is re-translated, the newest one only, at most once per
+`SUBTITLE_ASR__DRAFT_DEBOUNCE_MS` (`asr/draft.py`; a draft is never sent after its line's final). The MT engine is
+untouched: a draft is an ordinary translation call on a shorter text.
+
+**Flicker budget.** Per line, the content script counts every change of the translation on screen and how many of
+those were not a pure append (`non_append_revisions`: the new text does not start with the old one, closing
+punctuation aside), the final replacing the last draft included. Live clip, three browser runs per setting:
+
+| Stable partials N | Debounce | run_ids | Drafts per line | Non-append revisions per line (per line, run 1) | First translated text p50 / max (s) | Translate calls per s | Translate p50 / p95 (ms) |
+|---|---|---|---|---|---|---|---|
+| no drafts (Batch 1) | | `20261002T162441-af85dd`, `20261002T162526-fdb562`, `20261002T162610-0569c1` | 0 | 0 | 4.01-4.66 / 5.10-7.07 | 0.2-0.25 | 33-44 / 43-65 |
+| 2 (the brief's default) | 300 ms (the brief's default) | `20261002T163619-ccbc59`, `20261002T163704-a7332d`, `20261002T163750-8be492` | 3.8-4.2 | **3.8-4.2** (3, 6, 3, 4, 5) | 1.40-1.43 / 2.46-2.67 | 1.2-1.3 | 25-26 / 40-43 |
+| **3 (default)** | **1500 ms (default)** | `20261002T164037-570655`, `20261002T164122-a50e20`, `20261002T164207-4d16db` | 1.8 | **1.6** (1, 3, 1, 2, 1) | 2.07 / 2.90-2.92 | 0.7 | 26-28 / 43-130 |
+| 3 | 2000 ms | `20261002T164252-57bae2`, `20261002T164337-c5add8`, `20261002T164421-c262a8` | 1.4-2.0 | 1.2-1.75 (1, 2, 1, 1, 1) | 2.07-2.28 / 3.39-3.44 | 0.6 | 25-28 / 45-68 |
+
+What the numbers say, and they are not flattering:
+
+- **Nearly every new draft rewrites the one before it.** Non-append revisions equal the number of drafts in every
+  run. The translation of a longer prefix is a different sentence, not the old one plus words: Bengali puts the verb
+  last ("অর্ডার না দিলে হয়" -> "If you don't order me.", one word later "অর্ডার না দিলে হয় না" -> "You don't have
+  to order me."), and OPUS-MT starts over each time. The same holds for the other directions (simulated with the
+  real recognizer and MT on the sample WAVs: English to Chinese 9.3 non-append revisions per line at 2 / 300 ms, 3.3
+  at 3 / 1500 ms; Mandarin to English 11 and 3). So the two settings do not make drafts steadier, they make them
+  rarer: the budget "under 2 per line" is met by showing fewer than two drafts per line.
+- **Chosen defaults: N = 3, debounce 1500 ms.** 1.6 non-append revisions per line on the live clip in 3 of 3 runs
+  (budget: under 2), the first translated text 2.07 s after the line's first word (0.65 s later than with 2 / 300 ms,
+  1.9-2.6 s earlier than without drafts). 2000 ms was no better in the worst run (1.75) and updates later.
+- **The first draft of a line is usually one word** ("from", "Key" for কী, "Day"): the stable prefix when the
+  third partial arrives. It is on screen about 1.3 s before the next draft replaces it. A minimum prefix length
+  would remove these; it is not built (the brief asked for N and the debounce).
+- **Translation calls** went from 0.2-0.25 per second of clip to 0.7 (1.2-1.3 at 2 / 300 ms). Translate latency with
+  drafts running: p50 26-28 ms, p95 43-130 ms on the CPU, under the 150 ms bound in all nine runs; drafts are short
+  texts, so the median fell. The final translation after the last word did not move (1.29-1.38 s p50).
+

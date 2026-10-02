@@ -345,6 +345,8 @@ objects are JSON; relative paths are relative to `backend/`. Every setting:
 | `SUBTITLE_ASR__LID_WINDOW_S` | `2.5` | Seconds of voiced audio before spoken-language ID runs |
 | `SUBTITLE_ASR__LID_MIN_CONFIDENCE` | `0.6` | Spoken-language ID answers only at or above this confidence among the spoken languages |
 | `SUBTITLE_ASR__PARTIAL_INTERVAL_MS` | `120` | Minimum gap between partial captions (ms) |
+| `SUBTITLE_ASR__DRAFT_STABLE_PARTIALS` | `3` | Draft translation of a line that is still open: a word counts as stable after this many partial results in a row (0 = no drafts) |
+| `SUBTITLE_ASR__DRAFT_DEBOUNCE_MS` | `1500` | The stable part of an open line is re-translated at most once per this many ms (lower: earlier drafts, more rewriting on screen) |
 | `SUBTITLE_ASR__WARMUP_LANGUAGES` | `["en", "zh", "bn"]` | Recognizers loaded at startup so a language switch is instant |
 
 **Cloud providers (off by default; text leaves this computer when on)**

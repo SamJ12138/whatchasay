@@ -262,6 +262,7 @@ async function handleServerMessage(data) {
       if (await translateOnDevice(msg)) msg._handled = true;
       break;
     }
+    case 'draft':
     case 'translation':
     case 'revision':
       if (state.translationEngine === 'chrome' && state.chromeTranslatorOk) return; // on-device already rendered

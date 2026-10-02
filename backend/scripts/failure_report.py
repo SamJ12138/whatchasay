@@ -15,8 +15,10 @@ Sections:
   6. per-line latency (stage line_latency, logged by the content script per subtitle
      line; docs/latency.md): first_display_ms = audio of the line's first word -> first
      text of the line on screen; final_ms = audio of its last word -> final translation
-     on screen; first_translation_ms = first word -> first translated text; and the
-     time from a session's first audio to its first confirmed-language subtitle
+     on screen; first_translation_ms = first word -> first translated text; flicker
+     (mean per line of the changes of its displayed translation that were not a pure
+     append); and the time from a session's first audio to its first confirmed-language
+     subtitle
 Per-frame stages (ws_receive, asr_chunk, ext_ws_send) log one summary line per
 100 frames whose duration_ms is the window mean, so their p50/p95 are over
 window means. Records with context.degraded mark silently-degraded paths.
@@ -107,7 +109,7 @@ def _dist(xs):
 def line_latency(recs):
     """Per-line latency over the run and per session, from the `line_latency` records."""
     def empty():
-        return {"lines": 0, **{f: [] for f in LINE_FIELDS}, "first_confirmed_ms": []}
+        return {"lines": 0, **{f: [] for f in LINE_FIELDS}, "first_confirmed_ms": [], "non_append": []}
 
     total, sessions = empty(), defaultdict(empty)
     for r in recs:
@@ -123,11 +125,17 @@ def line_latency(recs):
                 for f in LINE_FIELDS:
                     if isinstance(ctx.get(f), (int, float)):
                         bucket[f].append(ctx[f])
+                if isinstance(ctx.get("non_append_revisions"), (int, float)):
+                    bucket["non_append"].append(ctx["non_append_revisions"])
 
     def shape(b, per_session=False):
         fc = b["first_confirmed_ms"]
+        na = b["non_append"]
         return {"lines": b["lines"], **{f: _dist(b[f]) for f in LINE_FIELDS},
-                "first_confirmed_ms": (fc[0] if fc else None) if per_session else fc}
+                "first_confirmed_ms": (fc[0] if fc else None) if per_session else fc,
+                # flicker: changes of a line's displayed translation that were not a pure append
+                "non_append_revisions": {"lines": len(na), "mean": round(sum(na) / len(na), 2) if na else None,
+                                         "max": max(na) if na else None}}
 
     return {**shape(total), "sessions": {sid: shape(b, True) for sid, b in sessions.items()}}
 
@@ -222,13 +230,15 @@ def main() -> int:
         return 0
 
     def cells(b):
-        return [b["lines"]] + [v if v is not None else "-" for f in LINE_FIELDS for v in (b[f]["p50"], b[f]["p95"])]
+        na = b["non_append_revisions"]
+        return [b["lines"]] + [v if v is not None else "-" for f in LINE_FIELDS for v in (b[f]["p50"], b[f]["p95"])] + \
+               [na["mean"] if na["mean"] is not None else "-"]
 
     rows = [["(all)"] + cells(ll) + [", ".join(str(round(x)) for x in ll["first_confirmed_ms"]) or "-"]]
     for sid, b in sorted(ll["sessions"].items()):
         rows.append([sid] + cells(b) + [round(b["first_confirmed_ms"]) if b["first_confirmed_ms"] is not None else "-"])
     print(table(["session_id", "lines", "first_display p50", "p95", "final p50", "p95", "first_translation p50", "p95",
-                 "first confirmed subtitle"], rows))
+                 "non-append revisions per line", "first confirmed subtitle"], rows))
     return 0
 
 

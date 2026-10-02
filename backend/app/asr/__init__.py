@@ -96,6 +96,7 @@ def create_session(
         allowed_langs=list(settings.asr.languages),
         lid_window_s=settings.asr.lid_window_s,
         partial_interval_ms=settings.asr.partial_interval_ms,
+        draft_stable_partials=settings.asr.draft_stable_partials,
     )
     return StreamingASRSession(cfg, get_engines(), lid_identify=_lid_identify, restore_text=_restore_text)
 

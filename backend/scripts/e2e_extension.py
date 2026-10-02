@@ -371,6 +371,9 @@ def line_latency_summary(records: list[dict], play_t: float | None) -> dict:
             "final_ms": [c.get("final_ms") for c in lines],
             "first_translation_ms": [c.get("first_translation_ms") for c in lines],
             "drafts_shown": sum(1 for c in lines if c.get("draft_shown")),
+            "drafts": [c.get("drafts") for c in lines],
+            "translation_revisions": [c.get("translation_revisions") for c in lines],
+            "non_append_revisions": [c.get("non_append_revisions") for c in lines],
             "first_confirmed_after_play_s": after_play,
             "first_confirmed_since_session_ms": first.get("since_session_ms") if first else None}
 
