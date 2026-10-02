@@ -187,3 +187,13 @@ Browser: load `extension/` unpacked → YouTube video without captions → popup
   final carries `lang_status` = provisional | confirmed | manual | fallback | error; LID that gives up → `fallback`
   (source `fallback`), LID that raised on every attempt → `error` with `error_type`; `confirmed: true` only for confirmed
   and manual. The overlay says "Could not detect the spoken language; assuming …" for fallback/error.
+- Batch 5 (P1-P3, P9): llama-server output (stdout+stderr, one pipe, `--log-disable` dropped) is drained by a thread;
+  the last 50 lines ride on the `translator_process` fail line (`exit`, `early_exit`, `health_timeout`). A request that
+  finds the child dead or unreachable (connect/protocol/read error) waits for it to exit or stops it, restarts it, waits
+  for `/health` within `hymt_restart_timeout_s` (20 s) and retries once — only then does the router fall back (the P2
+  window, "dead but `poll()` still says running", is reproduced in `tests/test_translator_process.py`). Warmup is
+  retried (`hymt_warmup_attempts` 3, doubling pause); after that HY-MT is paused, not disabled: `supports()` is false
+  for `hymt_retry_initial_s` (15 s), then tried again, doubling to `hymt_retry_max_s` (300 s); `status()` shows
+  `retry_in_s`. P9: the torch wheel's CUDA lib dir is found with `importlib.util.find_spec` (no `import torch`):
+  spawn→Popen 1187-1236 ms → 1.1-3.8 ms in a fresh process (`scripts/measure_spawn.py`; the observations' 2.46 s was a
+  cold disk cache); Popen→ready unchanged at ~1.1 s, so the DLL path still works.

@@ -12,7 +12,19 @@ Binary:  backend/bin/llama/llama-server.exe  (auto-downloaded from the
          ggml-org/llama.cpp GitHub release if missing)
 Model:   backend/data/models/mt/HY-MT1.5-1.8B-Q8_0.gguf (auto-downloaded)
 CUDA:    the runtime DLLs bundled with the torch wheel are put on PATH for
-         the child process, so no separate CUDA Toolkit is needed.
+         the child process, so no separate CUDA Toolkit is needed (the torch
+         package is located with importlib, never imported: P9).
+
+Lifecycle (translator_process in the run log):
+  - the child's stdout+stderr go to one pipe drained by a thread; the last
+    50 lines are attached to the fail line when it exits or dies on start (P1)
+  - a request that finds the child dead or unreachable waits for it to exit
+    (or stops it), restarts it and waits for /health, bounded by
+    hymt_restart_timeout_s, then retries once; only then does the router fall
+    back (P2)
+  - a failed warmup is retried (hymt_warmup_attempts, doubling pause); if it
+    still fails the engine is skipped for hymt_retry_initial_s, then tried
+    again, the pause doubling up to hymt_retry_max_s (P3)
 
 Prompt format from the model card:
     zh involved:  将以下文本翻译为{lang}，注意只需要输出翻译后的结果，不要额外解释：\n{text}
@@ -22,6 +34,7 @@ Prompt format from the model card:
 from __future__ import annotations
 
 import atexit
+import importlib.util
 import logging
 import os
 import socket
@@ -30,6 +43,7 @@ import sys
 import threading
 import time
 import zipfile
+from collections import deque
 from pathlib import Path
 from typing import List, Optional
 
@@ -40,6 +54,11 @@ from .. import obs
 
 logger = logging.getLogger(__name__)
 STAGE = "translator_process"
+STDERR_TAIL_LINES = 50
+
+# The child is gone or not listening (crashed, killed, restarting): restart it.
+# A read *timeout* is not here: a busy child is not restarted.
+_CHILD_GONE = (httpx.ConnectError, httpx.RemoteProtocolError, httpx.ReadError, httpx.WriteError)
 
 
 def _plog(event: str, **kw) -> None:
@@ -80,14 +99,20 @@ def _free_port() -> int:
 
 
 def _cuda_dll_dirs() -> List[str]:
+    """CUDA runtime DLL dirs for the child's PATH. The torch wheel's lib dir is
+    found with importlib.util.find_spec: importing torch here cost 1.2-2.5 s
+    before every first spawn (P9)."""
     dirs = []
     try:
-        import torch
-
-        dirs.append(str(Path(torch.__file__).parent / "lib"))
+        spec = importlib.util.find_spec("torch")
+        locations = list(spec.submodule_search_locations or []) if spec else []
+        if not locations:
+            raise ModuleNotFoundError("No module named 'torch'")
+        lib = Path(locations[0]) / "lib"
+        if lib.is_dir():
+            dirs.append(str(lib))
     except Exception as e:
         _plog("skip", error_type="process", error_message=f"torch CUDA DLL dir not added to PATH: {e}", action="cuda_dlls")
-        pass
     cuda_path = os.environ.get("CUDA_PATH")
     if cuda_path:
         dirs.append(str(Path(cuda_path) / "bin"))
@@ -147,6 +172,11 @@ class HyMTEngine:
         self._spawns = 0
         self._stopping: set = set()  # pids the backend itself is stopping
         self.available = LLAMA_AVAILABLE
+        self._tail: deque = deque(maxlen=STDERR_TAIL_LINES)  # last lines of the current child's output
+        self._drain_thread: Optional[threading.Thread] = None
+        self._t_start = 0.0
+        self._retry_at = 0.0  # monotonic time before which a failed engine is skipped (P3)
+        self._retry_backoff: Optional[float] = None
         atexit.register(self.shutdown)
 
     # -- process management ------------------------------------------------
@@ -161,41 +191,73 @@ class HyMTEngine:
         path = hf_hub_download(settings.mt.hymt_repo, settings.mt.hymt_file, local_dir=str(self.gguf_path.parent))
         return Path(path)
 
-    def _start(self) -> None:
-        if self._proc is not None and self._proc.poll() is None:
+    @staticmethod
+    def _alive(proc: Optional[subprocess.Popen]) -> bool:
+        return proc is not None and proc.returncode is None and proc.poll() is None
+
+    def _tail_lines(self) -> List[str]:
+        """Last lines of the child's output (joins the drain thread briefly so a
+        just-exited child's final lines are included)."""
+        t = self._drain_thread
+        if t is not None and t.is_alive():
+            t.join(timeout=1.0)
+        return list(self._tail)
+
+    def _start(self, reason: Optional[str] = None, deadline_s: Optional[float] = None) -> None:
+        if self._alive(self._proc):
             return
-        if self._proc is not None:
+        if reason:
+            action = "restart"
+        elif self._proc is not None:
             action, reason = "restart", f"previous child (pid {self._proc.pid}) exited with code {self._proc.returncode}"
         elif self._spawns:
             action, reason = "restart", "previous start failed"
         else:
             action, reason = "spawn", "first use"
         self._spawns += 1
+        self._t_start = time.perf_counter()
         _plog("start", action=action, reason=reason, spawn_no=self._spawns)
         try:
-            self._start_child()
+            self._start_child(deadline_s)
         except Exception as e:
             proc = self._proc
             code = proc.returncode if proc is not None else None
             msg = str(e)
             if "exited early" in msg:
-                _plog("fail", error_type="process", error_message=msg, action="early_exit", exit_code=code, port=self._port)
+                _plog("fail", error_type="process", error_message=msg, action="early_exit", exit_code=code, port=self._port,
+                      stderr_tail=self._tail_lines())
             elif "did not become healthy" in msg:
-                _plog("fail", error_type="timeout", error_message=msg, action="health_timeout", port=self._port)
+                if self._alive(proc):  # do not leave an unhealthy child running
+                    self._stopping.add(proc.pid)
+                    proc.kill()
+                _plog("fail", error_type="timeout", error_message=msg, action="health_timeout", port=self._port,
+                      stderr_tail=self._tail_lines())
             else:
                 _plog("fail", error_type=obs.classify(e, "process"), error_message=msg, action=action)
             raise
 
-    def _watch(self, proc: subprocess.Popen, t_spawn: float) -> None:
-        """Waiter thread (observation only): record the child's exit code."""
+    def _watch(self, proc: subprocess.Popen, t_spawn: float, tail: deque, drain: threading.Thread) -> None:
+        """Waiter thread (observation only): record the child's exit code and
+        the last lines it printed."""
         try:
             code = proc.wait()
         except Exception:
             return
         if proc.pid in self._stopping:
             return  # shutdown() logs the exit it asked for
+        drain.join(timeout=1.0)
         _plog("fail", error_type="process", error_message=f"llama-server exited on its own with code {code}",
-              action="exit", exit_code=code, pid=proc.pid, lived_s=round(time.time() - t_spawn, 1))
+              action="exit", exit_code=code, pid=proc.pid, lived_s=round(time.time() - t_spawn, 1),
+              stderr_tail=list(tail))
+
+    @staticmethod
+    def _drain(proc: subprocess.Popen, tail: deque) -> None:
+        """Read the child's output so the pipe never fills; keep the last lines."""
+        try:
+            for raw in iter(proc.stdout.readline, b""):
+                tail.append(raw.decode("utf-8", "replace").rstrip()[:300])
+        except Exception:
+            pass
 
     def _command(self, port: int) -> List[str]:
         """llama-server command line (tests replace this with tests/fake_llama_server.py)."""
@@ -205,20 +267,26 @@ class HyMTEngine:
             str(server.resolve()), "-m", str(model.resolve()),
             "--host", "127.0.0.1", "--port", str(port),
             "-ngl", str(self.n_gpu_layers), "-c", str(self.n_ctx * self.parallel), "-np", str(self.parallel),
-            "--no-webui", "--log-disable",
+            "--no-webui",  # logging stays on: the output is drained and its tail kept (P1)
         ]
 
-    def _start_child(self) -> None:
+    def _start_child(self, deadline_s: Optional[float] = None) -> None:
         self._port = _free_port()
         cmd = self._command(self._port)
         env = dict(os.environ)
         env["PATH"] = os.pathsep.join(_cuda_dll_dirs() + [env.get("PATH", "")])
         creation = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+        self._tail = tail = deque(maxlen=STDERR_TAIL_LINES)
         t0 = time.time()
-        self._proc = subprocess.Popen(cmd, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=creation)
-        threading.Thread(target=self._watch, args=(self._proc, t0), name="llama-server-watch", daemon=True).start()
+        pre_popen_ms = (time.perf_counter() - self._t_start) * 1000 if self._t_start else None
+        self._proc = subprocess.Popen(cmd, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                      stderr=subprocess.STDOUT, creationflags=creation)
+        self._drain_thread = drain = threading.Thread(target=self._drain, args=(self._proc, tail),
+                                                      name="llama-server-output", daemon=True)
+        drain.start()
+        threading.Thread(target=self._watch, args=(self._proc, t0, tail, drain), name="llama-server-watch", daemon=True).start()
         self._client = httpx.Client(base_url=f"http://127.0.0.1:{self._port}", timeout=20.0)
-        deadline = time.time() + 120
+        deadline = time.time() + (deadline_s if deadline_s is not None else settings.mt.hymt_health_timeout_s)
         polls = 0
         last_poll_error = None
         while time.time() < deadline:
@@ -238,7 +306,8 @@ class HyMTEngine:
             raise RuntimeError("llama-server did not become healthy in time")
         logger.info("HY-MT1.5-1.8B ready via llama-server on port %d (%.1fs)", self._port, time.time() - t0)
         _plog("success", duration_ms=(time.time() - t0) * 1000, action="ready", port=self._port, pid=self._proc.pid,
-              health_polls=polls, last_poll_error=last_poll_error, model=self.gguf_path.name, slots=self.parallel)
+              health_polls=polls, last_poll_error=last_poll_error, model=self.gguf_path.name, slots=self.parallel,
+              pre_popen_ms=round(pre_popen_ms, 1) if pre_popen_ms is not None else None)
 
     def shutdown(self) -> None:
         proc, self._proc = self._proc, None
@@ -260,23 +329,52 @@ class HyMTEngine:
                 _plog("success", action="exit", exit_code=proc.returncode, pid=proc.pid, reason="stopped by backend")
 
     def warmup(self) -> None:
+        """Start the child and translate "Hello". Retried hymt_warmup_attempts
+        times with a doubling pause; if every attempt fails the engine is
+        paused (supports() False) and tried again later (P3), not disabled for
+        the life of the process."""
         t0 = time.perf_counter()
-        try:
-            with self._lock:
-                self._start()
-            self.translate_batch_sync(["Hello"], "en", "zh")
-            _plog("success", duration_ms=(time.perf_counter() - t0) * 1000, action="warmup")
-        except Exception as e:
-            self._load_error = str(e)
-            logger.warning("HY-MT warmup failed: %s", e)
-            _plog("fail", duration_ms=(time.perf_counter() - t0) * 1000, error_type=obs.classify(e, "process"),
-                  error_message=str(e), action="warmup",
-                  degraded="HY-MT disabled for the rest of this process (supports() returns False)")
+        attempts = max(1, int(settings.mt.hymt_warmup_attempts))
+        pause = max(0.0, float(settings.mt.hymt_warmup_backoff_s))
+        for attempt in range(1, attempts + 1):
+            try:
+                with self._lock:
+                    self._start()
+                self.translate_batch_sync(["Hello"], "en", "zh")
+                self._mark_ok()
+                _plog("success", duration_ms=(time.perf_counter() - t0) * 1000, action="warmup", attempt=attempt)
+                return
+            except Exception as e:
+                last = e
+                retry = attempt < attempts
+                logger.warning("HY-MT warmup attempt %d/%d failed: %s", attempt, attempts, e)
+                _plog("fail", duration_ms=(time.perf_counter() - t0) * 1000, error_type=obs.classify(e, "process"),
+                      error_message=str(e), action="warmup", attempt=attempt, will_retry=retry,
+                      degraded=(f"retrying in {pause:.1f}s" if retry else
+                                "HY-MT paused; tried again after the retry backoff (supports() is False until then)"))
+                if retry:
+                    time.sleep(pause)
+                    pause *= 2
+        self._mark_failed(last)
+
+    def _mark_failed(self, e: BaseException) -> None:
+        """Pause the engine: skipped for _retry_backoff seconds, then tried again (doubling, capped)."""
+        self._load_error = str(e) or type(e).__name__
+        cfg = settings.mt
+        self._retry_backoff = cfg.hymt_retry_initial_s if self._retry_backoff is None else min(self._retry_backoff * 2, cfg.hymt_retry_max_s)
+        self._retry_at = time.monotonic() + self._retry_backoff
+
+    def _mark_ok(self) -> None:
+        self._load_error = None
+        self._retry_backoff = None
+        self._retry_at = 0.0
 
     # -- MTEngine ------------------------------------------------------------
 
     def supports(self, source_lang: str, target_lang: str) -> bool:
-        if not self.available or self._load_error:
+        if not self.available:
+            return False
+        if self._load_error and time.monotonic() < self._retry_at:
             return False
         return source_lang in self.languages and target_lang in self.languages
 
@@ -304,11 +402,43 @@ class HyMTEngine:
                     degraded="later lines discarded")
         return result
 
-    def translate_batch_sync(self, texts: List[str], source_lang: str, target_lang: str) -> List[str]:
+    def _recover(self, err: BaseException) -> None:
+        """The child is dead or unreachable (P2): wait for it to exit (or stop
+        it), restart it and wait for /health, all within hymt_restart_timeout_s."""
+        bound = max(1.0, float(settings.mt.hymt_restart_timeout_s))
+        deadline = time.monotonic() + bound
         with self._lock:
-            self._start()  # cheap when already running; serializes only the startup
+            proc = self._proc
+            if proc is not None and proc.returncode is None:
+                try:
+                    proc.wait(timeout=min(2.0, bound / 4))  # just died: let the OS finish reaping it
+                except subprocess.TimeoutExpired:
+                    self._stopping.add(proc.pid)  # alive but not answering: stop it
+                    proc.kill()
+                    proc.wait(timeout=5)
+            self._start(reason=f"request failed: {type(err).__name__}: {err}"[:200],
+                        deadline_s=max(0.5, deadline - time.monotonic()))
+
+    def translate_batch_sync(self, texts: List[str], source_lang: str, target_lang: str) -> List[str]:
+        try:
+            with self._lock:
+                self._start()  # cheap when already running; serializes only the startup
+        except Exception as e:
+            self._mark_failed(e)
+            raise
         t0 = time.time()
-        out = [self._one(t, source_lang, target_lang) for t in texts]
+        try:
+            out = [self._one(t, source_lang, target_lang) for t in texts]
+        except _CHILD_GONE as e:
+            logger.warning("llama-server unreachable (%s); restarting before any fallback", e)
+            try:
+                self._recover(e)
+            except Exception as e2:
+                self._mark_failed(e2)
+                raise
+            out = [self._one(t, source_lang, target_lang) for t in texts]  # one retry on the new child
+        if self._load_error:
+            self._mark_ok()
         ms = (time.time() - t0) * 1000
         self.stats["calls"] += len(texts)
         self.stats["total_ms"] += ms
@@ -322,5 +452,6 @@ class HyMTEngine:
             "model": self.gguf_path.name,
             "port": self._port,
             "error": self._load_error,
+            "retry_in_s": round(max(0.0, self._retry_at - time.monotonic()), 1) if self._load_error else None,
             "avg_ms": round(self.stats["total_ms"] / self.stats["calls"], 1) if self.stats["calls"] else None,
         }

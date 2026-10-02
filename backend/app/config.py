@@ -172,6 +172,13 @@ class MTConfig(BaseSettings):
     hymt_ctx: int = Field(default=1024)
     hymt_max_tokens: int = Field(default=96)
     hymt_parallel: int = Field(default=2, description="llama-server slots; lets two target languages decode together")
+    # llama-server lifecycle (P2, P3)
+    hymt_health_timeout_s: float = Field(default=120.0, description="first start: model load until /health is ok")
+    hymt_restart_timeout_s: float = Field(default=20.0, description="a request that finds the child dead waits at most this long for the restarted one")
+    hymt_warmup_attempts: int = Field(default=3)
+    hymt_warmup_backoff_s: float = Field(default=1.0, description="pause between warmup attempts, doubled each time")
+    hymt_retry_initial_s: float = Field(default=15.0, description="after a failed start, HY-MT is skipped this long, then tried again")
+    hymt_retry_max_s: float = Field(default=300.0, description="cap for the doubling retry pause")
     # Languages HY-MT handles well enough to be preferred over OPUS.
     hymt_languages: List[str] = Field(default=["en", "zh", "bn", "vi", "ja", "ko", "es", "fr", "de", "ru", "pt", "it", "ar", "hi"])
 

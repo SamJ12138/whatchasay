@@ -161,25 +161,32 @@ def app_env(monkeypatch, tmp_path, clear_memory_cache):
 
 @pytest.fixture
 def fake_llama(tmp_path):
-    """Factory: fake_llama(*stub_args) -> a HyMTEngine whose llama-server is
-    tests/fake_llama_server.py (see its docstring for the flags). Every engine
-    created here is shut down after the test."""
+    """Factory: fake_llama(*stub_args, plan=None) -> a HyMTEngine whose
+    llama-server is tests/fake_llama_server.py (see its docstring for the
+    flags). plan: a list of per-spawn extra args, consumed one per spawn (the
+    last entry repeats), e.g. plan=[["--exit-on-start"], []] = the first spawn
+    dies, later ones work. engine.spawned counts spawns. Every engine created
+    here is shut down after the test."""
     from tests.fakes import FAKE_LLAMA_SERVER
     from app.translation.hymt_translator import HyMTEngine
 
     made = []
 
     class FakeLlamaHyMT(HyMTEngine):
-        def __init__(self, stub_args):
+        def __init__(self, stub_args, plan):
             super().__init__(gguf_path=tmp_path / "fake.gguf")
             self.available = True
             self.stub_args = list(stub_args)
+            self.plan = [list(p) for p in (plan or [[]])]
+            self.spawned = 0
 
         def _command(self, port):
-            return [sys.executable, str(FAKE_LLAMA_SERVER), "--port", str(port), *self.stub_args]
+            extra = self.plan[min(self.spawned, len(self.plan) - 1)]
+            self.spawned += 1
+            return [sys.executable, str(FAKE_LLAMA_SERVER), "--port", str(port), *self.stub_args, *extra]
 
-    def make(*stub_args):
-        eng = FakeLlamaHyMT(stub_args)
+    def make(*stub_args, plan=None):
+        eng = FakeLlamaHyMT(stub_args, plan)
         made.append(eng)
         return eng
 

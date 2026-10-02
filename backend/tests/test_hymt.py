@@ -43,3 +43,24 @@ def test_hymt_engine_translates_under_budget():
         assert any("ঀ" <= ch <= "৿" for ch in out[0])
     finally:
         eng.shutdown()
+
+
+@pytest.mark.slow
+@pytest.mark.skipif(
+    settings.translation.device != "cuda" or not LLAMA_SERVER.exists() or not Path(settings.mt.hymt_gguf).exists(),
+    reason="needs CUDA, llama-server binary and the HY-MT GGUF",
+)
+def test_real_spawn_is_fast_and_its_output_is_captured(obs_records):
+    """P9 with the real binary (fresh-process numbers: scripts/measure_spawn.py) and P1 output capture."""
+    from app.translation.hymt_translator import HyMTEngine
+
+    eng = HyMTEngine()
+    try:
+        eng.warmup()
+        ready = [r for r in obs_records if r["stage"] == "translator_process" and r["event"] == "success"
+                 and (r["context"] or {}).get("action") == "ready"][-1]
+        assert ready["context"]["pre_popen_ms"] < 200
+        assert eng._proc.stdout is not None
+        assert eng._tail_lines(), "llama-server printed nothing to the captured pipe"
+    finally:
+        eng.shutdown()
