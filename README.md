@@ -1,4 +1,4 @@
-# subtitle-translator
+# whatchasay
 
 Live translated subtitles for the audio of any Chrome tab, produced on your own computer.
 
@@ -32,8 +32,8 @@ backend's virtual environment lives in `backend/venv`.
 **1. Clone**
 
 ```
-git clone https://github.com/SamJ12138/subtitle-translator.git
-cd subtitle-translator/backend
+git clone https://github.com/SamJ12138/whatchasay.git
+cd whatchasay/backend
 ```
 
 **2. Virtual environment and packages** (the CPU build of PyTorch is needed once, to convert the translation models)
