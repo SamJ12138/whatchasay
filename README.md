@@ -392,6 +392,11 @@ Tests, from `backend/` (install the test tools once: `venv\Scripts\python -m pip
 | Slow | `venv\Scripts\python -m pytest -m slow` | the downloaded models, and for the browser tests a Python with Playwright (`pip install playwright`, `playwright install chromium`) named in `ST_PLAYWRIGHT_PYTHON` | ~4 min |
 | Extension | `cd ..\extension` then `node --test` | Node 22 | ~1 s |
 
+**Pre-commit hook.** Run `python scripts/install-hooks.py` once per clone. From then on every `git commit` runs
+`scripts/hooks/pre-commit`: the fast suite and the extension tests, and a red result refuses the commit (it tests the
+files as they are on disk, so stage everything you changed). It needs `backend/venv` with `requirements-dev.txt` and
+Node on PATH.
+
 The fast suite never touches `backend/data/`; the slow tests read models from `backend/data/models` or from
 `ST_MODELS_ROOT`.
 

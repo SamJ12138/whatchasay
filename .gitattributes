@@ -1,0 +1,2 @@
+# The hook runs under sh: keep LF endings on every checkout (Windows included).
+scripts/hooks/* text eol=lf

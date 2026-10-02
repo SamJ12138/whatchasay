@@ -1,0 +1,41 @@
+#!/bin/sh
+# whatchasay pre-commit hook: the fast backend suite and the extension tests must pass,
+# or the commit is refused. Installed by scripts/install-hooks.py (core.hooksPath).
+# It tests the working tree as it is on disk, so stage everything you have changed.
+root=$(git rev-parse --show-toplevel) || exit 1
+
+if [ -x "$root/backend/venv/Scripts/python.exe" ]; then
+    py="$root/backend/venv/Scripts/python.exe"
+elif [ -x "$root/backend/venv/bin/python" ]; then
+    py="$root/backend/venv/bin/python"
+else
+    echo "pre-commit: no backend/venv found; create it (README, Quickstart step 2) and" >&2
+    echo "pre-commit: install the test tools: pip install -r backend/requirements-dev.txt" >&2
+    exit 1
+fi
+if ! command -v node >/dev/null 2>&1; then
+    echo "pre-commit: node is not on PATH; the extension tests need Node 22" >&2
+    exit 1
+fi
+
+echo "pre-commit: backend fast suite ..."
+out=$(cd "$root/backend" && "$py" -m pytest -q -p no:cacheprovider 2>&1)
+status=$?
+if [ $status -ne 0 ]; then
+    echo "$out" | tail -n 30 >&2
+    echo "pre-commit: backend fast suite is red (exit $status); commit refused" >&2
+    exit 1
+fi
+echo "$out" | tail -n 1
+
+echo "pre-commit: extension node --test ..."
+out=$(cd "$root/extension" && node --test 2>&1)
+status=$?
+if [ $status -ne 0 ]; then
+    echo "$out" | tail -n 30 >&2
+    echo "pre-commit: extension tests are red (exit $status); commit refused" >&2
+    exit 1
+fi
+echo "$out" | grep -E "^. (pass|fail) " | tr '\n' ' '
+echo
+exit 0

@@ -389,3 +389,10 @@ D4 cloud providers off by default, keys only in backend config.
   relative README link exists. Fresh-clone runs and the demo used a `subst` drive for the scratch folder (the
   scratch path itself is long enough to hit the 260-character limit inside the venv).
 
+### 2026-10-02 — Phase 3 follow-ups
+- Pre-commit hook: `scripts/hooks/pre-commit` (sh, LF pinned by `.gitattributes`, tracked executable) runs the fast
+  backend suite and `node --test` and refuses the commit on red; `scripts/install-hooks.py` sets
+  `core.hooksPath=scripts/hooks`; README Development documents it. Installed in this clone; no commit bypasses it.
+  `tests/test_hooks.py` builds throwaway repos with a stand-in backend Python: green lets the commit through, a red
+  backend or a red extension suite blocks it.
+
