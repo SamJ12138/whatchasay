@@ -109,7 +109,7 @@ CONTROLS_CSS = """.player{position:relative;line-height:0}
 DEMO_PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Demo video</title>
 <style>html,body{margin:0;height:100%;background:#111}body{display:flex;align-items:center;justify-content:center}
 .player{width:100%;height:100%;display:flex;align-items:center;justify-content:center}
-video{width:100%;max-height:100%;background:#000}""" + CONTROLS_CSS + """</style></head>
+video{width:100%;height:100%;object-fit:contain;background:#000}""" + CONTROLS_CSS + """</style></head>
 <body><div class="player"><video id="v" src="/clip{ext}" playsinline></video><div id="controls"></div></div></body></html>"""
 # --layout page: a normal page, the video in a column with text around it (most sites).
 PAGE_LAYOUT = """<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Video page</title>

@@ -74,7 +74,82 @@
     return Math.max(minPx, Math.round(videoHeight * scale * 10) / 10);
   }
 
-  const api = { fitLines, fontPx, isCJK };
+  // ---- placement (batch 2) ----
+
+  /**
+   * Where the subtitle block goes, in viewport coordinates.
+   * input: {video: {x,y,w,h} | null, viewport: {w,h}, fullscreen, blockHeight, controls: rect | null,
+   *         offset: {dx,dy} | null, gap}
+   * Returns {mode, left, width, gap, top} (page: below the video's bottom edge, in the
+   * page's space) or {mode, left, width, gap, bottom} (overlay: the block's bottom edge
+   * over the video, a safe margin up, above a visible control bar; viewport: no video
+   * known, 15% up the viewport as before). The dragged offset is added, then the block
+   * is kept inside the viewport.
+   */
+  function placement(input) {
+    const vp = input.viewport || { w: 0, h: 0 };
+    const v = input.video;
+    const gap = input.gap == null ? 6 : input.gap;
+    const blockHeight = input.blockHeight || 0;
+    const offset = input.offset || { dx: 0, dy: 0 };
+    let out;
+    if (!v || !(v.w > 0 && v.h > 0)) {
+      const width = vp.w * 0.8;
+      out = { mode: 'viewport', left: (vp.w - width) / 2, width, gap, bottom: vp.h * 0.85 };
+    } else {
+      const width = Math.round(v.w * 0.92);
+      const left = v.x + (v.w - width) / 2;
+      const fills = !!input.fullscreen || (v.w >= vp.w * 0.95 && v.h >= vp.h * 0.9);
+      const roomBelow = v.y + v.h + gap + blockHeight <= vp.h;
+      if (!fills && roomBelow) {
+        out = { mode: 'page', left, width, gap, top: v.y + v.h + gap };
+      } else {
+        const margin = Math.max(8, Math.round(v.h * 0.02));
+        let bottom = v.y + v.h - margin;
+        const c = input.controls;
+        if (c && c.h > 0 && c.y < bottom && c.y + c.h > bottom - blockHeight) bottom = c.y - gap;
+        out = { mode: 'overlay', left, width, gap, bottom };
+      }
+    }
+    out.left = Math.min(Math.max(0, out.left + (offset.dx || 0)), Math.max(0, vp.w - out.width));
+    if (out.top != null) out.top = Math.min(Math.max(0, out.top + (offset.dy || 0)), Math.max(0, vp.h - blockHeight));
+    if (out.bottom != null) out.bottom = Math.min(Math.max(blockHeight, out.bottom + (offset.dy || 0)), vp.h);
+    return out;
+  }
+
+  /**
+   * The site's control bar among the elements found over the video's bottom edge
+   * (candidates: [{rect, opacity, isVideo}], the top-most first): visible, anchored at
+   * the bottom of the video, wider than half of it and no taller than 30% of it. Returns
+   * its rect, or null.
+   */
+  function pickControls(candidates, video) {
+    if (!video) return null;
+    const bottom = video.y + video.h;
+    for (const c of candidates || []) {
+      const r = c.rect;
+      if (!r || c.isVideo || !(c.opacity > 0.05) || c.hidden) continue;
+      if (Math.abs(r.y + r.h - bottom) > 6) continue;
+      if (r.w < video.w * 0.5 || r.h < 16 || r.h > video.h * 0.3) continue;
+      return { x: r.x, y: r.y, w: r.w, h: r.h };
+    }
+    return null;
+  }
+
+  // Per-site control bars: the selector, and the class on the player while the bar is
+  // hidden (the generic rule finds bars by their place and visibility; these name them).
+  const CONTROLS_OVERRIDES = [
+    { host: /(^|\.)youtube\.com$/, selector: '.ytp-chrome-bottom', player: '.html5-video-player', hiddenClass: 'ytp-autohide' },
+    { host: /^(127\.0\.0\.1|localhost)$/, selector: '#controls', player: '.player', hiddenClass: null },  // the browser harness's pages
+  ];
+
+  function controlsOverride(origin) {
+    let host = '';
+    try { host = new URL(origin).hostname; } catch (_) { return null; }
+    return CONTROLS_OVERRIDES.find((o) => o.host.test(host)) || null;
+  }
+
+  const api = { fitLines, fontPx, isCJK, placement, pickControls, controlsOverride };
   root.STOverlayLayout = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })(typeof globalThis !== 'undefined' ? globalThis : self);

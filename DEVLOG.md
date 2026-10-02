@@ -686,3 +686,27 @@ D4 cloud providers off by default, keys only in backend config.
   turned off once for settings from an older schema, then the user's choice is kept. Harness: `--show-source`.
   Node tests `tests/overlay-layout.test.js` (layout math, defaults, migration, injection order); the older
   overlay tests turn the source on explicitly. Tallies: fast 334, node 109.
+- Batch 2 (put it where the video is not; commit "feat: below-video placement, controls avoidance, drag").
+  `lib/overlay-layout.js placement()` (pure): when the video does not fill the viewport (under 95 % of its
+  width or 90 % of its height, and not `document.fullscreenElement`) and there is room, the block goes directly
+  below the video's bottom edge (gap 6 px), centred on it, 92 % of its width, in the page's space; fullscreen, a
+  video that fills the viewport, or no room below: over the video's bottom with a margin of 2 % of its height
+  (min 8 px), lifted above a visible control bar (`pickControls`: a visible element over the video's bottom edge,
+  anchored at it, wider than half the video and under 30 % of its height; per-site overrides `CONTROLS_OVERRIDES`:
+  YouTube `.ytp-chrome-bottom` unless the player has `ytp-autohide`, the harness pages `#controls`); the dragged
+  offset is added and the block kept inside the viewport. The overlay: the container holds the extras (notices,
+  the language label; above the block over a video, below it on a page) and the draggable `.subtitle-block`;
+  `_updatePosition` on the body's and the video's ResizeObserver, scroll / resize / fullscreenchange / mousemove
+  (one rAF) and every 250 ms while something is on screen; pointer events with a 4 px threshold (a double-click
+  still edits); the offset per site origin and placement mode in `chrome.storage.local.overlayOffsets`.
+  **The block now holds one text per role, the newest**: each translation role shows the open line's draft, else
+  the last line's final (or its own draft while the final is on its way); the source row, when on, the line being
+  recognised, else the last line's words. The previous line's translation stays until the next line's first
+  draft (about 1.3 s later), the previous stacking (last final + next draft + next partial, up to six rows) is
+  gone: that is what keeps the block at two rows per role and inside the bottom 15 % of a fullscreen video.
+  Three node tests that pinned the stacking were updated. Browser tests `tests/test_overlay_browser.py` (slow):
+  on the harness page the block never intersects the video (0 of 94 samples) and the coverage is 0; filling
+  the viewport it is in the bottom 15 % in every sample; with the control bar showing (`--hover-controls`) it
+  never overlaps it; the YouTube page behind `ST_YOUTUBE_URL` (normal: 0 intersections; fullscreen: 74 of 74 in
+  the bottom 15 %, run `20261002T190628-ccbc91` with the bar showing, 0 overlaps). The fill page's video element
+  now fills the viewport for an audio-only clip too (`object-fit: contain`). Tallies: fast 334, slow 40, node 120.

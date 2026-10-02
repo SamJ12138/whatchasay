@@ -30,7 +30,9 @@ function newOverlay() {
 
 // what is on screen: [{kind, text, dimmed}] for caption lines, and the label (or null)
 function screen(overlay) {
-  const all = overlay.subtitleStack.children.map((el) => ({ classes: el.className.split(/\s+/), text: el.textContent }));
+  // caption lines in the block, notices and the label in the extras (overlay batch 2)
+  const all = overlay.subtitleStack.children.concat(overlay.extras ? overlay.extras.children : [])
+    .map((el) => ({ classes: el.className.split(/\s+/), text: el.textContent }));
   const label = all.find((l) => l.classes.includes('lang-pending')) || null;
   const lines = all.filter((l) => !l.classes.includes('notice')).map((l) => ({
     kind: ['primary', 'secondary', 'original', 'partial'].find((k) => l.classes.includes(k)),
@@ -107,10 +109,8 @@ test('confirmation of the provisional language undims what is on screen', () => 
   // no reset: the provisional recognizer was the right one
   overlay.setLanguageStatus('confirmed', { lang: 'en', name: 'English' });
   let s = screen(overlay);
-  assert.deepEqual(s.lines, [
-    { kind: 'original', text: 'Where did you put the keys?', dimmed: false },
-    { kind: 'partial', text: 'i will be', dimmed: false },
-  ]);
+  // the source row shows the newest words (overlay batch 2): the next line's partial
+  assert.deepEqual(s.lines, [{ kind: 'partial', text: 'i will be', dimmed: false }]);
   assert.equal(s.label, null);
 
   // the translation of that sentence was asked for while it was provisional
@@ -228,10 +228,10 @@ test('a line still being recognised is marked as in progress until its final rep
   assert.ok(!els[0].className.split(/\s+/).includes('in-progress'), 'the finished line is still marked in progress');
   assert.equal(els[0].dataset.state, undefined);
 
-  // the next line grows under the finished one
+  // the next line takes the source row (one text per role, the newest: overlay batch 2)
   overlay.showPartial('asr_1', 'i will be', 'en', 'manual');
   const kinds = overlay.subtitleStack.children.map((el) => el.dataset.state || 'done');
-  assert.deepEqual(kinds, ['done', 'in-progress']);
+  assert.deepEqual(kinds, ['in-progress']);
 });
 
 test('the in-progress mark is visible: italic, greyed, with a trailing ellipsis drawn by the style sheet', () => {

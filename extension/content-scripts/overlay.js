@@ -59,9 +59,23 @@ class SubtitleOverlay {
     this.editCueId = null;
     this.onCorrectionCallback = null;
 
-    // Position tracking
+    // Position tracking (docs/overlay/README.md): the block sits below the video in the
+    // page's space, or over its bottom when the video is fullscreen / fills the viewport;
+    // above the site's control bar when that is showing; draggable, the offset remembered
+    // per site origin and placement mode.
     this.videoElement = null;
     this.resizeObserver = null;
+    this.videoObserver = null;
+    this.block = null;
+    this.extras = null;
+    this.placementMode = null;      // 'page' | 'overlay' | 'viewport'
+    this.lastPlacement = null;
+    this.dragging = false;
+    this._drag = null;
+    this.dragOffsets = {};          // mode -> {dx, dy} for this origin
+    this._origin = (typeof window !== 'undefined' && window.location && window.location.origin) || '';
+    this._positionTimer = null;
+    this._positionRaf = null;
 
     // Live-caption state
     this.partial = null;   // { cueId, text, lang, provisional } - unstable ASR hypothesis
@@ -94,6 +108,8 @@ class SubtitleOverlay {
     this._createOverlay();
     this._setupResizeObserver();
     this._injectStyles();
+    this._loadOffsets();
+    this._updatePosition();
   }
 
   /**
@@ -103,6 +119,10 @@ class SubtitleOverlay {
     if (this.resizeObserver) {
       this.resizeObserver.disconnect();
     }
+    if (this.videoObserver) {
+      this.videoObserver.disconnect();
+    }
+    if (this._positionTimer) clearInterval(this._positionTimer);
 
     if (this.hostElement) {
       this.hostElement.remove();
@@ -112,6 +132,8 @@ class SubtitleOverlay {
     this.shadowRoot = null;
     this.container = null;
     this.subtitleStack = null;
+    this.block = null;
+    this.extras = null;
     this.currentCues.clear();
   }
 
@@ -496,6 +518,16 @@ class SubtitleOverlay {
   setVideoElement(video) {
     if (video === this.videoElement) return;
     this.videoElement = video;
+    if (this.videoObserver) {
+      this.videoObserver.disconnect();
+      this.videoObserver = null;
+    }
+    if (video && typeof ResizeObserver !== 'undefined') {
+      try {
+        this.videoObserver = new ResizeObserver(() => { this._updateStyles(); this._updatePosition(); });
+        this.videoObserver.observe(video);
+      } catch (_) { this.videoObserver = null; }
+    }
     this._updateStyles();   // the font follows the video's height
     this._updatePosition();
   }
@@ -522,16 +554,25 @@ class SubtitleOverlay {
     // Attach shadow DOM
     this.shadowRoot = this.hostElement.attachShadow({ mode: 'closed' });
 
-    // Create container
+    // Create container: the extras (notices, the language label) and the subtitle block
     this.container = document.createElement('div');
     this.container.className = 'overlay-container';
 
-    // Create subtitle stack
+    this.extras = document.createElement('div');
+    this.extras.className = 'overlay-extras';
+
+    // the draggable block that holds the caption lines
+    this.block = document.createElement('div');
+    this.block.className = 'subtitle-block';
+
     this.subtitleStack = document.createElement('div');
     this.subtitleStack.className = 'subtitle-stack';
 
-    this.container.appendChild(this.subtitleStack);
+    this.block.appendChild(this.subtitleStack);
+    this.container.appendChild(this.extras);
+    this.container.appendChild(this.block);
     this.shadowRoot.appendChild(this.container);
+    this._setupDrag();
 
     // Add to page
     document.body.appendChild(this.hostElement);
@@ -558,17 +599,52 @@ class SubtitleOverlay {
       .overlay-container {
         position: fixed;
         bottom: 15%;
-        left: 50%;
-        transform: translateX(-50%);
+        left: 10%;
+        width: 80%;
         display: flex;
         flex-direction: column;
         align-items: center;
         gap: 4px;
-        max-width: 80%;
+        pointer-events: none;
+      }
+
+      /* below the video: the extras go under the block; over it: above the block */
+      .overlay-container.mode-page {
+        flex-direction: column-reverse;
+      }
+
+      .overlay-extras {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 2px;
+        max-width: 100%;
+      }
+
+      .overlay-extras:empty {
+        display: none;
+      }
+
+      /* the block the viewer can drag */
+      .subtitle-block {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: flex-end;
+        width: 100%;
+        box-sizing: border-box;
+        pointer-events: auto;
+        cursor: grab;
+        touch-action: none;
+        user-select: none;
+      }
+
+      .subtitle-block:has(.subtitle-stack:empty) {
         pointer-events: none;
       }
 
       .subtitle-stack {
+        max-width: 100%;
         display: flex;
         flex-direction: column;
         align-items: center;
@@ -700,8 +776,11 @@ class SubtitleOverlay {
   }
 
   /**
-   * Update the display with current cues.
-   * Now supports arbitrary language pairs (not just en/zh).
+   * Update the display. The block holds one text per role, the newest (docs/overlay/
+   * README.md): each translation role shows the open line's draft if there is one, else
+   * the last line's final translation (or its own draft while the final is on its way);
+   * the source role, when it is on, shows the line being recognised, else the last
+   * line's words. So the block is at most two rows per role, whatever is in flight.
    */
   _updateDisplay() {
     if (!this.subtitleStack) return;
@@ -712,99 +791,80 @@ class SubtitleOverlay {
     // Clear existing
     this.subtitleStack.innerHTML = '';
 
-    if (this.currentCues.size === 0) {
-      this._renderExtras();
-      return;
-    }
-
     // The cue being edited, else the most recent cue
     const lastCue = this.editMode && this.currentCues.has(this.editCueId)
       ? [this.editCueId, this.currentCues.get(this.editCueId)]
-      : Array.from(this.currentCues.entries()).pop();
-    if (!lastCue) { this._renderExtras(); return; }
+      : (this.currentCues.size ? Array.from(this.currentCues.entries()).pop() : null);
+    const cueId = lastCue ? lastCue[0] : null;
+    const cueData = lastCue ? lastCue[1] : null;
+    const translations = (cueData && cueData.translations) || {};
+    const revised = !!(cueData && cueData.revised);
+    const dim = (line) => { if (cueData && cueData.provisional) line.classList.add('provisional'); return line; };
+    const usable = (lang) => this._usable(translations[lang]);
+    // a live line whose final translation is still on its way keeps its draft until then
+    const lastDraft = cueId ? this.drafts.get(cueId) : null;
 
-    const [cueId, cueData] = lastCue;
-    const { original, translations } = cueData;
-    const revised = !!cueData.revised;
-    const dim = (line) => { if (cueData.provisional) line.classList.add('provisional'); return line; };
+    // the open line: the one still being recognised (its draft, its partial text)
+    const openCue = this.partial ? this.partial.cueId : this._openDraftCue;
+    const openDraft = openCue && !this.currentCues.has(openCue) && !this.editMode ? this.drafts.get(openCue) : null;
+    const openDimmed = !!(openDraft && openDraft.provisional) || !!(this.partial && this.partial.provisional);
 
     // Determine order based on primaryOnTop and configured languages
     const primary = this.primaryOnTop ? this.primaryLang : this.secondaryLang;
     const secondary = this.primaryOnTop ? this.secondaryLang : this.primaryLang;
 
-    const usable = (lang) => this._usable(translations[lang]);
-    // a live line whose final translation is still on its way keeps its draft until then
-    const draft = this.drafts.get(cueId);
-
-    // Add primary translation
-    if (usable(primary)) {
-      const line = this._createSubtitleLine(this._translationText(translations[primary]), 'primary', cueId, primary, revised);
-      this.subtitleStack.appendChild(dim(line));
-    } else if (draft && this._usable(draft.translations[primary])) {
-      this.subtitleStack.appendChild(this._createDraftLine(draft.translations[primary], 'primary', cueId, primary, draft.provisional || cueData.provisional));
+    let shown = false;
+    for (const [role, lang] of [['primary', primary], ['secondary', secondary]]) {
+      if (!lang || lang === 'none') continue;
+      if (openDraft && this._usable(openDraft.translations[lang])) {
+        this.subtitleStack.appendChild(this._createDraftLine(openDraft.translations[lang], role, openCue, lang, openDimmed));
+        shown = true;
+      } else if (cueData && usable(lang)) {
+        this.subtitleStack.appendChild(dim(this._createSubtitleLine(this._translationText(translations[lang]), role, cueId, lang, revised)));
+        shown = true;
+      } else if (lastDraft && this._usable(lastDraft.translations[lang])) {
+        this.subtitleStack.appendChild(this._createDraftLine(lastDraft.translations[lang], role, cueId, lang, lastDraft.provisional || cueData.provisional));
+        shown = true;
+      }
     }
 
-    // Add secondary translation (if configured and different from primary)
-    if (secondary && secondary !== 'none' && usable(secondary)) {
-      const line = this._createSubtitleLine(this._translationText(translations[secondary]), 'secondary', cueId, secondary, revised);
-      this.subtitleStack.appendChild(dim(line));
-    } else if (secondary && secondary !== 'none' && draft && this._usable(draft.translations[secondary])) {
-      this.subtitleStack.appendChild(this._createDraftLine(draft.translations[secondary], 'secondary', cueId, secondary, draft.provisional || cueData.provisional));
-    }
-
-    // The source line when it is on; also when the cue has nothing else to show (no
-    // translation yet and no draft), so the viewer is never left with nothing.
-    const hasTranslation = Object.keys(translations || {}).some(usable);
-    const hasDraft = !!draft && Object.keys(draft.translations).some((l) => this._usable(draft.translations[l]));
-    if ((this.showOriginal || !(hasTranslation || hasDraft)) && original) {
-      const line = this._createSubtitleLine(original, 'original', cueId, null, revised, cueData.sourceLang);
-      this.subtitleStack.appendChild(dim(line));
+    // The source line when it is on: the line still being recognised, truncated from the
+    // start so the newest words stay on screen; else the last line's words. Also when
+    // there is nothing else to show, so the viewer is never left with nothing.
+    if (this.showOriginal && this.partial && this.partial.text) {
+      const line = document.createElement('div');
+      line.className = 'subtitle-line partial in-progress' + (this.partial.provisional ? ' provisional' : '');
+      line.textContent = this._fit(this.partial.text, this.partial.lang);
+      line.dataset.cueId = this.partial.cueId;
+      line.dataset.state = 'in-progress';
+      this.subtitleStack.appendChild(line);
+    } else if (cueData && cueData.original && (this.showOriginal || !shown)) {
+      this.subtitleStack.appendChild(dim(this._createSubtitleLine(cueData.original, 'original', cueId, null, revised, cueData.sourceLang)));
     }
 
     this._renderExtras();
   }
 
   /**
-   * Render the partial (unstable) caption, the language label and any notice below the stack.
+   * The language label and any notice, in the extras next to the block.
    */
   _renderExtras() {
-    // the open line: its draft translation(s), then its growing source text
-    const openCue = this.partial ? this.partial.cueId : this._openDraftCue;
-    const draft = openCue && !this.currentCues.has(openCue) ? this.drafts.get(openCue) : null;
-    if (draft) {
-      const primary = this.primaryOnTop ? this.primaryLang : this.secondaryLang;
-      const secondary = this.primaryOnTop ? this.secondaryLang : this.primaryLang;
-      const dimmed = draft.provisional || !!(this.partial && this.partial.provisional);
-      if (this._usable(draft.translations[primary])) {
-        this.subtitleStack.appendChild(this._createDraftLine(draft.translations[primary], 'primary', openCue, primary, dimmed));
-      }
-      if (secondary && secondary !== 'none' && this._usable(draft.translations[secondary])) {
-        this.subtitleStack.appendChild(this._createDraftLine(draft.translations[secondary], 'secondary', openCue, secondary, dimmed));
-      }
-    }
-    if (this.showOriginal && this.partial && this.partial.text) {
-      const line = document.createElement('div');
-      // the line still being recognised: its text grows with every partial result, and is
-      // truncated from the start so the newest words stay on screen
-      line.className = 'subtitle-line partial in-progress' + (this.partial.provisional ? ' provisional' : '');
-      line.textContent = this._fit(this.partial.text, this.partial.lang);
-      line.dataset.cueId = this.partial.cueId;
-      line.dataset.state = 'in-progress';
-      this.subtitleStack.appendChild(line);
-    }
+    const extras = this.extras || this.subtitleStack;
+    if (this.extras) this.extras.innerHTML = '';
     const label = this._languageLabel();
     if (label) {
       const line = document.createElement('div');
       line.className = 'subtitle-line notice lang-pending' + (label.kind === 'warn' ? ' warn' : '');
       line.textContent = label.text;
-      this.subtitleStack.appendChild(line);
+      extras.appendChild(line);
     }
     if (this.notice && this.notice.text) {
       const line = document.createElement('div');
       line.className = 'subtitle-line notice' + (this.notice.kind === 'warn' ? ' warn' : '');
       line.textContent = this.notice.text;
-      this.subtitleStack.appendChild(line);
+      extras.appendChild(line);
     }
+    this._schedulePosition();
   }
 
   /**
@@ -929,24 +989,209 @@ class SubtitleOverlay {
     this.resizeObserver = new ResizeObserver(() => {
       this._updatePosition();
     });
-
     this.resizeObserver.observe(document.body);
+    // the video's place on screen changes with scrolling, resizing and fullscreen; the
+    // site's control bar comes and goes with the mouse
+    try {
+      const reposition = () => this._schedulePosition();
+      window.addEventListener('scroll', reposition, { passive: true, capture: true });
+      window.addEventListener('resize', reposition, { passive: true });
+      document.addEventListener('fullscreenchange', reposition);
+      document.addEventListener('mousemove', reposition, { passive: true });
+    } catch (_) {}
+    this._positionTimer = setInterval(() => {
+      if (this.currentCues.size || this.partial || this.drafts.size) this._updatePosition();
+    }, 250);
+    // under node (tests) a live interval would keep the process alive
+    if (this._positionTimer && typeof this._positionTimer.unref === 'function') this._positionTimer.unref();
+  }
+
+  _schedulePosition() {
+    if (this._positionRaf) return;
+    const raf = typeof requestAnimationFrame === 'function' ? requestAnimationFrame : (f) => setTimeout(f, 16);
+    this._positionRaf = raf(() => { this._positionRaf = null; this._updatePosition(); });
+  }
+
+  _videoRect() {
+    if (!this.videoElement || typeof this.videoElement.getBoundingClientRect !== 'function') return null;
+    try {
+      const r = this.videoElement.getBoundingClientRect();
+      return { x: r.left, y: r.top, w: r.width, h: r.height };
+    } catch (_) { return null; }
+  }
+
+  _isFullscreen() {
+    const fs = typeof document !== 'undefined' ? document.fullscreenElement : null;
+    if (!fs) return false;
+    if (!this.videoElement) return true;
+    try { return fs === this.videoElement || (typeof fs.contains === 'function' && fs.contains(this.videoElement)); } catch (_) { return true; }
   }
 
   /**
-   * Update overlay position based on video element.
+   * The block's height for placement: its rendered height, else what the configured
+   * rows take (two rows of the translation's font plus padding).
+   */
+  blockHeight() {
+    const h = this.block && this.block.offsetHeight;
+    if (h > 0) return h;
+    const rows = Math.max(1, this.settings.maxLines || 2);
+    const text = this.roleStyle('primary').fontPx;
+    return Math.round(rows * text * this.settings.lineHeight + text * 0.3);
+  }
+
+  /**
+   * The site's control bar when it is showing over the video, as a rect, else null.
+   * Per-site override first (lib/overlay-layout.js CONTROLS_OVERRIDES), else the generic
+   * rule: a bottom-anchored, wide, visible element over the video's bottom edge.
+   */
+  _controlsRect(video) {
+    const layout = globalThis.STOverlayLayout;
+    if (!layout || !video || typeof document === 'undefined') return null;
+    const rectOf = (el) => { const r = el.getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height }; };
+    const visible = (el) => {
+      try {
+        const cs = getComputedStyle(el);
+        return !(cs.opacity === '0' || cs.visibility === 'hidden' || cs.display === 'none');
+      } catch (_) { return true; }
+    };
+    const override = layout.controlsOverride(this._origin);
+    if (override) {
+      try {
+        const el = document.querySelector(override.selector);
+        if (!el) return null;
+        const player = override.player ? el.closest(override.player) : null;
+        if (override.hiddenClass && player && player.classList.contains(override.hiddenClass)) return null;
+        if (!visible(el)) return null;
+        const r = rectOf(el);
+        return r.h > 0 ? r : null;
+      } catch (_) { return null; }
+    }
+    if (typeof document.elementsFromPoint !== 'function') return null;
+    const candidates = [];
+    const seen = new Set();
+    for (const fx of [0.5, 0.25, 0.75]) {
+      let els = [];
+      try { els = document.elementsFromPoint(video.x + video.w * fx, video.y + video.h - 10); } catch (_) {}
+      for (const el of els) {
+        if (el === this.videoElement) break;   // only what is drawn over the video
+        if (seen.has(el) || el === this.hostElement) continue;
+        seen.add(el);
+        let opacity = 1;
+        try { opacity = parseFloat(getComputedStyle(el).opacity); } catch (_) {}
+        candidates.push({ rect: rectOf(el), opacity: Number.isNaN(opacity) ? 1 : opacity, hidden: !visible(el) });
+      }
+    }
+    return layout.pickControls(candidates, video);
+  }
+
+  /**
+   * Put the container where the video is not: below a page video, over the bottom of a
+   * fullscreen one (lib/overlay-layout.js placement), the dragged offset added.
    */
   _updatePosition() {
     if (!this.container) return;
-
-    if (this.videoElement) {
-      const rect = this.videoElement.getBoundingClientRect();
-      const bottomOffset = window.innerHeight - rect.bottom + 50;
-
-      this.container.style.bottom = `${Math.max(50, bottomOffset)}px`;
-      this.container.style.maxWidth = `${rect.width * 0.9}px`;
+    const layout = globalThis.STOverlayLayout;
+    if (!layout) return;
+    const video = this._videoRect();
+    const viewport = { w: window.innerWidth || 0, h: window.innerHeight || 0 };
+    const fullscreen = this._isFullscreen();
+    const fills = !!video && (fullscreen || (video.w >= viewport.w * 0.95 && video.h >= viewport.h * 0.9));
+    const controls = video && fills ? this._controlsRect(video) : null;
+    const blockHeight = this.blockHeight();
+    // the mode first (without the offset), so the offset of that mode applies
+    const probe = layout.placement({ video, viewport, fullscreen, blockHeight, controls });
+    const offset = this.dragOffsets[probe.mode] || null;
+    const p = offset ? layout.placement({ video, viewport, fullscreen, blockHeight, controls, offset }) : probe;
+    this.placementMode = p.mode;
+    this.lastPlacement = p;
+    const st = this.container.style;
+    st.left = `${Math.round(p.left)}px`;
+    st.width = `${Math.round(p.width)}px`;
+    st.maxWidth = 'none';
+    st.transform = 'none';
+    if (p.top != null) {
+      st.top = `${Math.round(p.top)}px`;
+      st.bottom = 'auto';
+    } else {
+      st.top = 'auto';
+      st.bottom = `${Math.round(viewport.h - p.bottom)}px`;
     }
+    const cls = 'overlay-container mode-' + p.mode;
+    if (this.container.className !== cls) this.container.className = cls;
   }
+
+  // ---- drag: the block follows the pointer; the offset is kept per origin and mode ----
+
+  _setupDrag() {
+    if (!this.block) return;
+    const THRESHOLD = 4;
+    this.block.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0 || this.editMode) return;
+      this._drag = { x: e.clientX, y: e.clientY, moved: false, pointerId: e.pointerId };
+    });
+    this.block.addEventListener('pointermove', (e) => {
+      if (!this._drag) return;
+      const dx = e.clientX - this._drag.x, dy = e.clientY - this._drag.y;
+      if (!this._drag.moved) {
+        if (Math.abs(dx) < THRESHOLD && Math.abs(dy) < THRESHOLD) return;
+        this._drag.moved = true;
+        this.dragging = true;
+        const mode = this.placementMode || 'viewport';
+        this._drag.mode = mode;
+        this._drag.base = Object.assign({ dx: 0, dy: 0 }, this.dragOffsets[mode] || {});
+        try { if (typeof this.block.setPointerCapture === 'function') this.block.setPointerCapture(e.pointerId); } catch (_) {}
+      }
+      if (typeof e.preventDefault === 'function') e.preventDefault();
+      this.dragOffsets[this._drag.mode] = { dx: this._drag.base.dx + dx, dy: this._drag.base.dy + dy };
+      this._updatePosition();
+    });
+    const end = () => {
+      if (!this._drag) return;
+      const moved = this._drag.moved;
+      const mode = this._drag.mode;
+      this._drag = null;
+      this.dragging = false;
+      if (moved) {
+        this._saveOffsets();
+        console.log('[Overlay] Dragged:', mode, this.dragOffsets[mode]);
+      }
+    };
+    this.block.addEventListener('pointerup', end);
+    this.block.addEventListener('pointercancel', end);
+  }
+
+  _storage() {
+    try { return (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) || null; } catch (_) { return null; }
+  }
+
+  _loadOffsets() {
+    const storage = this._storage();
+    if (!storage || !this._origin) return;
+    try {
+      storage.get('overlayOffsets', (r) => {
+        try { void (chrome.runtime && chrome.runtime.lastError); } catch (_) {}
+        const all = (r && r.overlayOffsets) || {};
+        if (all[this._origin]) {
+          this.dragOffsets = Object.assign({}, all[this._origin]);
+          this._updatePosition();
+        }
+      });
+    } catch (_) {}
+  }
+
+  _saveOffsets() {
+    const storage = this._storage();
+    if (!storage || !this._origin) return;
+    try {
+      storage.get('overlayOffsets', (r) => {
+        try { void (chrome.runtime && chrome.runtime.lastError); } catch (_) {}
+        const all = Object.assign({}, (r && r.overlayOffsets) || {});
+        all[this._origin] = Object.assign({}, this.dragOffsets);
+        storage.set({ overlayOffsets: all }, () => { try { void (chrome.runtime && chrome.runtime.lastError); } catch (_) {} });
+      });
+    } catch (_) {}
+  }
+
 }
 
 // Export singleton instance
