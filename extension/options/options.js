@@ -496,6 +496,27 @@ function updatePreview(settings) {
 /**
  * Check backend connection status
  */
+// Target languages without a translation route from the spoken language are greyed out
+// (lib/target-routes.js); `routes` comes from the backend's /health/json.
+let routes = null;
+
+function applyTargetRoutes() {
+  const source = elements.asrSourceLang?.value || 'auto';
+  for (const id of ['primaryLang', 'secondaryLang']) {
+    const select = document.getElementById(id);
+    if (!select) continue;
+    const targets = Array.from(select.options).map((o) => o.value).filter((v) => v !== 'none');
+    const avail = STTargetRoutes.availability(routes, source, targets);
+    for (const opt of select.options) {
+      const a = avail[opt.value];
+      if (!a) continue;
+      opt.disabled = !a.available && !opt.selected;  // a saved choice stays visible, marked below
+      opt.title = a.reason || '';
+      opt.textContent = opt.textContent.replace(/ \(no route\)$/, '') + (a.available ? '' : ' (no route)');
+    }
+  }
+}
+
 async function checkConnection(host, port) {
   const t0 = performance.now();
   obs.setEndpointFromWs(`ws://${host}:${port}/ws`);
@@ -513,6 +534,8 @@ async function checkConnection(host, port) {
 
     if (response.ok) {
       const data = await response.json();
+      routes = data.routes || null;
+      applyTargetRoutes();
       showStorageNote(data.privacy && data.privacy.tm);
       showCloudStatus(data.privacy && data.privacy.cloud);
       if (elements.connectionStatus) {
@@ -806,6 +829,7 @@ document.addEventListener('DOMContentLoaded', () => {
   initEventListeners();
   initCaptionMode();
   showBoundShortcuts();
+  elements.asrSourceLang?.addEventListener('change', applyTargetRoutes);
 
   // Periodic connection check
   setInterval(() => {

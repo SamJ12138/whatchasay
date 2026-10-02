@@ -207,6 +207,8 @@ class HealthResponse(BaseModel):
     privacy: Dict[str, Any] = Field(default_factory=dict)
     # this process's run log: logs/run_<run_id>.jsonl (scripts/failure_report.py)
     run_id: str = Field(default="")
+    # {spoken language: [targets the loaded engines can reach]}; the options page greys out the rest
+    routes: Dict[str, List[str]] = Field(default_factory=dict)
 
 
 class TranslationMemoryEntry(BaseModel):

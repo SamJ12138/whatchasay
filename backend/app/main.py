@@ -493,7 +493,15 @@ async def health_check_json():
         refiner_enabled=settings.refiner.enabled,
         privacy=privacy_summary(),
         run_id=obs.RUN_ID,
+        routes=translation_routes(pipeline.base_translator),
     )
+
+
+def translation_routes(translator) -> Dict[str, List[str]]:
+    """For each spoken language with a streaming model, the offered target languages that
+    the loaded engines can translate into (directly or through English)."""
+    targets = settings.translation.supported_languages
+    return {src: [t for t in targets if t != src and translator.supports(src, t)] for src in settings.asr.languages}
 
 
 def privacy_summary() -> Dict[str, Any]:

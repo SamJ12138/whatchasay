@@ -116,7 +116,8 @@ Click **Stop Live Captions** in the popup, or press **Alt+L**, to stop.
 automatic detection among the three. Translation targets offered: English, Chinese (Simplified), Bengali, Vietnamese,
 Japanese, Korean, Spanish, French, German, Russian, Portuguese and Italian. With the default OPUS-MT engine every
 one of them works from English, Mandarin and Bengali speech except Korean and Portuguese, which have no OPUS-MT
-model from English (the subtitle stays untranslated); they work with the optional HY-MT or cloud engines.
+model from English; the Settings page greys them out ("no local model for en->ko") for the spoken language chosen
+under *Live Captions*. They work with the optional HY-MT or cloud engines.
 Directions without a direct model go through English (for example Mandarin to Bengali).
 
 **Target languages.** Extension icon → **Settings** (bottom of the popup) → *Translation*: **Primary** and
@@ -148,7 +149,7 @@ Alt+. larger font (the popup also has a smaller-font button), Alt+E edit the cur
 | "Failed: Cannot connect to the backend at ..." or "backend disconnected" in the popup | Is `run.py` still running? `http://127.0.0.1:8765/health/json` must answer |
 | "Live captions need permission to capture this tab's audio" | Click **Start Live Captions** in the popup and allow it (Alt+L cannot ask; it opens the popup) |
 | Start fails on a `chrome://` page or the Chrome Web Store | Chrome does not allow capturing those; use a normal web page |
-| Captions but no translation | The target equals the spoken language, or the target is Korean/Portuguese with OPUS-MT |
+| Captions but no translation | The target equals the spoken language, or it is greyed out in Settings (no route from that language) |
 | "No audio reaching capture (DRM site or paused video)" | The video is paused, or the site protects its audio |
 | Port 8765 is taken | `run.py --port 8766`, then set the server address in **Settings → Connection** |
 | The backend log says a model is missing | Run step 3 again; it skips what is already there |

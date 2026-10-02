@@ -406,4 +406,10 @@ D4 cloud providers off by default, keys only in backend config.
   with a translation; the edited cue is neither hidden (8 s timer) nor dropped by the next sentence, and the
   overlay does not rebuild the line while it is being typed in. Browser harness `--correct` (Alt+E, type, Enter
   while the clip plays; `/stats` `user_corrections` 0 -> 1).
+- Target-language picker: `/health/json` `routes` = for each spoken language, the offered targets the loaded engines
+  can reach (`BaseTranslator.supports`, pivot included). `lib/target-routes.js` turns that into availability for the
+  spoken language chosen in Settings (Auto-detect: greyed only if no spoken language reaches the target, otherwise a
+  note naming the missing pairs); the Settings page disables those options, adds "(no route)" and the reason as a
+  tooltip ("no local model for en->ko"); a saved choice stays selectable-visible; no backend = nothing greyed.
+  With OPUS-MT: Korean and Portuguese, from all three spoken languages (checked in Chromium).
 
