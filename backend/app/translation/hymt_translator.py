@@ -8,9 +8,11 @@ OpenAI-compatible HTTP API on localhost (a few ms overhead). This avoids the
 Python binding, whose prebuilt wheels either crash on CPUs without AVX-512
 or predate the HunYuan architecture.
 
-Binary:  backend/bin/llama/llama-server.exe  (auto-downloaded from the
-         ggml-org/llama.cpp GitHub release if missing)
-Model:   backend/data/models/mt/HY-MT1.5-1.8B-Q8_0.gguf (auto-downloaded)
+Optional engine (D1): used only with SUBTITLE_MT__ENGINE=hymt, and never
+downloaded by the backend: `python scripts/download_models.py --hymt
+--accept-hymt-license` fetches both files after showing the license summary.
+Binary:  backend/bin/llama/llama-server.exe  (llama.cpp release build, MIT)
+Model:   backend/data/models/mt/HY-MT1.5-1.8B-Q4_K_M.gguf (Tencent HY Community License)
 CUDA:    the runtime DLLs bundled with the torch wheel are put on PATH for
          the child process, so no separate CUDA Toolkit is needed (the torch
          package is located with importlib, never imported: P9).
@@ -122,36 +124,72 @@ def _cuda_dll_dirs() -> List[str]:
     return dirs
 
 
+DOWNLOAD_HINT = "python scripts/download_models.py --hymt --accept-hymt-license"
+
+
+def hymt_missing(device: str, gguf_path: Optional[Path] = None) -> Optional[str]:
+    """Why HY-MT cannot run here, as one line naming the download script; None if it can."""
+    gguf = Path(gguf_path or settings.mt.hymt_gguf)
+    if device != "cuda":
+        return "HY-MT is configured but needs an NVIDIA GPU (CUDA not found); using OPUS-MT on CPU."
+    if not gguf.exists():
+        return f"HY-MT is configured but its model is not downloaded ({gguf}); run: {DOWNLOAD_HINT} (using OPUS-MT meanwhile)."
+    if not LLAMA_SERVER.exists():
+        return f"HY-MT is configured but llama-server is missing ({LLAMA_SERVER}); run: {DOWNLOAD_HINT} (using OPUS-MT meanwhile)."
+    return None
+
+
 def ensure_llama_server() -> Path:
-    """Download the llama.cpp release build if the binary is missing."""
+    """The llama-server binary; never downloaded at runtime (see download_llama_server)."""
     if LLAMA_SERVER.exists():
         return LLAMA_SERVER
+    raise FileNotFoundError(f"llama-server not found at {LLAMA_SERVER}; run: {DOWNLOAD_HINT}")
+
+
+def download_llama_server(bin_dir: Path = LLAMA_BIN_DIR) -> Path:
+    """Fetch the llama.cpp release build into bin_dir (scripts/download_models.py --hymt)."""
+    bin_dir = Path(bin_dir)
+    server = bin_dir / LLAMA_SERVER.name
+    if server.exists():
+        return server
     if sys.platform != "win32":
         raise RuntimeError("Automatic llama.cpp download is only implemented for Windows; install llama-server manually into bin/llama/")
     import urllib.request
 
-    LLAMA_BIN_DIR.mkdir(parents=True, exist_ok=True)
-    archive = LLAMA_BIN_DIR / "llama.zip"
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    archive = bin_dir / "llama.zip"
     logger.info("Downloading llama.cpp %s (CUDA build) ...", LLAMA_RELEASE)
     _plog("start", action="download", release=LLAMA_RELEASE)
     t0 = time.perf_counter()
     try:
         urllib.request.urlretrieve(LLAMA_ZIP_URL, archive)
         with zipfile.ZipFile(archive) as zf:
-            zf.extractall(LLAMA_BIN_DIR)
+            zf.extractall(bin_dir)
         archive.unlink(missing_ok=True)
-        (LLAMA_BIN_DIR / "VERSION.txt").write_text(LLAMA_RELEASE)
-        if not LLAMA_SERVER.exists():
+        (bin_dir / "VERSION.txt").write_text(LLAMA_RELEASE)
+        if not server.exists():
             raise RuntimeError("llama-server binary missing after extraction")
     except Exception as e:
         _plog("fail", duration_ms=(time.perf_counter() - t0) * 1000, error_type=obs.classify(e),
               error_message=str(e), action="download")
         raise
     _plog("success", duration_ms=(time.perf_counter() - t0) * 1000, action="download")
-    return LLAMA_SERVER
+    return server
 
 
-LLAMA_AVAILABLE = LLAMA_SERVER.exists() or sys.platform == "win32"
+def download_hymt_model(dest: Path) -> Path:
+    """Fetch the GGUF (scripts/download_models.py --hymt, after the license is accepted)."""
+    from huggingface_hub import hf_hub_download
+
+    dest = Path(dest)
+    if dest.exists():
+        return dest
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    logger.info("Downloading %s from %s ...", dest.name, settings.mt.hymt_repo)
+    return Path(hf_hub_download(settings.mt.hymt_repo, dest.name, local_dir=str(dest.parent)))
+
+
+LLAMA_AVAILABLE = LLAMA_SERVER.exists()
 
 
 class HyMTEngine:
@@ -185,14 +223,10 @@ class HyMTEngine:
     # -- process management ------------------------------------------------
 
     def _ensure_model(self) -> Path:
+        """The GGUF; never downloaded at runtime (its license is accepted in the download script)."""
         if self.gguf_path.exists():
             return self.gguf_path
-        from huggingface_hub import hf_hub_download
-
-        logger.info("Downloading %s from %s ...", settings.mt.hymt_file, settings.mt.hymt_repo)
-        self.gguf_path.parent.mkdir(parents=True, exist_ok=True)
-        path = hf_hub_download(settings.mt.hymt_repo, settings.mt.hymt_file, local_dir=str(self.gguf_path.parent))
-        return Path(path)
+        raise FileNotFoundError(f"HY-MT model not found at {self.gguf_path}; run: {DOWNLOAD_HINT}")
 
     @staticmethod
     def _alive(proc: Optional[subprocess.Popen]) -> bool:

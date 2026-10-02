@@ -72,8 +72,7 @@ Backend: `backend/app/config.py` or environment variables with prefix `SUBTITLE_
 
 ```bash
 SUBTITLE_ASR__LANGUAGES='["en","zh","bn"]'
-SUBTITLE_MT__ENGINE_ORDER='["hymt","opus","cloud"]'
-SUBTITLE_MT__HYMT_FILE=HY-MT1.5-1.8B-Q4_K_M.gguf     # smaller/faster quant
+SUBTITLE_MT__ENGINE=hymt                              # optional GPU engine (default: opus); scripts/download_models.py --hymt
 SUBTITLE_REFINER__ENABLED=true SUBTITLE_REFINER__PROVIDER=groq SUBTITLE_REFINER__GROQ_API_KEY=...
 SUBTITLE_CLOUD__GOOGLE_API_KEY=...                    # cloud translation tier
 ```

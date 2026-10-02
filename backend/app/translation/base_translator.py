@@ -83,9 +83,15 @@ class MTEngine(Protocol):
 
 
 class _Ct2Marian:
-    """One loaded OPUS-MT model (translator + sentencepiece tokenizers)."""
+    """One loaded OPUS-MT model (translator + sentencepiece tokenizers).
 
-    def __init__(self, model_dir: Path, device: str, compute_type: str, intra_threads: int):
+    Source tokens are built like Hugging Face's MarianTokenizer: optional
+    target-language token (multi-target models), the pieces, then "</s>".
+    Without the end-of-sentence token the decoder does not know where the input
+    ends and runs on (repeats, paraphrases, up to the length cap): D1."""
+
+    def __init__(self, model_dir: Path, device: str, compute_type: str, intra_threads: int,
+                 target_token: Optional[str] = None):
         import sentencepiece as spm  # local import: optional dep for cloud-only installs
 
         self.translator = ctranslate2.Translator(
@@ -97,15 +103,21 @@ class _Ct2Marian:
         )
         self.sp_source = spm.SentencePieceProcessor(model_file=str(model_dir / "source.spm"))
         self.sp_target = spm.SentencePieceProcessor(model_file=str(model_dir / "target.spm"))
+        self.prefix = [target_token] if target_token else []
 
-    def translate(self, texts: List[str], beam_size: int = 2, max_tokens: int = 128) -> List[str]:
-        tokens = [self.sp_source.encode(t, out_type=str) for t in texts]
+    def translate(self, texts: List[str]) -> List[str]:
+        cfg = settings.translation
+        tokens = [self.prefix + self.sp_source.encode(t, out_type=str) + ["</s>"] for t in texts]
+        max_len = cfg.opus_max_tokens
+        if cfg.opus_max_length_ratio > 0:
+            longest = max((len(t) for t in tokens), default=0)
+            max_len = min(max_len, int(cfg.opus_max_length_ratio * longest) + 4)
         results = self.translator.translate_batch(
             tokens,
-            beam_size=beam_size,
-            max_decoding_length=max_tokens,
-            repetition_penalty=1.2,
-            no_repeat_ngram_size=2,
+            beam_size=cfg.opus_beam_size,
+            max_decoding_length=max_len,
+            repetition_penalty=cfg.opus_repetition_penalty,
+            no_repeat_ngram_size=cfg.opus_no_repeat_ngram_size,
         )
         out = []
         for r in results:
@@ -149,7 +161,8 @@ class OpusCT2Engine:
         if not (out_dir / "model.bin").exists():
             self._convert(hf_name, out_dir)
         t0 = time.time()
-        model = _Ct2Marian(out_dir, self.device, self.compute_type, self.intra_threads)
+        model = _Ct2Marian(out_dir, self.device, self.compute_type, self.intra_threads,
+                           target_token=settings.translation.opus_target_tokens.get(hf_name))
         logger.info("Loaded OPUS-MT %s in %.1fs", hf_name, time.time() - t0)
         with self._lock:
             self._models[hf_name] = model
@@ -224,14 +237,16 @@ class BaseTranslator:
                 if name == "opus" and CT2_AVAILABLE:
                     self.engines["opus"] = OpusCT2Engine(settings.translation.ct2_dir, self.device)
                 elif name == "hymt":
-                    from .hymt_translator import HyMTEngine, LLAMA_AVAILABLE
+                    from .hymt_translator import HyMTEngine, hymt_missing
 
-                    if LLAMA_AVAILABLE and self.device == "cuda":
+                    missing = hymt_missing(self.device)
+                    if missing is None:
                         self.engines["hymt"] = HyMTEngine()
                     else:
-                        logger.info("HY-MT engine skipped (llama-cpp: %s, device: %s)", LLAMA_AVAILABLE, self.device)
-                        obs.log("startup", "skip", error_type="process", component="mt_engine", engine="hymt",
-                                error_message=f"HY-MT skipped (llama-server available: {LLAMA_AVAILABLE}, device: {self.device})")
+                        # optional engine (D1): one line, nothing downloaded, OPUS-MT serves
+                        logger.warning(missing)
+                        obs.log("startup", "skip", error_type="input_invalid", component="mt_engine", engine="hymt",
+                                error_message=missing, degraded="HY-MT not registered; OPUS-MT serves")
                 elif name == "cloud":
                     from .cloud_translator import make_cloud_engine
 

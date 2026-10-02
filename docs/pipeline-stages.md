@@ -64,8 +64,8 @@ Other HTTP callers (`/translate`, `/config`, `/stats`, options page `fetch`) are
 
 | Step | Owner | What happens | Failure modes |
 |---|---|---|---|
-| Binary | `hymt_translator.py : ensure_llama_server` (:89) | uses `bin/llama/llama-server.exe`; if missing (Windows only) downloads the llama.cpp b10909 CUDA zip and extracts it | non-Windows → RuntimeError; download/extract errors; no checksum |
-| Model | `HyMTEngine._ensure_model` (:135) | uses `settings.mt.hymt_gguf`; if missing, `hf_hub_download` | network / HF errors; `SUBTITLE_MT__HYMT_FILE` has no effect when the default file exists |
+| Binary | `hymt_translator.py : ensure_llama_server` | uses `bin/llama/llama-server.exe` (Phase 2b: never downloaded at runtime; `scripts/download_models.py --hymt --accept-hymt-license`) | missing → `FileNotFoundError` naming the script; at startup `hymt_missing()` keeps HY-MT unregistered with one log line |
+| Model | `HyMTEngine._ensure_model` | uses `settings.mt.hymt_gguf` (Phase 2b: never downloaded at runtime) | missing → same as Binary |
 | Spawn | `HyMTEngine._start` (:145) | free port, PATH += torch CUDA DLL dir, `-ngl 99 -c 2048·np -np 2 --no-webui --log-disable`, stdout/stderr → DEVNULL, no console window | torch import failure silently skips the CUDA DLL dir (`_cuda_dll_dirs` :81); child output is discarded, so a crash leaves only an exit code |
 | Health | `_start` poll loop (:163-175) | `GET /health` every 0.25 s until `{"status":"ok"}`, deadline 120 s | child exits → `RuntimeError("exited early with code N")`; deadline → `RuntimeError("did not become healthy in time")`; poll errors swallowed (:171) |
 | Warmup | `HyMTEngine.warmup` (:190), called from lifespan via `base_translator.warmup_models` | spawn + translate "Hello" en→zh | any failure sets `_load_error`; `supports()` then returns False **for the rest of the process**, so every pair falls to OPUS or to pass-through |

@@ -16,9 +16,9 @@ extension (`.db`, `.zip`, `.gguf`, `.onnx`, `.bin`, `.safetensors`, `.exe`, `.dl
 | `backend/data/models/asr/sherpa-onnx-streaming-zipformer-bn-vosk-2026-02-09/` | 91 MB | same | same URL pattern |
 | `backend/data/models/asr/sherpa-onnx-whisper-tiny/` | 245 MB | spoken-language-ID model | auto-downloaded on first LID call: `https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-whisper-tiny.tar.bz2` (`asr/lid.py`) |
 | `backend/data/models/ct2/*` (4 OPUS-MT models) | 315 MB | CTranslate2 int8 conversions of Hugging Face checkpoints | generated on first use from `Helsinki-NLP/opus-mt-*` and `shhossain/opus-mt-en-to-bn` on huggingface.co (`base_translator.OpusCT2Engine._convert`; needs `torch` + `transformers` once) |
-| `backend/data/models/mt/HY-MT1.5-1.8B-Q4_K_M.gguf` | 1.1 GB | translation model; Tencent HY Community License (not open source, territorial limits) | auto-downloaded on first start with `hf_hub_download` from `tencent/HY-MT1.5-1.8B-GGUF` (`hymt_translator._ensure_model`). Users must accept the license terms themselves |
+| `backend/data/models/mt/HY-MT1.5-1.8B-Q4_K_M.gguf` | 1.1 GB | translation model; Tencent HY Community License (not open source, territorial limits) | optional engine (D1), never downloaded by the server: `python scripts/download_models.py --hymt --accept-hymt-license` (shows the license summary first; `NOTICE.md`) |
 | `backend/data/models/mt/HY-MT1.5-1.8B-Q8_0.gguf` | 1.8 GB | unused alternative quant | optional; same repo. Not used by the code (see PROJECT_REPORT §10 #7) |
-| `backend/bin/llama/` | 567 MB | llama.cpp b10909 Windows CUDA 12.4 build (`llama-server.exe` + DLLs) | auto-downloaded on first start on Windows: `https://github.com/ggml-org/llama.cpp/releases/download/b10909/llama-b10909-bin-win-cuda-12.4-x64.zip` (`hymt_translator.ensure_llama_server`). Other OSes: install `llama-server` into `backend/bin/llama/` manually |
+| `backend/bin/llama/` | 567 MB | llama.cpp b10909 Windows CUDA 12.4 build (`llama-server.exe` + DLLs) | only for HY-MT: `scripts/download_models.py --hymt --accept-hymt-license` fetches `https://github.com/ggml-org/llama.cpp/releases/download/b10909/llama-b10909-bin-win-cuda-12.4-x64.zip` on Windows. Other OSes: install `llama-server` into `backend/bin/llama/` manually |
 | `backend/logs/` (incl. `logs/pytest/`) | grows per run | observability run logs `run_<run_id>.jsonl` | generated at runtime by `app/obs.py` |
 | `../backup-2026-09-11-pre-redesign.zip` | 259 KB | v1 source backup; outside the repo folder; contains `.pyc` with home-folder paths | not distributed |
 | `*.wav` | inside the model folders | upstream sample audio used by `scripts/e2e_ws_asr.py` | come with the ASR model archives above (`test_wavs/`) |
@@ -27,5 +27,6 @@ extension (`.db`, `.zip`, `.gguf`, `.onnx`, `.bin`, `.safetensors`, `.exe`, `.dl
 The empty directory literally named `extension/{content-scripts,popup,options,icons}` is not tracked (git ignores
 empty directories).
 
-First start without these folders downloads roughly 2 GB (three Zipformer models, whisper-tiny, Q4_K_M GGUF,
-llama.cpp zip) and needs network access; the OPUS-MT conversions additionally need `torch` and `transformers`.
+First start without these folders downloads roughly 0.8 GB (three Zipformer models, whisper-tiny, the OPUS-MT
+checkpoints) and needs network access; the OPUS-MT conversions additionally need `torch` and `transformers`.
+`scripts/download_models.py` does the same ahead of time; HY-MT (1.1 GB GGUF + llama.cpp zip) only with `--hymt`.

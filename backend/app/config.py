@@ -8,7 +8,7 @@ import os
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from pydantic_settings import BaseSettings
-from pydantic import Field
+from pydantic import Field, field_validator, model_validator
 
 
 def _detect_cuda() -> bool:
@@ -135,6 +135,19 @@ class TranslationConfig(BaseSettings):
     # Where CTranslate2-converted OPUS models are cached.
     ct2_dir: Path = Field(default=Path("data/models/ct2"))
 
+    # OPUS-MT decoding (CTranslate2). D1 bar (tests/test_opus_quality.py): no repeated
+    # 3-gram in an output, output length within 3x the source.
+    opus_beam_size: int = Field(default=2)
+    opus_repetition_penalty: float = Field(default=1.2)
+    opus_no_repeat_ngram_size: int = Field(default=2, description="0 = off")
+    opus_max_tokens: int = Field(default=128, description="hard cap on output tokens")
+    opus_max_length_ratio: float = Field(default=3.0, description="output tokens <= ratio x source tokens + 4 (stops a runaway decode); 0 = only the hard cap")
+    # Multi-target OPUS models need a target-language token first (as in their model cards).
+    opus_target_tokens: dict = Field(default_factory=lambda: {
+        "Helsinki-NLP/opus-mt-en-zh": ">>cmn_Hans<<",
+        "Helsinki-NLP/opus-mt-de-ZH": ">>cmn_Hans<<",
+    })
+
 
 class LangDetectConfig(BaseSettings):
     """Text language detection for cues without a declared language (T12).
@@ -156,14 +169,36 @@ class LangDetectConfig(BaseSettings):
     default_hint: str = Field(default="en")
 
 
-class MTConfig(BaseSettings):
-    """Engine selection for the translation hot path."""
+MT_ENGINES = ("opus", "hymt", "cloud")
 
-    # Preferred order. Engines that are unavailable (no GPU, no key) are skipped.
-    #   hymt   - Tencent HY-MT1.5-1.8B via llama.cpp on the GPU (en/zh/bn direct)
-    #   opus   - CTranslate2 int8 OPUS-MT on CPU (+ pivot through English)
-    #   cloud  - Google Translate v3 / Azure Translator (needs key)
-    engine_order: List[str] = Field(default=["hymt", "opus", "cloud"])
+
+class MTConfig(BaseSettings):
+    """Engine selection for the translation hot path (D1).
+
+    engine (SUBTITLE_MT__ENGINE):
+      opus   - OPUS-MT on CTranslate2 int8, CPU (+ pivot through English). Default.
+      hymt   - Tencent HY-MT1.5-1.8B via llama.cpp on an NVIDIA GPU (en/zh/bn direct).
+               Optional: needs `python scripts/download_models.py --hymt --accept-hymt-license`
+               (Tencent HY Community License); the backend never downloads it.
+      cloud  - Google / Azure (needs a key in the backend config).
+    engine_order: the router's order; empty = [engine] with opus behind it as the fallback.
+    """
+
+    engine: str = Field(default="opus")
+    engine_order: List[str] = Field(default_factory=list)
+
+    @field_validator("engine")
+    @classmethod
+    def _known_engine(cls, v: str) -> str:
+        if v not in MT_ENGINES:
+            raise ValueError(f"unknown MT engine {v!r}; one of {MT_ENGINES}")
+        return v
+
+    @model_validator(mode="after")
+    def _derive_order(self):
+        if not self.engine_order:
+            self.engine_order = [self.engine] + (["opus"] if self.engine != "opus" else [])
+        return self
 
     hymt_gguf: Path = Field(default=Path("data/models/mt/HY-MT1.5-1.8B-Q4_K_M.gguf"))
     hymt_repo: str = Field(default="tencent/HY-MT1.5-1.8B-GGUF")

@@ -25,8 +25,15 @@ On first start the server downloads:
 | Zipformer streaming models en / zh / bn | 68 / 154 / 87 MB | `backend/data/models/asr/` |
 | Whisper-tiny spoken-language-ID | 120 MB | `backend/data/models/asr/sherpa-onnx-whisper-tiny/` |
 | OPUS-MT models (converted to CTranslate2 int8 on first use) | ~80 MB each | `backend/data/models/ct2/` |
-| llama.cpp CUDA build (GPU only) | 250 MB | `backend/bin/llama/` |
-| HY-MT1.5-1.8B Q8_0 GGUF (GPU only) | 1.9 GB | `backend/data/models/mt/` |
+
+`python scripts/download_models.py` (with the backend's Python) fetches the same models ahead of time. The optional
+GPU engine HY-MT is never downloaded by the server: `python scripts/download_models.py --hymt --accept-hymt-license`
+shows its license summary (Tencent HY Community License, see `NOTICE.md`) and then fetches:
+
+| Asset | Size | Location |
+|---|---|---|
+| llama.cpp CUDA build (Windows) | 250 MB | `backend/bin/llama/` |
+| HY-MT1.5-1.8B Q4_K_M GGUF | 1.1 GB | `backend/data/models/mt/` |
 
 ## 2. Manual install
 
@@ -42,8 +49,8 @@ pip install torch --index-url https://download.pytorch.org/whl/cpu
 python run.py
 ```
 
-Check `http://127.0.0.1:8765/health/json`: `device` should be `cuda` on a GPU machine and `mt_engines` should list
-`hymt` and `opus`.
+Check `http://127.0.0.1:8765/health/json`: `mt_engines` lists `opus` (the default engine, CPU). With
+`SUBTITLE_MT__ENGINE=hymt`, a GPU (`device: cuda`) and the HY-MT download, it lists `hymt` and `opus`.
 
 ### GPU notes
 
@@ -51,7 +58,8 @@ Check `http://127.0.0.1:8765/health/json`: `device` should be `cuda` on a GPU ma
   `llama-server` child process automatically.
 - `llama-cpp-python` is **not** used: its prebuilt Windows wheels crash on CPUs without AVX-512 and older wheels predate
   the HunYuan architecture. The backend runs the official `llama-server.exe` instead and calls it over HTTP on localhost.
-- To use a smaller/faster translation model: `set SUBTITLE_MT__HYMT_FILE=HY-MT1.5-1.8B-Q4_K_M.gguf` (downloaded on demand).
+- HY-MT is optional (D1): `set SUBTITLE_MT__ENGINE=hymt` after the download above. If the model or llama-server is
+  missing the server logs one line naming the download script and translates with OPUS-MT.
 
 ## 3. Browser extension
 
@@ -84,7 +92,7 @@ Paste keys in the Options page (stored locally, sent only to the local backend):
 | Symptom | Fix |
 |---|---|
 | `device: cpu` on a GPU laptop | run the launcher again (installs CUDA torch), or `pip install -r requirements-gpu.txt --extra-index-url https://download.pytorch.org/whl/cu128` |
-| `hymt` missing from `/health/json` | GPU not detected, or first download still running; check the server window. OPUS-MT still handles en↔zh and bn→en |
+| `hymt` missing from `/health/json` | expected unless `SUBTITLE_MT__ENGINE=hymt`; otherwise the server window names the cause (no GPU, or run `scripts/download_models.py --hymt --accept-hymt-license`). OPUS-MT handles every en/zh/bn direction meanwhile |
 | Popup says "Failed: … tabCapture" | click the icon on a normal web page (not `chrome://` pages), and reload the page after installing the extension |
 | Captions appear but no translation | target language equals the spoken language, or the backend is not running |
 | Bengali translation slow (>0.6 s) | use Chrome on-device translation (popup → Prepare), or the Q4_K_M model |

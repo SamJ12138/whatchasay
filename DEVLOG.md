@@ -41,8 +41,8 @@ extension merges per cue) → optional `revision`. `reset` tells the overlay to 
 | Streaming ASR en/zh/bn on a laptop | **sherpa-onnx Zipformer transducers** (CPU, ~13 ms per 40 ms frame, fixed ~0.3–0.4 s delay, built-in endpointing) | Whisper: not streaming (LocalAgreement ≈3.3 s, AlignAtt 1–1.5 s) and **WER ≈75 % on Bengali**; Parakeet/Nemotron/Kyutai/Voxtral/Qwen3-ASR: no Bengali; in-browser Whisper WebGPU: 0.9–1.3 s interim on an M5 |
 | Bengali ASR model | `sherpa-onnx-streaming-zipformer-bn-vosk-2026-02-09` (Apache-2.0, WER 17.9–20.6) | `mozilla-ai/whisper-large-v3-bn` (WER 9.65) kept for the optional delayed "accuracy mode" |
 | Language auto-detect | sherpa-onnx spoken-language-ID (whisper-tiny) once per session on ~2.5 s of voiced audio; **recognizer starts immediately with a provisional language** and switches with replay if LID disagrees | Waiting for LID before recognising cost 5–6 s of blank captions in the first e2e run |
-| Translation en/zh/bn | **Tencent HY-MT1.5-1.8B** GGUF via official `llama-server` CUDA build (36 langs incl. bn, any-to-any). Default quant **Q4_K_M** | OPUS-MT has no en→bn / zh↔bn; NLLB is CC-BY-NC; small general LLMs are worse than NMT into Bengali; `llama-cpp-python` wheels crash (illegal instruction, no AVX-512) or predate the HunYuan arch |
-| Translation fallback | OPUS-MT on CTranslate2 int8 CPU, beam 2, X→en→Y pivot, verified model table; en→bn via community `shhossain/opus-mt-en-to-bn` (30–45 ms) so every en/zh/bn direction works on CPU too | The old table routed fr/pt/it/ar→zh to `*-en` models (English output) |
+| Translation en/zh/bn (default, Phase 2b D1) | **OPUS-MT on CTranslate2 int8, CPU**, beam 2, X→en→Y pivot, verified model table; en→bn via community `shhossain/opus-mt-en-to-bn`; source ends with `</s>`, en→zh with `>>cmn_Hans<<` | permissive licenses (NOTICE.md), no GPU, p50 30 ms over the six en/zh/bn directions; the old table routed fr/pt/it/ar→zh to `*-en` models (English output) |
+| Translation, optional GPU engine | **Tencent HY-MT1.5-1.8B** GGUF via official `llama-server` CUDA build (36 langs incl. bn, any-to-any), Q4_K_M; only with `SUBTITLE_MT__ENGINE=hymt` after `scripts/download_models.py --hymt --accept-hymt-license` | Tencent HY Community License (territorial limits, AUP pass-through): not a default (D1). NLLB is CC-BY-NC; small general LLMs are worse than NMT into Bengali; `llama-cpp-python` wheels crash (no AVX-512) or predate the HunYuan arch |
 | LLM post-editing | Async refiner only (Ollama / Groq / Gemini), 0.8 s deadline, revision 2 pushed to the UI; skipped for Bengali | Synchronous Qwen2.5-7B post-edit cost seconds per batch |
 | Tab audio capture | tabCapture → offscreen document → AudioWorklet | `getDisplayMedia` from a content script (share picker each time, Chromium bug 40885587 mutes the tab), ScriptProcessorNode |
 | Cloud tiers | Gladia / ElevenLabs (bn streaming), Google / Azure translate, Groq / Gemini refine | OpenAI transcribe (no bn), AssemblyAI Pro (no bn), DeepL (slowest, bn brand-new) |
@@ -233,3 +233,19 @@ D4 cloud providers off by default, keys only in backend config.
   schema versions (1 = baseline, 2 = `engine` column; unstamped databases recognised by their columns); before any
   migration the database is copied with SQLite's backup API (WAL rows included) to `<name>.bak-<old version>`, logged
   as `tm_migration`; an existing backup is never overwritten; a failed backup stops the migration.
+- Batch 1 (D1, default engine): `SUBTITLE_MT__ENGINE` picks the engine, default `opus` (`engine_order` derived as
+  [engine, opus]). HY-MT is optional: configured but absent (no GPU, no GGUF, no llama-server) -> one WARNING line
+  naming `scripts/download_models.py --hymt --accept-hymt-license` and OPUS-MT serves; the backend never downloads
+  the GGUF or llama-server any more. New `scripts/download_models.py` (backend's Python): Zipformer en/zh/bn +
+  whisper-tiny + the four OPUS-MT models for en/zh/bn by default; `--hymt` prints the Tencent HY Community License
+  summary and exits 2 unless `--accept-hymt-license`; `--data-dir` / `--bin-dir` / `--skip-*`. OPUS-MT repetition:
+  the cause was tokenization, not decoding: the source lacked Marian's `</s>` (Hugging Face's tokenizer adds it), so
+  the decoder ran on (bn->en "I'll be back" became 19.5x the source; zh->en said everything twice), and the
+  multi-target opus-mt-en-zh needs `>>cmn_Hans<<` (it mixed traditional characters in). Decoding knobs moved to
+  settings (beam 2, repetition penalty 1.2, no-repeat 2-gram kept) plus a cap of 3x the source tokens + 4. Bar
+  (slow `tests/test_opus_quality.py`): no repeated 3-gram and output <= 3x the source (words; characters for
+  Chinese) on the six en/zh/bn directions over the repo's sample sentences. p50 per call over the six directions
+  66.6 -> 30.4 ms, p95 251.9 -> 86.8 ms (`scripts/opus_quality.py`, i9-13900H). Still weak: ASR-style upper-case
+  literary English, and zh->bn (pivot through English) can drop a clause. `NOTICE.md`: licenses of every downloaded
+  model/binary; shhossain/opus-mt-en-to-bn is Apache-2.0; the Mandarin Zipformer declares no license and stays the
+  default (the Apache-2.0 alternatives have 1.6-1.9x its CER on aishell-1).

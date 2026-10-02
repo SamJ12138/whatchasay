@@ -101,7 +101,7 @@ if "%HAS_NVIDIA%"=="1" (
     "%PYTHON_EXE%" -c "import torch, sys; sys.exit(0 if torch.cuda.is_available() else 1)" >nul 2>&1
     if !ERRORLEVEL! NEQ 0 (
         echo    NVIDIA GPU detected - installing CUDA extras ^(torch, faster-whisper^)...
-        echo    This downloads ~3 GB once. GPU enables HY-MT translation and accuracy mode.
+        echo    This downloads ~3 GB once. GPU enables the optional HY-MT engine and accuracy mode.
         "%PIP_EXE%" install -r "%BACKEND_DIR%\requirements-gpu.txt" --extra-index-url https://download.pytorch.org/whl/cu128
         if errorlevel 1 (
             echo    WARNING: GPU extras failed to install. Continuing on CPU ^(still works^).
@@ -121,10 +121,10 @@ if "%HAS_NVIDIA%"=="1" (
 :: ============================================================================
 echo.
 echo [4/5] Models
-echo    Speech models ^(English, Chinese, Bengali; ~350 MB^), the language-ID model,
-echo    OPUS-MT converters and - with a GPU - llama.cpp + HY-MT1.5 ^(~2.2 GB^) are
-echo    downloaded automatically on first start. The first launch can take several
-echo    minutes; later launches take ~10 seconds.
+echo    Speech models ^(English, Chinese, Bengali; ~350 MB^), the language-ID model and
+echo    the OPUS-MT translation models are downloaded automatically on first start.
+echo    The first launch can take several minutes; later launches take ~10 seconds.
+echo    Optional GPU engine HY-MT: scripts\download_models.py --hymt ^(license gate^).
 
 :: ============================================================================
 :: Step 5: Start the backend
