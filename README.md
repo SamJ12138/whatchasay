@@ -10,8 +10,11 @@ Bengali speech into text and translates it, and the extension draws both lines o
 second after each sentence ends. Audio and text stay on your machine: the extension only talks to the backend on
 127.0.0.1, and nothing is sent to a cloud service unless you turn a cloud provider on yourself (it is off by default).
 
-<!-- DEMO-GIF: filled in by Phase 3 Batch F -->
-*(Demo GIF coming.)*
+![Demo: English speech in a NASA video is captioned live and translated into Chinese over the video](docs/demo.gif)
+
+*12 seconds of NASA ScienceCasts, "The Zero Gravity Coffee Cup" (public domain): English speech captioned live,
+words first, then each sentence cased and translated into Chinese. Speech recognition and translation ran on the
+CPU of a laptop (Intel i9-13900H), no GPU and no cloud. Recorded by the browser harness, not by hand.*
 
 ## Requirements
 
@@ -406,7 +409,8 @@ demo and the screenshot in this README.
 error type, per-stage p50/p95, per-session totals. The stage names are in `docs/pipeline-stages.md`; known swallowed
 and degraded paths are in `docs/observations.md`.
 
-**Other scripts:** `backend/scripts/latency_report.py` (the latency table above), `backend/scripts/opus_quality.py`
+**Other scripts:** `backend/scripts/make_demo_gif.py` (the demo GIF and screenshot above, from a recorded live
+run), `backend/scripts/latency_report.py` (the latency table above), `backend/scripts/opus_quality.py`
 (OPUS-MT output and speed over the six en/zh/bn directions), `backend/scripts/asr_input_quality.py`
 (`docs/asr-input-quality.md`), `backend/scripts/clean_install_check.py` (fresh venv from the requirements files, then
 the fast suite), `scripts/check_large_files.py` (nothing large or binary gets committed).

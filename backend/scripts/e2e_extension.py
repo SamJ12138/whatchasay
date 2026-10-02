@@ -733,6 +733,7 @@ def main() -> int:
     ap.add_argument("--record", type=Path, help="audio path: record the tab with Playwright into this folder")
     ap.add_argument("--size", help="viewport and recording size, e.g. 1280x720")
     ap.add_argument("--screenshot", type=Path, help="audio path: save a screenshot after the first translation")
+    ap.add_argument("--font-size", type=int, help="overlay font size in px (the Options page setting; default 20)")
     ap.add_argument("--hold", type=float, default=0.0, help="audio path: keep captioning this many seconds after the first translation")
     ap.add_argument("--port", type=int, default=8765)
     ap.add_argument("--start-backend", action="store_true")
@@ -809,10 +810,12 @@ def main() -> int:
             sw = service_worker(ctx)
             targets = [t for t in args.targets.split(",") if t]
             caption_mode = args.path not in ("audio", "clear-memory", "cloud-keys")  # the audio path must work with caption mode off (D2)
-            sw.evaluate("""async ({url, targets, captionMode}) => {
+            sw.evaluate("""async ({url, targets, captionMode, fontSize}) => {
                 const cur = (await chrome.storage.local.get('settings')).settings || {};
-                await chrome.storage.local.set({settings: {...cur, serverUrl: url, targetLanguages: targets, captionMode}});
-            }""", {"url": f"ws://127.0.0.1:{args.port}/ws", "targets": targets, "captionMode": caption_mode})
+                const extra = fontSize ? {fontSize} : {};
+                await chrome.storage.local.set({settings: {...cur, serverUrl: url, targetLanguages: targets, captionMode, ...extra}});
+            }""", {"url": f"ws://127.0.0.1:{args.port}/ws", "targets": targets, "captionMode": caption_mode,
+                   "fontSize": args.font_size})
             if caption_mode:  # caption mode registers the content scripts for the granted origins
                 end = time.time() + 10
                 while time.time() < end and not sw.evaluate(

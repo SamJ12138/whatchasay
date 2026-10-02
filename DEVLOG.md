@@ -377,5 +377,15 @@ D4 cloud providers off by default, keys only in backend config.
   Windows paths over 260 characters (the first attempt, in a deep folder); the Hugging Face cache is 2.18 GB, not
   1.24 GB (transformers fetches both `pytorch_model.bin` and an auto-converted `model.safetensors` for three of the
   four models), so the download is 3.2 GB; harmless download warnings; OPUS-MT moves to an NVIDIA GPU when CTranslate2
-  sees one; no times stated. All fixed in the README.
+  sees one; no times stated. All fixed in the README.  Run 2 (new empty folder, same conditions, README as pushed in 468a296): clone 0.7 s, venv 3.3 s, pip 39.1 s,
+  torch 37.6 s, download 161.8 s, `run.py` ready ~5 s, first translation in Chrome 153 after 9.4 s; zero edits.
+- Batch F (demo GIF): `backend/scripts/make_demo_gif.py`: the public-domain NASA ScienceCasts clip "The Zero Gravity
+  Coffee Cup" (Wikimedia Commons, license checked on the file page, SHA-256 pinned, cut to 0:09-0:39.5, 30.5 s;
+  `data/samples/demo.webm` did not exist), played by the browser harness (`--video --record --size 960x540
+  --font-size 28`, backend with `SUBTITLE_TRANSLATION__DEVICE=cpu`), recorded by Playwright, then a 12 s window
+  from 3 s before the first translation, two-pass palette (imageio-ffmpeg, 640 px, 6 fps, 128 colours, no dither):
+  `docs/demo.gif`, 4,997,738 bytes, 12.0 s. Credit in `NOTICE.md`. `tests/test_docs_media.py`: README shows the GIF
+  and the screenshot, the GIF is at most 8 MB and 12 s (frame delays summed by walking the GIF blocks), every
+  relative README link exists. Fresh-clone runs and the demo used a `subst` drive for the scratch folder (the
+  scratch path itself is long enough to hit the 260-character limit inside the venv).
 
