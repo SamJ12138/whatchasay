@@ -1,5 +1,7 @@
 # whatchasay
 
+[![CI](https://github.com/SamJ12138/whatchasay/actions/workflows/ci.yml/badge.svg)](https://github.com/SamJ12138/whatchasay/actions/workflows/ci.yml)
+
 Live translated subtitles for the audio of any Chrome tab, produced on your own computer.
 
 It is for videos and live streams that have no subtitles, lectures, and meetings held in a browser tab in a language
@@ -404,7 +406,7 @@ and degraded paths are in `docs/observations.md`.
 (`docs/asr-input-quality.md`), `backend/scripts/clean_install_check.py` (fresh venv from the requirements files, then
 the fast suite), `scripts/check_large_files.py` (nothing large or binary gets committed).
 
-CI: <!-- CI-BADGE --> the fast suite with coverage, the extension tests and the clean-install check on Ubuntu and
+CI ([runs](https://github.com/SamJ12138/whatchasay/actions/workflows/ci.yml)): the fast suite with coverage, the extension tests and the clean-install check on Ubuntu and
 Windows (`.github/workflows/ci.yml`). `DEVLOG.md` is the project history; every change appends to its change log.
 
 ## Status and limitations

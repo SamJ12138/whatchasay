@@ -360,4 +360,9 @@ D4 cloud providers off by default, keys only in backend config.
 - Process note: two backends this phase were started without `SUBTITLE_ASR__MODELS_DIR` (direct harness runs) and the
   runtime auto-download put the new default Mandarin model into `backend/data/models/asr/` (200 MB, nothing else
   in `backend/data/` touched). Harness runs now get the models directory explicitly.
+- Batch D (publish): repository name chosen by the owner, `whatchasay` (README title and clone commands updated).
+  `gh repo create whatchasay --public --source=. --push`: https://github.com/SamJ12138/whatchasay, default branch
+  `main`. First CI run (37027169748) green on all six jobs (backend fast suite, extension tests, clean install;
+  ubuntu-24.04 and windows-2025, Python 3.12): 215 passed, 1 skipped (the TM check of the hygiene test: no local
+  translation memory on a CI runner). Nothing needed fixing. README CI badge, repository description and topics set.
 
