@@ -22,6 +22,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import shutil
+import tempfile
 import threading
 import time
 from dataclasses import dataclass
@@ -80,6 +82,25 @@ class MTEngine(Protocol):
 # ---------------------------------------------------------------------------
 # OPUS-MT on CTranslate2
 # ---------------------------------------------------------------------------
+
+
+# Seams for the OPUS-MT conversion (tests replace them; no network in the fast suite).
+def _files_in_repo(repo_id: str) -> List[str]:
+    from huggingface_hub import HfApi
+
+    return HfApi().list_repo_files(repo_id)
+
+
+def _snapshot_download(repo_id: str, local_dir: str, allow_patterns: List[str]) -> str:
+    from huggingface_hub import snapshot_download
+
+    return snapshot_download(repo_id, local_dir=local_dir, allow_patterns=allow_patterns)
+
+
+def _transformers_converter(model_name_or_path: str, **kw):
+    from ctranslate2.converters import TransformersConverter  # needs transformers + torch
+
+    return TransformersConverter(model_name_or_path, **kw)
 
 
 class _Ct2Marian:
@@ -143,13 +164,24 @@ class OpusCT2Engine:
     # -- model management --------------------------------------------------
 
     def _convert(self, hf_name: str, out_dir: Path) -> None:
-        """Convert a Hugging Face MarianMT checkpoint to CTranslate2 int8."""
-        from ctranslate2.converters import TransformersConverter  # needs transformers + torch
+        """Convert a Hugging Face MarianMT checkpoint to CTranslate2 int8.
 
+        The checkpoint is only needed for this conversion (the runtime reads out_dir
+        alone), so it is downloaded into a private folder next to out_dir, with a single
+        weights file, and deleted afterwards whatever happens; the user's own Hugging Face
+        cache is not used."""
         logger.info("Converting %s to CTranslate2 int8 (one-time)...", hf_name)
         out_dir.parent.mkdir(parents=True, exist_ok=True)
-        converter = TransformersConverter(hf_name, copy_files=["source.spm", "target.spm"], load_as_float16=False)
-        converter.convert(str(out_dir), quantization="int8", force=True)
+        files = _files_in_repo(hf_name)
+        weights = "model.safetensors" if "model.safetensors" in files else "pytorch_model.bin"
+        work = Path(tempfile.mkdtemp(prefix=".download-", dir=out_dir.parent))
+        try:
+            local = _snapshot_download(hf_name, local_dir=str(work / "checkpoint"),
+                                       allow_patterns=["*.json", "*.spm", "*.txt", weights])
+            converter = _transformers_converter(local, copy_files=["source.spm", "target.spm"], load_as_float16=False)
+            converter.convert(str(out_dir), quantization="int8", force=True)
+        finally:
+            shutil.rmtree(work, ignore_errors=True)
 
     def _ensure(self, hf_name: str) -> _Ct2Marian:
         with self._lock:

@@ -26,7 +26,7 @@ CPU of a laptop (Intel i9-13900H), no GPU and no cloud. Recorded by the browser 
 | CPU | Enough on its own. Measured on an Intel i9-13900H: speech recognition takes 2.5 ms per 40 ms of audio, translation 30-140 ms per sentence |
 | Memory | The backend uses about 1 GB of RAM with English, Mandarin and Bengali loaded |
 | GPU | Optional, only for the optional HY-MT translation engine (NVIDIA, 4 GB+) |
-| Disk | 4.5 GB in all: Python packages 1.07 GB (`backend/venv`, CPU PyTorch included), models 1.22 GB (`backend/data/models/`), and 2.18 GB of OPUS-MT source checkpoints left in the Hugging Face cache (`~/.cache/huggingface/hub`, safe to delete once the models are converted) |
+| Disk | 2.3 GB in all: Python packages 1.07 GB (`backend/venv`, CPU PyTorch included) and models 1.22 GB (`backend/data/models/`). Nothing is left in the Hugging Face cache |
 | Network | Only for installing and downloading models. Running needs none |
 
 ## Quickstart
@@ -61,15 +61,16 @@ venv/bin/python -m pip install -r requirements.txt
 venv/bin/python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
 ```
 
-**3. Download the models** (3.2 GB: speech models 1.06 GB and OPUS-MT checkpoints 2.18 GB, then a one-time
-conversion to CTranslate2; 2 minutes 40 seconds on a connection that downloads 29 MB/s, longer on a slower one)
+**3. Download the models** (2.3 GB: speech models 1.06 GB and OPUS-MT checkpoints 1.24 GB; each checkpoint is
+converted to CTranslate2 once and then deleted. 231 seconds in our last measured run, 57 of them for OPUS-MT; it
+depends mostly on how fast GitHub serves the speech models to you)
 
 PowerShell: `venv\Scripts\python ..\scripts\download_models.py`
 
 bash: `venv/bin/python ../scripts/download_models.py`
 
-It prints each model as it goes and ends with `Done.`. Warnings about `HF_TOKEN`, symlinks and `torch_dtype` along
-the way are harmless. Everything it downloads has a declared permissive license (`NOTICE.md`).
+It prints each model as it goes and ends with `Done.`. Warnings about `HF_TOKEN` or `torch_dtype` along the way
+are harmless. Everything it downloads has a declared permissive license (`NOTICE.md`).
 
 **4. Start the backend** (leave it running)
 

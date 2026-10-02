@@ -412,4 +412,11 @@ D4 cloud providers off by default, keys only in backend config.
   note naming the missing pairs); the Settings page disables those options, adds "(no route)" and the reason as a
   tooltip ("no local model for en->ko"); a saved choice stays selectable-visible; no backend = nothing greyed.
   With OPUS-MT: Korean and Portuguese, from all three spoken languages (checked in Chromium).
+- Model download size: the runtime reads only the converted CTranslate2 folder, so `OpusCT2Engine._convert` now
+  downloads each OPUS-MT checkpoint into a private folder next to it (one weights file: `model.safetensors` if the
+  repo has it, else `pytorch_model.bin`; plus `*.json`, `*.spm`), converts from that local path and deletes it,
+  whatever happens; the user's own Hugging Face cache is not touched. Measured, OPUS-MT part with an empty HF cache
+  (`download_models.py --skip-asr`): before 81.6 s and 2.185 GB left in the HF cache; after 57.3 / 57.8 s and
+  0 bytes; converted `model.bin` identical (SHA-256) for all four models, to each other and to the ones in use.
+  Whole step 3: 2.3 GB downloaded (was 3.2), 231 s in this session's run; disk after install 2.3 GB (was 4.5).
 
