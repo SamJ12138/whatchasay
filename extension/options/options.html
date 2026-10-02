@@ -470,6 +470,22 @@
       </div>
     </div>
 
+    <!-- Caption mode (D2) -->
+    <div class="section">
+      <h2 class="section-title">Caption Mode (videos with subtitles)</h2>
+      <p id="captionModeExplanation" style="font-size: 12px; color: #999; margin-bottom: 12px;"></p>
+      <div class="toggle-group">
+        <div class="toggle-label">
+          <span>Translate on-page subtitles</span>
+          <span id="captionModeSites">Off by default</span>
+        </div>
+        <label class="toggle">
+          <input type="checkbox" id="captionMode">
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+    </div>
+
     <!-- Cloud keys -->
     <div class="section">
       <h2 class="section-title">Optional Cloud APIs</h2>
@@ -687,6 +703,7 @@
   <div class="status-bar" id="statusBar"></div>
   
   <script src="../obs.js"></script>
+  <script src="../lib/caption-mode.js"></script>
   <script src="options.js"></script>
 </body>
 </html>

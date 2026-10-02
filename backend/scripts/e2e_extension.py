@@ -11,6 +11,10 @@ end to end, with no human click. Two paths:
                    no Playwright: an attached DevTools session keeps the worker
                    alive): keepalive keeps it; idle stop -> restart -> next cue
                    still translated; forced stop -> same
+  --path permissions  D2 on the real extension in a fresh profile (no backend):
+                   no site access and no content scripts before opt-in, the
+                   install-time permission warnings, the options page explains
+                   caption mode, and switching it on requests the caption sites
   --path security  E16/E17/W8 in the browser: no /ws connection before the tab is
                    enabled; the page's own scripts cannot open /ws or POST /translate;
                    after enabling, one connection from the extension; a cue posted
@@ -25,6 +29,14 @@ offscreen getUserMedia({chromeMediaSource:'tab'}) fails with "Requested device
 not found". The audio is real tab audio (a <video> element playing the WAV,
 autoplay allowed by --autoplay-policy), not a fake capture device. ASR_START is
 sent from an extension page exactly like the popup does.
+
+Site access (D2): the extension asks for none at install. A real user grants it
+by clicking the action (activeTab, audio path) or by accepting caption mode's
+optional site permissions; automation can do neither, so every path except
+`permissions` loads a scratch copy of the extension whose manifest adds
+`http://127.0.0.1/*` to host_permissions (the test page's origin), and the
+backend started with --start-backend is told that copy's id. Caption paths also
+switch caption mode on in the settings.
 
 Success = the content script of the test tab logs an `ext_render` record for a
 translation (extension/obs.js writes every record to console.debug with the
@@ -48,6 +60,7 @@ Prints one JSON summary line at the end.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import http.server
 import json
 import os
@@ -130,9 +143,41 @@ def serve_dir(directory: Path) -> tuple[socketserver.TCPServer, int]:
     return srv, srv.server_address[1]
 
 
-def start_backend(port: int, scratch: Path) -> subprocess.Popen:
+def extension_id_for_path(path: str) -> str:
+    """Chrome's id for an unpacked extension (same as backend app/security.py, copied
+    so the harness does not import the backend's settings)."""
+    if os.name == "nt":
+        if len(path) > 1 and path[1] == ":":
+            path = path[0].upper() + path[1:]
+        data = path.encode("utf-16-le")
+    else:
+        data = path.encode("utf-8")
+    return "".join(chr(ord("a") + int(c, 16)) for c in hashlib.sha256(data).hexdigest()[:32])
+
+
+TEST_ORIGINS = ("http://127.0.0.1/*",)
+
+
+def test_extension_copy(extension: Path, scratch: Path) -> Path:
+    """The extension with the test page's origin and tab capture granted (stand-ins
+    for the user's activeTab click, caption-mode grant and first-use tabCapture
+    prompt, which automation cannot give)."""
+    dst = scratch / "extension-test"
+    shutil.copytree(extension, dst, ignore=shutil.ignore_patterns("tests", "node_modules"))
+    mf = dst / "manifest.json"
+    m = json.loads(mf.read_text(encoding="utf-8"))
+    m["host_permissions"] = sorted(set(m.get("host_permissions") or []) | set(TEST_ORIGINS))
+    # tab audio capture is optional (asked for on the popup's Start click): grant it at install here
+    m["permissions"] = sorted(set(m.get("permissions") or []) | {"tabCapture"})
+    mf.write_text(json.dumps(m, indent=2), encoding="utf-8")
+    return dst.resolve()
+
+
+def start_backend(port: int, scratch: Path, extension_ids=()) -> subprocess.Popen:
     py = BACKEND / ("venv/Scripts/python.exe" if os.name == "nt" else "venv/bin/python")
     env = dict(os.environ)
+    if extension_ids:
+        env["SUBTITLE_SERVER__EXTENSION_IDS"] = json.dumps(list(extension_ids))
     env["SUBTITLE_CACHE__TM_DATABASE_PATH"] = str(scratch / "tm.db")
     env["SUBTITLE_DATA_DIR"] = str(scratch / "data")
     env["SUBTITLE_SERVER__PORT"] = str(port)
@@ -146,6 +191,7 @@ def launch(pw, user_dir: Path, ext_id: str | None, headless: bool, extension: Pa
         f"--disable-extensions-except={extension}",
         f"--load-extension={extension}",
         "--autoplay-policy=no-user-gesture-required",
+        "--lang=en-US",  # English permission warnings in the summary
     ]
     if ext_id:
         args.append(f"--allowlisted-extension-id={ext_id}")
@@ -160,6 +206,65 @@ def service_worker(ctx):
 
 def send_from_extension_page(ctl, message: dict):
     return ctl.evaluate("(m) => new Promise(r => chrome.runtime.sendMessage(m, r))", message)
+
+
+def permissions_checks(ctx, ext_id: str, summary: dict) -> bool:
+    """D2 on the real extension in a fresh profile."""
+    checks = summary.setdefault("checks", {})
+    opt = next((p for p in ctx.pages if p.url.startswith(f"chrome-extension://{ext_id}/options/")), None) or ctx.new_page()
+    if not opt.url.startswith(f"chrome-extension://{ext_id}/options/"):
+        opt.goto(f"chrome-extension://{ext_id}/options/options.html")
+    opt.wait_for_load_state()
+    granted = opt.evaluate("chrome.permissions.getAll()")
+    manifest = opt.evaluate("chrome.runtime.getManifest()")
+    summary["granted"] = granted
+    summary["install_warnings"] = opt.evaluate(
+        "(m) => new Promise(r => chrome.management.getPermissionWarningsByManifest(JSON.stringify(m), r))", manifest)
+    registered = opt.evaluate("chrome.scripting ? chrome.scripting.getRegisteredContentScripts() : Promise.resolve([])")
+    checks["fresh_profile_no_site_access"] = not granted.get("origins")
+    checks["no_install_warnings"] = summary["install_warnings"] == []
+    checks["no_content_scripts_before_opt_in"] = not manifest.get("content_scripts") and not registered
+    explanation = opt.evaluate("(document.getElementById('captionModeExplanation') || {}).textContent || ''")
+    summary["explanation"] = explanation.strip()
+    checks["options_explain_caption_mode"] = "reads the subtitle text" in explanation
+    toggle = opt.query_selector("#captionMode")
+    checks["caption_mode_off_by_default"] = bool(toggle) and not toggle.is_checked()
+    if not toggle:
+        return False
+    expected = opt.evaluate("(globalThis.STCaptionMode || {}).CAPTION_ORIGINS || []")
+    opt.evaluate("""() => {
+        window.__permRequests = [];
+        const real = chrome.permissions.request.bind(chrome.permissions);
+        chrome.permissions.request = (p, cb) => { window.__permRequests.push(JSON.parse(JSON.stringify(p))); return real(p, cb); };
+    }""")
+    opt.click("#captionMode + .toggle-slider")  # a real click: permissions.request needs the user gesture
+    opt.wait_for_timeout(2500)
+    requests = opt.evaluate("window.__permRequests")
+    settings = opt.evaluate("chrome.storage.local.get('settings').then(r => r.settings || {})")
+    summary["after_enable_click"] = {"requests": requests, "caption_mode_saved": settings.get("captionMode"),
+                                     "granted": opt.evaluate("chrome.permissions.getAll()")}
+    checks["enabling_requests_the_caption_sites"] = bool(requests) and sorted(requests[0].get("origins") or []) == sorted(expected) \
+        and len(expected) > 0
+    # headless Chromium cannot show the permission prompt, so nothing is granted: caption mode must stay off
+    checks["not_on_until_granted"] = settings.get("captionMode") is not True
+
+    # live captions: tab audio capture is asked for on the first Start click, not at install
+    pop = ctx.new_page()
+    pop.goto(f"chrome-extension://{ext_id}/popup/popup.html")
+    pop.wait_for_load_state()
+    pop.wait_for_timeout(500)
+    pop.evaluate("""() => {
+        window.__permRequests = [];
+        const real = chrome.permissions.request.bind(chrome.permissions);
+        chrome.permissions.request = (p, cb) => { window.__permRequests.push(JSON.parse(JSON.stringify(p))); return real(p, cb); };
+    }""")
+    pop.click("#btn-live")
+    pop.wait_for_timeout(2500)
+    capture_requests = pop.evaluate("window.__permRequests")
+    summary["after_start_click"] = {"requests": capture_requests,
+                                    "status": pop.evaluate("document.getElementById('live-status').textContent")}
+    checks["start_requests_tab_capture"] = capture_requests[:1] == [{"permissions": ["tabCapture"]}]
+    return all(checks.values())
 
 
 def backend_connections(port: int) -> int:
@@ -403,7 +508,11 @@ def sw_idle_run(args, page_url: str, scratch: Path, summary: dict) -> bool:
         targets = [t for t in args.targets.split(",") if t]
         cdp.evaluate(ctl, "(async () => { const cur = (await chrome.storage.local.get('settings')).settings || {};"
                           f" await chrome.storage.local.set({{settings: {{...cur, serverUrl: {json.dumps(f'ws://127.0.0.1:{args.port}/ws')},"
-                          f" targetLanguages: {json.dumps(targets)}}}}}); return true; }})()")
+                          f" targetLanguages: {json.dumps(targets)}, captionMode: true}}}}); return true; }})()")
+        end = time.time() + 10
+        while time.time() < end and not cdp.evaluate(
+                ctl, "chrome.scripting ? chrome.scripting.getRegisteredContentScripts().then(r => r.length) : 1"):
+            time.sleep(0.2)
 
         page_id = cdp.send("Target.createTarget", {"url": page_url})["targetId"]
         state["page_session"] = page = cdp.attach(page_id)
@@ -458,7 +567,12 @@ def sw_idle_run(args, page_url: str, scratch: Path, summary: dict) -> bool:
 
         # B: keepalive off -> Chrome's own idle timeout stops the worker
         world = content_world()
-        cleared = cdp.evaluate(page, "(() => { const w = globalThis.subtitleWS; if (!w) return false;"
+        timeline["B_content_worlds"] = len([c for c in contexts.values() if (c.get("auxData") or {}).get("type") == "isolated"
+                                            and (c.get("auxData") or {}).get("frameId") == frame_id])
+        timeline["B_port_before"] = cdp.evaluate(page, "(() => { const w = globalThis.subtitleWS; return w ? {port: !!w.port,"
+                                                       " timer: w.keepaliveTimer != null, wanted: w.wanted} : null; })()",
+                                                 context_id=world) if world else None
+        cleared = cdp.evaluate(page, "(() => { const w = globalThis.subtitleWS; if (!w || !w.port) return false;"
                                      " clearInterval(w.keepaliveTimer); w.keepaliveTimer = null; return true; })()",
                                context_id=world) if world else False
         timeline["B_keepalive_cleared"] = bool(cleared)
@@ -497,7 +611,7 @@ def sw_idle_run(args, page_url: str, scratch: Path, summary: dict) -> bool:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--path", choices=("audio", "captions", "security", "sw-idle"), default="audio")
+    ap.add_argument("--path", choices=("audio", "captions", "security", "sw-idle", "permissions"), default="audio")
     ap.add_argument("--idle", type=float, default=40.0, help="sw-idle: seconds of silence per phase (Chrome's idle timeout is 30 s)")
     ap.add_argument("--wav", type=Path, default=DEFAULT_WAV)
     ap.add_argument("--port", type=int, default=8765)
@@ -508,6 +622,8 @@ def main() -> int:
     ap.add_argument("--headful", action="store_true")
     ap.add_argument("--extension", type=Path, default=EXTENSION, help="extension folder to load (default: ../extension)")
     ap.add_argument("--enable", action="store_true", help="captions: enable translation on the tab like the popup does")
+    ap.add_argument("--no-test-grant", action="store_true",
+                    help="load the extension as is (no 127.0.0.1 host permission; the paths that need site access fail)")
     args = ap.parse_args()
 
     from playwright.sync_api import sync_playwright
@@ -516,8 +632,19 @@ def main() -> int:
     backend = None
     summary = {"ok": False, "path": args.path, "wav": args.wav.name, "targets": args.targets}
     try:
+        if args.path == "permissions":
+            with sync_playwright() as pw:
+                ctx = launch(pw, scratch / "profile", None, not args.headful, args.extension)
+                ext_id = service_worker(ctx).url.split("/")[2]
+                summary["extension_id"] = ext_id
+                summary["ok"] = permissions_checks(ctx, ext_id, summary)
+                ctx.close()
+            return 0 if summary["ok"] else 1
+        if not args.no_test_grant:
+            args.extension = test_extension_copy(args.extension, scratch)
+            summary["test_grant"] = list(TEST_ORIGINS)
         if args.start_backend:
-            backend = start_backend(args.port, scratch)
+            backend = start_backend(args.port, scratch, [extension_id_for_path(str(args.extension))])
         health = f"http://127.0.0.1:{args.port}/health/json"
         if not wait_http(health, 120 if args.start_backend else 5):
             summary["error"] = f"backend not reachable at {health}"
@@ -553,10 +680,16 @@ def main() -> int:
             ctx = launch(pw, scratch / "profile", ext_id, not args.headful, args.extension)
             sw = service_worker(ctx)
             targets = [t for t in args.targets.split(",") if t]
-            sw.evaluate("""async ({url, targets}) => {
+            caption_mode = args.path != "audio"  # the audio path must work with caption mode off (D2)
+            sw.evaluate("""async ({url, targets, captionMode}) => {
                 const cur = (await chrome.storage.local.get('settings')).settings || {};
-                await chrome.storage.local.set({settings: {...cur, serverUrl: url, targetLanguages: targets}});
-            }""", {"url": f"ws://127.0.0.1:{args.port}/ws", "targets": targets})
+                await chrome.storage.local.set({settings: {...cur, serverUrl: url, targetLanguages: targets, captionMode}});
+            }""", {"url": f"ws://127.0.0.1:{args.port}/ws", "targets": targets, "captionMode": caption_mode})
+            if caption_mode:  # caption mode registers the content scripts for the granted origins
+                end = time.time() + 10
+                while time.time() < end and not sw.evaluate(
+                        "chrome.scripting ? chrome.scripting.getRegisteredContentScripts().then(r => r.length) : 1"):
+                    time.sleep(0.2)
 
             page = ctx.new_page()
             records = []

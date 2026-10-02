@@ -60,3 +60,36 @@ start / success with `from_version`, `to_version`, `backup`). An existing backup
 gets a timestamp suffix). If the backup fails, the migration does not run and the TM does not start. A new database
 is created at the current version without a backup. Tests: `backend/tests/test_tm_migration.py` (scratch databases
 only).
+
+## 3. Site access: what the extension may read, and when (D2)
+
+A fresh install has no host permissions, no content scripts and no install-time warning
+(`chrome.management.getPermissionWarningsByManifest` returns `[]`; the old manifest showed "Read and change all your
+data on all websites"). Default permissions: `storage`, `activeTab`, `offscreen`, `scripting`.
+
+- **Live captions (audio path).** `tabCapture` is an *optional* permission: Chrome words it as "Read and change all
+  your data on all websites" (measured: removing it alone empties the warning list), so the popup asks for it inside
+  the first click on *Start Live Captions* (`chrome.permissions.request` before the first `await`, while the click's
+  user activation lasts); later clicks resolve without a prompt. Alt+L before that opens the popup. The click on the
+  action grants `activeTab` for that tab, and the service worker injects the overlay scripts into its top frame with
+  `chrome.scripting.executeScript` (`ensureContentScript`).
+- **Caption mode (page subtitles).** Off by default (`settings.captionMode`). Switching it on in Options requests the
+  14 caption sites (`lib/caption-mode.js` `CAPTION_ORIGINS`, one per site adapter of the subtitle detector) as
+  optional host permissions; it is saved as on only if Chrome grants them. The worker then registers the content
+  scripts for the granted origins (`chrome.scripting.registerContentScripts`, all frames, `document_idle`,
+  persistent) and keeps the registration in step with the setting and with `permissions.onAdded/onRemoved`.
+  Switching it off unregisters them and gives the permissions back. A tab is still read only after the user enables
+  it in the popup (E17); that enable also works on a site outside the 14 through the popup's `activeTab` grant
+  (top frame only, until the tab navigates).
+- **No double injection.** A page on a granted site gets the registered scripts at `document_idle`; enabling the tab
+  before that would inject them a second time (two backend ports; seen as a flaky sw-idle run).
+  `ensureInjected` waits for a loading page's own scripts and injects only into a page that finished loading
+  without them (a tab opened before caption mode was switched on); `backend-port.js` never replaces a port it
+  already created (`extension/tests/injection.test.js`).
+
+Tests: `extension/tests/manifest.test.js` (permissions, optional sites cover every site adapter, defaults off,
+explanation), `e2e_extension.py --path permissions` on the real extension in a fresh profile (no origins, no warnings,
+no content scripts; the explanation; the toggle requests exactly the 14 sites and stays off when Chrome does not grant
+them; Start requests `tabCapture`). The other browser paths load a scratch copy of the extension whose manifest adds
+`http://127.0.0.1/*` and `tabCapture` (automation cannot click the action or answer a permission prompt); the audio
+path runs with caption mode off.

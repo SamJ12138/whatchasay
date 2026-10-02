@@ -181,7 +181,8 @@
 
   root.BackendPort = BackendPort;
   if (typeof module !== 'undefined' && module.exports) module.exports = { BackendPort };
-  if (root.chrome && root.chrome.runtime && typeof root.document !== 'undefined') {
+  // never replace a port main.js already holds (the scripts can be injected twice: D2)
+  if (root.chrome && root.chrome.runtime && typeof root.document !== 'undefined' && !root.subtitleWS) {
     root.subtitleWS = new BackendPort(root.chrome.runtime);
   }
 })(typeof globalThis !== 'undefined' ? globalThis : self);

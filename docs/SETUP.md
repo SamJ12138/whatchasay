@@ -63,7 +63,9 @@ Check `http://127.0.0.1:8765/health/json`: `mt_engines` lists `opus` (the defaul
 
 ## 3. Browser extension
 
-1. `chrome://extensions` → **Developer mode** → **Load unpacked** → `extension/`.
+1. `chrome://extensions` → **Developer mode** → **Load unpacked** → `extension/`. It asks for no site access at
+   install. *Start Live Captions* asks once to capture tab audio; translating subtitles a page already shows needs
+   **Caption mode** (Options), which asks for the supported video sites.
 2. Pin the icon. Open the **Options** page to choose target languages (English/Chinese/Bengali/…).
 3. Optional, Chrome 138+: in the popup click **Prepare on-device translation** to download Chrome's language packs.
    The extension then translates live captions in the browser without the backend hop.

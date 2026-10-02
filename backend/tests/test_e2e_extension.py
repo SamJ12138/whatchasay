@@ -63,3 +63,12 @@ def test_caption_session_survives_service_worker_idle_timeout():
     summary, proc = run_harness("--path", "sw-idle")
     assert summary["ok"], (summary, proc.stderr[-2000:])
     assert summary["checks"]["B_worker_stopped_by_idle_timeout"], summary
+
+
+def test_fresh_install_asks_for_no_site_access_and_caption_mode_is_opt_in():
+    """D2 on the real extension (not the harness's test copy): no origins, no install
+    warnings, no content scripts; caption mode requests the caption sites; Start asks
+    for tab audio capture."""
+    summary, proc = run_harness("--path", "permissions")
+    assert summary["ok"], (summary, proc.stderr[-2000:])
+    assert summary["granted"]["origins"] == [] and summary["install_warnings"] == []

@@ -27,6 +27,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const liveStatus = $('live-status');
   const btnPrepareTranslator = $('btn-prepare-translator');
   const openOptions = $('open-options');
+  const tabHint = $('tab-hint');
 
   const LANG_NAMES = { auto: 'Auto-detect', en: 'English', zh: 'Chinese', bn: 'Bengali' };
 
@@ -36,12 +37,19 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   let liveState = { capturing: false, tabId: null };
   const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  // "Translate subtitles on this tab": per tab, off until the user turns it on (E17)
+  // "Translate subtitles on this tab": per tab, off until the user turns it on (E17),
+  // and only with caption mode on (D2, Settings)
+  function showTabHint(text) {
+    tabHint.textContent = text || '';
+    tabHint.hidden = !text;
+  }
   toggleOverlay.checked = false;
   if (activeTab?.id) {
     chrome.runtime.sendMessage({ type: 'GET_TAB_STATE', tabId: activeTab.id }, (st) => {
       void chrome.runtime.lastError;
       toggleOverlay.checked = !!(st && st.enabled);
+      toggleOverlay.disabled = !(st && st.captionMode);
+      if (!(st && st.captionMode)) showTabHint('Caption mode is off. Turn it on in Settings to translate on-page subtitles.');
     });
   }
 
@@ -53,8 +61,15 @@ document.addEventListener('DOMContentLoaded', async () => {
   // ---- quick toggles ----
   toggleOverlay.addEventListener('change', (e) => {
     if (!activeTab?.id) return;
-    chrome.runtime.sendMessage({ type: 'SET_TAB_ENABLED', tabId: activeTab.id, enabled: e.target.checked },
-      () => void chrome.runtime.lastError);
+    chrome.runtime.sendMessage({ type: 'SET_TAB_ENABLED', tabId: activeTab.id, enabled: e.target.checked }, (res) => {
+      void chrome.runtime.lastError;
+      if (!res || !res.ok) {
+        toggleOverlay.checked = false;
+        showTabHint((res && res.error) || 'Could not enable translation on this tab.');
+      } else {
+        showTabHint('');
+      }
+    });
   });
 
   toggleRefiner.addEventListener('change', async (e) => {
@@ -83,12 +98,22 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   btnLive.addEventListener('click', async () => {
     if (!activeTab?.id) return;
+    // Tab audio capture is asked for on first use, inside this click (D2): Chrome words
+    // the tabCapture permission as "read and change all your data on all websites".
+    // Already allowed -> resolves true without a prompt.
+    const captureAllowed = liveState.capturing ? Promise.resolve(true)
+      : chrome.permissions.request({ permissions: ['tabCapture'] }).catch(() => false);
     btnLive.disabled = true;
     try {
       if (liveState.capturing) {
         await sendToBackground({ type: 'ASR_STOP' });
         setLiveUi(false);
       } else {
+        if (!(await captureAllowed)) {
+          liveStatus.textContent = 'Live captions need permission to capture this tab\'s audio.';
+          liveStatus.className = 'live-status error';
+          return;
+        }
         liveStatus.textContent = 'Starting…';
         const res = await sendToBackground({ type: 'ASR_START', tabId: activeTab.id, sourceLang: liveLang.value });
         if (res && res.ok) {

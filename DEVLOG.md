@@ -249,3 +249,18 @@ D4 cloud providers off by default, keys only in backend config.
   literary English, and zh->bn (pivot through English) can drop a clause. `NOTICE.md`: licenses of every downloaded
   model/binary; shhossain/opus-mt-en-to-bn is Apache-2.0; the Mandarin Zipformer declares no license and stays the
   default (the Apache-2.0 alternatives have 1.6-1.9x its CER on aishell-1).
+- Batch 2 (D2, caption path opt-in): fresh install = no host permissions, no content scripts, no install warning
+  (`getPermissionWarningsByManifest`: `[]`; before: "Read and change all your data on all websites"). Default
+  permissions storage / activeTab / offscreen / scripting. `tabCapture` turned out to carry that same all-sites
+  warning by itself, so it is an optional permission requested inside the popup's first *Start Live Captions* click
+  (conflict with "default permissions = what the audio path needs", decided by the intent "asks for no site
+  permissions"). Overlay injected on demand (`ensureContentScript`, activeTab). Caption mode (`settings.captionMode`,
+  off) requests the 14 caption sites (`lib/caption-mode.js`; the brief said 13, the detector has 14 adapters) as
+  optional host permissions from Options, saved as on only when granted; the worker registers the content scripts
+  for the granted origins and unregisters them when it goes off (permissions given back). Popup: per-tab toggle
+  disabled with a hint while caption mode is off. Found and fixed while testing: enabling a tab before a granted
+  page's registered scripts ran injected them twice (two backend ports; made the sw-idle phase B flaky) ->
+  `ensureInjected` waits for a loading page's own scripts, `backend-port.js` never replaces its port. Harness: every
+  path but `permissions` loads a scratch copy granted `http://127.0.0.1/*` + `tabCapture` (automation cannot click
+  the action or answer a prompt); new `--path permissions` on the real extension; `--lang=en-US`.
+  `docs/architecture-notes.md` §3.

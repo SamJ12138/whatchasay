@@ -7,12 +7,29 @@
   "permissions": [
     "storage",
     "activeTab",
-    "tabCapture",
-    "offscreen"
+    "offscreen",
+    "scripting"
   ],
 
-  "host_permissions": [
-    "<all_urls>"
+  "optional_permissions": [
+    "tabCapture"
+  ],
+
+  "optional_host_permissions": [
+    "https://*.youtube.com/*",
+    "https://*.netflix.com/*",
+    "https://*.primevideo.com/*",
+    "https://*.disneyplus.com/*",
+    "https://*.hbomax.com/*",
+    "https://*.max.com/*",
+    "https://*.twitch.tv/*",
+    "https://*.yfsp.tv/*",
+    "https://*.bilibili.com/*",
+    "https://*.iqiyi.com/*",
+    "https://*.youku.com/*",
+    "https://v.qq.com/*",
+    "https://*.viu.com/*",
+    "https://*.abema.tv/*"
   ],
 
   "icons": {
@@ -34,24 +51,6 @@
     "service_worker": "background.js",
     "type": "module"
   },
-
-  "content_scripts": [
-    {
-      "matches": ["<all_urls>"],
-      "js": [
-        "obs.js",
-        "content-scripts/ws-protocol.js",
-        "content-scripts/guards.js",
-        "content-scripts/backend-port.js",
-        "content-scripts/subtitle-detector.js",
-        "content-scripts/overlay.js",
-        "content-scripts/main.js"
-      ],
-      "css": [],
-      "run_at": "document_idle",
-      "all_frames": true
-    }
-  ],
 
   "options_ui": {
     "page": "options/options.html",

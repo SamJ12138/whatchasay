@@ -12,6 +12,7 @@ import './obs.js';
 import './content-scripts/ws-protocol.js';
 import './lib/websocket-client.js';
 import './lib/tab-connections.js';
+import './lib/caption-mode.js';
 
 const obs = globalThis.STObs;
 obs.init({ context: 'background' });
@@ -72,6 +73,9 @@ const DEFAULT_SETTINGS = {
   asrEngine: 'auto',          // auto | sherpa-zipformer | whisper | cloud
   translationEngine: 'auto',  // auto | chrome | backend
   showPartials: true,
+  // Caption mode (D2): translate subtitles a page already shows. Off by default;
+  // turning it on (Options) requests the caption sites as optional host permissions.
+  captionMode: false,
   // Optional cloud keys (stored locally only, sent to the local backend)
   cloudKeys: {},
   schemaVersion: SETTINGS_SCHEMA_VERSION,
@@ -175,6 +179,68 @@ chrome.runtime.onInstalled.addListener(async (details) => {
 runSettingsMigration();
 
 // ---------------------------------------------------------------------------
+// Site access (D2): no host permissions at install. The overlay scripts are
+// injected into a tab the user acted on (activeTab: action click, Alt+L,
+// popup) or registered for the sites the user granted to caption mode
+// (lib/caption-mode.js).
+// ---------------------------------------------------------------------------
+
+const captionMode = globalThis.STCaptionMode;
+let captionSync = Promise.resolve();
+
+/** Register / update / unregister the caption-mode content scripts to match the
+ *  setting and the granted origins. Serialized: two syncs never race to register. */
+function syncCaptionScripts(reason) {
+  captionSync = captionSync.then(() => doSyncCaptionScripts(reason), () => doSyncCaptionScripts(reason));
+  return captionSync;
+}
+
+async function doSyncCaptionScripts(reason) {
+  try {
+    const settings = await getSettings();
+    const granted = (await chrome.permissions.getAll()).origins || [];
+    const want = captionMode.registrationFor(settings.captionMode === true, granted);
+    const have = await chrome.scripting.getRegisteredContentScripts({ ids: [captionMode.REGISTRATION_ID] });
+    if (!want) {
+      if (have.length) await chrome.scripting.unregisterContentScripts({ ids: [captionMode.REGISTRATION_ID] });
+    } else if (have.length) {
+      await chrome.scripting.updateContentScripts([want]);
+    } else {
+      await chrome.scripting.registerContentScripts([want]);
+    }
+    obs.log('ext_caption_mode', 'success', { action: want ? 'registered' : 'off', reason, origins: want ? want.matches.length : 0 });
+  } catch (e) {
+    obs.log('ext_caption_mode', 'fail', { reason, error_type: 'process', error_message: e.message || String(e) });
+  }
+}
+
+syncCaptionScripts('startup');
+chrome.permissions.onAdded.addListener(() => syncCaptionScripts('permissions added'));
+chrome.permissions.onRemoved.addListener(() => syncCaptionScripts('permissions removed'));
+chrome.storage.onChanged.addListener((changes, area) => {
+  const c = area === 'local' && changes.settings;
+  if (c && (c.oldValue || {}).captionMode !== (c.newValue || {}).captionMode) syncCaptionScripts('setting changed');
+});
+
+/** Make sure the overlay scripts run in the tab's top frame: already there
+ *  (registered caption mode, or injected before), or injected now, never twice
+ *  (captionMode.ensureInjected). Needs site access to the tab: activeTab from
+ *  the user's action, or a granted origin. */
+function ensureContentScript(tabId) {
+  const target = { tabId, frameIds: [0] };
+  return captionMode.ensureInjected({
+    probe: async () => {
+      const [r] = await chrome.scripting.executeScript({
+        target, func: () => ({ loaded: !!globalThis.__subtitleTranslatorInitialized, state: document.readyState }),
+      });
+      return (r && r.result) || { loaded: false, state: 'complete' };
+    },
+    inject: () => chrome.scripting.executeScript({ target, files: captionMode.CONTENT_SCRIPT_FILES }),
+    sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Live captions (ASR) orchestration
 // ---------------------------------------------------------------------------
 
@@ -222,9 +288,18 @@ async function startAsr(tabId, overrides = {}) {
       step = 'stop_previous';
       await stopAsr();
     }
+    // tabCapture is optional (D2: Chrome words it as access to all your data on all
+    // websites, so it is asked for on first use from the popup, not at install)
+    step = 'permission';
+    if (!(await chrome.permissions.contains({ permissions: ['tabCapture'] }))) {
+      throw new Error('Tab audio capture is not allowed yet: start live captions from the extension popup once and allow it');
+    }
     // Must be called from a user gesture (popup click / command)
     step = 'getMediaStreamId';
     const streamId = await chrome.tabCapture.getMediaStreamId({ targetTabId: tabId });
+    // the overlay draws the captions: inject it with the access the user's action gave (activeTab)
+    step = 'inject';
+    const injected = await ensureContentScript(tabId);
     step = 'ensureOffscreen';
     await ensureOffscreen();
     const sourceLang = overrides.sourceLang || settings.asrSourceLang || 'auto';
@@ -249,7 +324,7 @@ async function startAsr(tabId, overrides = {}) {
     await saveAsrState();
     chrome.tabs.sendMessage(tabId, { type: 'ASR_STATE', capturing: true, sourceLang, targetLangs, sessionId }, { frameId: 0 })
       .catch((e) => logRelayFail('ext_relay', e, { session_id: sessionId, msg_type: 'ASR_STATE' }));
-    obs.log('ext_capture', 'success', { session_id: sessionId, duration_ms: performance.now() - t0, tab_id: tabId, source_lang: sourceLang, target_langs: targetLangs });
+    obs.log('ext_capture', 'success', { session_id: sessionId, duration_ms: performance.now() - t0, tab_id: tabId, source_lang: sourceLang, target_langs: targetLangs, overlay: injected });
     return { ok: true };
   } catch (e) {
     const msg = e.message || String(e);
@@ -286,7 +361,9 @@ async function getAsrStatus() {
   try {
     if (chrome.offscreen.hasDocument && await chrome.offscreen.hasDocument()) off = await sendToOffscreen({ type: 'ASR_STATUS' });
   } catch (_) {}
-  return { ...asrState, offscreen: off, supported: !!chrome.tabCapture };
+  const optional = chrome.runtime.getManifest().optional_permissions || [];
+  return { ...asrState, offscreen: off, supported: !!chrome.tabCapture || optional.includes('tabCapture'),
+    captureAllowed: !!chrome.tabCapture };
 }
 
 chrome.tabs.onRemoved.addListener((tabId) => {
@@ -305,6 +382,8 @@ chrome.commands.onCommand.addListener(async (command) => {
       if (asrState.capturing) await stopAsr(); else await startAsr(tab.id);
     } catch (e) {
       console.error('Live captions toggle failed:', e);  // startAsr already logged ext_capture fail
+      // not allowed yet: the popup is where the user can allow tab audio capture (D2)
+      if (/not allowed yet/.test(e.message || '') && chrome.action.openPopup) chrome.action.openPopup().catch(() => {});
     }
     return;
   }
@@ -400,7 +479,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     // ---- per-tab translation (E17) ----
     case 'GET_TAB_STATE': {
       const tabId = message.tabId || sender.tab?.id;
-      tabConnections.ready.then(() => sendResponse({ enabled: tabConnections.isEnabled(tabId) }));
+      Promise.all([tabConnections.ready, getSettings()]).then(([, s]) =>
+        sendResponse({ enabled: tabConnections.isEnabled(tabId), captionMode: s.captionMode === true }));
       return true;
     }
     case 'SET_TAB_ENABLED': {
@@ -411,11 +491,28 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return false;
       }
       const tabId = message.tabId;
-      tabConnections.ready.then(() => {
-        tabConnections.setEnabled(tabId, !!message.enabled);
-        chrome.tabs.sendMessage(tabId, { type: 'TAB_ENABLED', enabled: !!message.enabled }).catch(() => {});
-        sendResponse({ ok: true, enabled: !!message.enabled });
-      });
+      const on = !!message.enabled;
+      (async () => {
+        await tabConnections.ready;
+        if (on) {
+          // caption mode is opt-in (D2); a tab outside the granted sites is reachable only
+          // through the activeTab grant of the popup the user opened on it
+          if ((await getSettings()).captionMode !== true) {
+            sendResponse({ ok: false, reason: 'caption_mode_off', error: 'Caption mode is off. Turn it on in Settings.' });
+            return;
+          }
+          try {
+            await ensureContentScript(tabId);
+          } catch (e) {
+            obs.log('ext_tab', 'fail', { action: 'enable', tab_id: tabId, error_type: 'input_invalid', error_message: 'inject: ' + (e.message || e) });
+            sendResponse({ ok: false, reason: 'no_access', error: 'Cannot read this page: ' + (e.message || e) });
+            return;
+          }
+        }
+        tabConnections.setEnabled(tabId, on);
+        chrome.tabs.sendMessage(tabId, { type: 'TAB_ENABLED', enabled: on }).catch(() => {});
+        sendResponse({ ok: true, enabled: on });
+      })();
       return true;
     }
     case 'FRAME_CUE': {

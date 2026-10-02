@@ -82,6 +82,7 @@ const DEFAULT_SETTINGS = {
   asrEngine: 'auto',
   translationEngine: 'auto',
   showPartials: true,
+  captionMode: false,         // D2: opt-in; turning it on requests the caption sites
   cloudKeys: {},
   // Subtitle limits
   maxLines: 2,
@@ -108,6 +109,9 @@ const elements = {
   asrEngine: document.getElementById('asrEngine'),
   translationEngine: document.getElementById('translationEngine'),
   showPartials: document.getElementById('showPartials'),
+  captionMode: document.getElementById('captionMode'),
+  captionModeExplanation: document.getElementById('captionModeExplanation'),
+  captionModeSites: document.getElementById('captionModeSites'),
   gladiaKey: document.getElementById('gladiaKey'),
   elevenlabsKey: document.getElementById('elevenlabsKey'),
   googleKey: document.getElementById('googleKey'),
@@ -237,6 +241,7 @@ async function loadSettings() {
     if (elements.asrEngine) elements.asrEngine.value = settings.asrEngine || 'auto';
     if (elements.translationEngine) elements.translationEngine.value = settings.translationEngine || 'auto';
     if (elements.showPartials) elements.showPartials.checked = settings.showPartials !== false;
+    if (elements.captionMode) elements.captionMode.checked = settings.captionMode === true;
     const keys = settings.cloudKeys || {};
     if (elements.gladiaKey) elements.gladiaKey.value = keys.gladia_api_key || '';
     if (elements.elevenlabsKey) elements.elevenlabsKey.value = keys.elevenlabs_api_key || '';
@@ -368,11 +373,59 @@ async function saveSettings() {
 }
 
 /**
+ * Caption mode (D2): switching it on asks Chrome for the caption sites (the
+ * request must run inside the click); it is saved as on only once granted.
+ * Switching it off saves it off and gives the site access back.
+ */
+const CAPTION = window.STCaptionMode;
+
+function saveCaptionMode(on) {
+  return new Promise((resolve) => {
+    chrome.runtime.sendMessage({ type: 'UPDATE_SETTINGS', settings: { captionMode: on } }, (r) => { void chrome.runtime.lastError; resolve(r); });
+  });
+}
+
+function onCaptionModeChange(e) {
+  const on = e.target.checked;
+  if (on) {
+    chrome.permissions.request({ origins: CAPTION.CAPTION_ORIGINS }).then(async (granted) => {
+      if (!granted) {
+        e.target.checked = false;
+        obs.log('ext_caption_mode', 'skip', { action: 'request', error_type: 'input_invalid', error_message: 'site access not granted' });
+        showStatus('Chrome did not grant access to the caption sites; caption mode stays off', 'error');
+        return;
+      }
+      await saveCaptionMode(true);
+      obs.log('ext_caption_mode', 'success', { action: 'enabled', origins: CAPTION.CAPTION_ORIGINS.length });
+      showStatus('Caption mode is on. Enable a tab from the popup to translate its subtitles.', 'success');
+    }).catch((err) => {
+      e.target.checked = false;
+      obs.log('ext_caption_mode', 'fail', { action: 'request', error_type: 'process', error_message: err.message || String(err) });
+      showStatus('Could not request site access: ' + (err.message || err), 'error');
+    });
+  } else {
+    saveCaptionMode(false).then(() => chrome.permissions.remove({ origins: CAPTION.CAPTION_ORIGINS }).catch(() => {}));
+    obs.log('ext_caption_mode', 'success', { action: 'disabled' });
+    showStatus('Caption mode is off; site access returned to Chrome.', 'success');
+  }
+}
+
+function initCaptionMode() {
+  if (elements.captionModeExplanation) elements.captionModeExplanation.textContent = CAPTION.EXPLANATION;
+  if (elements.captionModeSites) {
+    const hosts = CAPTION.CAPTION_ORIGINS.map((o) => o.replace(/^https:\/\/(\*\.)?/, '').replace(/\/\*$/, ''));
+    elements.captionModeSites.textContent = 'Sites: ' + hosts.join(', ');
+  }
+  if (elements.captionMode) elements.captionMode.addEventListener('change', onCaptionModeChange);
+}
+
+/**
  * Reset to default settings
  */
 async function resetDefaults() {
   if (confirm('Are you sure you want to reset all settings to defaults?')) {
     await chrome.storage.local.set({ settings: DEFAULT_SETTINGS });
+    chrome.permissions.remove({ origins: CAPTION.CAPTION_ORIGINS }).catch(() => {});
     loadSettings();
     showStatus('Settings reset to defaults', 'success');
   }
@@ -645,6 +698,7 @@ document.addEventListener('DOMContentLoaded', () => {
   console.log('[Options] Initializing...');
   loadSettings();
   initEventListeners();
+  initCaptionMode();
 
   // Periodic connection check
   setInterval(() => {
