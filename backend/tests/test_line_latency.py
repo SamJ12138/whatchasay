@@ -216,12 +216,15 @@ def test_table_row_and_run_log_stats(tmp_path, monkeypatch):
         {"stage": "segment", "event": "success", "context": {"lang": "bn", "audio_s": 10.24}},
         {"stage": "translate", "event": "success", "duration_ms": 40.0, "context": {}},
         {"stage": "translate", "event": "success", "duration_ms": 120.0, "context": {}},
+        {"stage": "draft", "event": "success", "context": {"words": 3, "shown_words": 1}},     # after local agreement
+        {"stage": "draft", "event": "skip", "context": {"words": 5, "shown_words": 0}},        # nothing new agreed: not sent
+        {"stage": "draft", "event": "success", "context": {"words": 6, "shown_words": 4}},
     ]
     log.write_text("\n".join(json.dumps(r) for r in recs), encoding="utf-8")
     monkeypatch.setenv("SUBTITLE_OBS_DIR", str(tmp_path))
     stats = lt.run_log_stats("R1", 20.0, "bn")
     assert stats == {"segments_s": [2.08, 10.24], "translate_calls": 2, "translate_calls_per_s": 0.1,
-                     "translate_p50_ms": 40.0, "translate_p95_ms": 120.0}
+                     "translate_p50_ms": 40.0, "translate_p95_ms": 120.0, "drafts_sent": 2, "words_per_draft": 2.5}
     summary = {"ok": True, "run_id": "R1", "detected_lang": "bn", "run_log": stats,
                "line_latency": {"lines": 3, "lang": ["en", "bn", "bn"], "first_display_ms": [300, 2691, 741],
                                 "final_ms": [900, 380, 690], "first_translation_ms": [None, 7900, 9810],
@@ -234,3 +237,4 @@ def test_table_row_and_run_log_stats(tmp_path, monkeypatch):
     assert (r["first_translation_p50_ms"], r["final_p50_ms"], r["first_confirmed_s"]) == (7900, 380, 5.54)
     md = lt.markdown([r])
     assert "`R1`" in md and "| 0.74 / 2.69 |" in md and "| 7.90 / 9.81 |" in md and "2.08, 10.24" in md
+    assert "| 3.5 | 2.5 | 1.5 |" in md   # drafts per line, words per draft, non-append revisions per line

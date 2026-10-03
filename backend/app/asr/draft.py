@@ -5,6 +5,10 @@ stable_prefix()   the part of the open line that has stopped changing: its leadi
                   words that were the same in the last N partial results.
 DraftScheduler    re-translates that prefix, the newest one only, at most once per
                   debounce interval, and never after the line's final arrived.
+LocalAgreement    what of a draft translation is shown: the longest common prefix of
+                  the line's last K draft translations (local agreement), so a draft
+                  that rewrites the previous one does not reach the screen until the
+                  translations agree on how the sentence starts.
 
 The draft is shown above the growing source text and replaced by the final
 translation at the endpoint (main.py: /ws/asr `draft` messages).
@@ -57,6 +61,76 @@ def stable_prefix(history: List[str], n: int) -> str:
     if n == 1:
         k = len(newest)
     return history[-1][:newest[k - 1][1]].strip() if k else ""
+
+
+def word_count(text: str) -> int:
+    """Words as the agreement counts them: space-separated runs, every CJK character one."""
+    return len(_units(text or ""))
+
+
+_TRAILING_PUNCT = ".,;:!?…。，！？、"
+
+
+def agreed_prefix(texts: List[str]) -> str:
+    """The leading words (CJK characters) that all `texts` share, cut from the newest
+    (the last) so its spacing is kept; '' when they share none. Punctuation glued to a
+    word ("like?" against "like") does not break the agreement, and a cut prefix does
+    not keep the punctuation the newest text put after its last agreed word."""
+    if not texts:
+        return ""
+    units = [_units(t) for t in texts]
+    newest = units[-1]
+    core = lambda w: w.rstrip(_TRAILING_PUNCT) or w  # noqa: E731
+    k = 0
+    while k < min(len(u) for u in units) and all(core(u[k][0]) == core(newest[k][0]) for u in units):
+        k += 1
+    if not k:
+        return ""
+    if k == len(newest):
+        return texts[-1].strip()
+    return texts[-1][:newest[k - 1][1]].strip().rstrip(_TRAILING_PUNCT).strip()
+
+
+class LocalAgreement:
+    """Local agreement on a line's draft translations: push(key, text) returns what to
+    show, the longest common prefix of the line's last `k` draft translations, or None
+    when the display does not change (the same prefix as before, or nothing in common:
+    what is shown stays until the translations agree again, or the final replaces it).
+    The first draft of a line is shown as it is: waiting for a second one would cost a
+    whole debounce interval. k < 2: no agreement, every draft as it is. The shown text is
+    append-only except when the agreed prefix itself shrinks (the last drafts agree on
+    less than the ones before)."""
+
+    def __init__(self, k: int):
+        self.k = max(1, int(k))
+        self._history: Dict[Hashable, List[str]] = {}
+        self._shown: Dict[Hashable, str] = {}
+
+    def push(self, key: Hashable, text: str) -> Optional[str]:
+        if self.k < 2:
+            return text
+        h = self._history.setdefault(key, [])
+        h.append(text)
+        del h[:-self.k]
+        agreed = agreed_prefix(h)
+        if not agreed or agreed == self._shown.get(key):
+            return None
+        self._shown[key] = agreed
+        return agreed
+
+    def shown(self, key: Hashable) -> Optional[str]:
+        return self._shown.get(key)
+
+    def close(self, key: Hashable) -> None:
+        self._history.pop(key, None)
+        self._shown.pop(key, None)
+        if len(self._history) > 200:   # lines that never closed (a replaced recognizer's)
+            for old in list(self._history)[:-200]:
+                self.close(old)
+
+    def reset(self) -> None:
+        self._history.clear()
+        self._shown.clear()
 
 
 class DraftScheduler:

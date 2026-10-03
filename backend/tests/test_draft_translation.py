@@ -12,7 +12,7 @@ from typing import List
 
 import pytest
 
-from app.asr.draft import DraftScheduler, stable_prefix
+from app.asr.draft import DraftScheduler, LocalAgreement, stable_prefix
 from app.asr.engine import AsrEvent, SAMPLE_RATE
 from app.asr.session import SessionConfig, StreamingASRSession
 from tests.fakes import pcm_frame
@@ -47,6 +47,63 @@ def test_chinese_characters_are_words_and_spaces_are_kept_as_written():
 
 def test_no_drafts_with_zero():
     assert stable_prefix(["one", "one two"], 0) == ""
+
+
+# ---------------------------------------------------------------- local agreement on the draft translations
+
+
+def _agreed(seq, k):
+    """What the viewer sees after each draft translation of one line: None = no change."""
+    a = LocalAgreement(k)
+    return [a.push("line", t) for t in seq]
+
+
+def test_the_display_is_the_longest_common_prefix_of_the_last_k_draft_translations():
+    # the first draft has nothing to agree with and is shown as it is (waiting for a second
+    # one would cost a whole debounce interval); then the prefix the last two agree on
+    seq = ["If you don't", "If you don't order me.", "If you don't order me either.", "You don't have to order me either."]
+    assert _agreed(seq, 2) == ["If you don't", None, "If you don't order me", None]   # None: the display does not change
+    # k = 3: the last three must agree
+    assert _agreed(seq, 3) == ["If you don't", None, None, None]
+    # k = 1 (or less): no agreement, every draft as it is
+    assert _agreed(seq, 1) == seq
+    assert _agreed(seq, 0) == seq
+
+
+def test_the_display_is_append_only_except_when_the_agreed_prefix_itself_shrinks():
+    seq = ["from", "from the day", "from the day after tomorrow", "from the day after the next", "from the week after", "from the week after next"]
+    out = _agreed(seq, 2)
+    assert out == ["from", None, "from the day", "from the day after", "from the", "from the week after"]
+    shown = [t for t in out if t is not None]
+    for before, after in zip(shown, shown[1:]):
+        agreed_shrank = len(after) < len(before)
+        assert after.startswith(before) or (agreed_shrank and before.startswith(after)), (before, after)
+    # where it shrank, the agreed prefix of the last two drafts had shrunk itself
+    assert out[4] == "from the" and seq[3].startswith("from the") and seq[4].startswith("from the") and not seq[4].startswith("from the day")
+
+
+def test_an_empty_agreement_holds_the_display_and_an_unchanged_one_is_not_resent():
+    a = LocalAgreement(2)
+    assert a.push("x", "Key") == "Key"
+    assert a.push("x", "What does it look like?") is None          # nothing in common: what is shown stays
+    assert a.push("x", "What does it look like now?") == "What does it look like"
+    assert a.push("x", "What does it look like now, sir?") == "What does it look like now"
+    assert a.push("x", "What does it look like now, madam?") is None   # agreed on the same prefix again
+    assert a.shown("x") == "What does it look like now"
+    assert a.push("x", "What does it look like now, madam?") == "What does it look like now, madam?"   # two alike: all of it
+    a.close("x")
+    assert a.shown("x") is None
+    assert a.push("x", "Key") == "Key"                               # a closed line's history is gone
+
+
+def test_agreement_counts_cjk_characters_as_words_and_is_per_line():
+    a = LocalAgreement(2)
+    assert a.push(0, "你把钥匙") == "你把钥匙"
+    assert a.push(0, "你把钥匙放在") is None                           # agreed on what is shown already
+    assert a.push(1, "我会") == "我会"                                # another line, its own history
+    assert a.push(0, "你把钥匙放在哪里") == "你把钥匙放在"
+    a.reset()
+    assert a.shown(0) is None and a.shown(1) is None
 
 
 # ---------------------------------------------------------------- the session marks the stable prefix
@@ -228,9 +285,15 @@ def test_a_draft_appears_before_the_endpoint_and_the_final_matches_the_full_segm
     sources = [d["source_text"] for d in drafts]
     assert all("where did you put the keys".startswith(s) and s for s in sources), sources
     assert sources == sorted(sources, key=len) and len(set(sources)) == len(sources), sources
-    for d in drafts:
-        assert d["utterance_id"] == 0 and d["translations"]["zh"]["single_line"].endswith(d["source_text"]), d
+    # what is sent is the part the last draft translations agree on (local agreement, k = 2):
+    # a prefix of the newest translation, append-only here since the fake MT is prefix-stable
+    shown = [d["translations"]["zh"]["single_line"] for d in drafts]
+    for d, text in zip(drafts, shown):
+        assert d["utterance_id"] == 0 and ("中[fake:en->zh] " + d["source_text"]).startswith(text) and text, d
         assert d["translations"]["zh"]["status"] == "ok"
+        assert d["agreed_k"] == 2
+    for before, after in zip(shown, shown[1:]):
+        assert after.startswith(before), (before, after)
     # the final translation is the translation of the whole segment, whatever the drafts said
     final_tr = [m for m in msgs if m["type"] == "translation"][-1]
     assert final_tr["source_text"] == "where did you put the keys"
@@ -270,4 +333,4 @@ def test_draft_settings_defaults():
     from app.config import ASRConfig
 
     cfg = ASRConfig()
-    assert (cfg.draft_stable_partials, cfg.draft_debounce_ms) == (3, 1500)
+    assert (cfg.draft_stable_partials, cfg.draft_debounce_ms, cfg.draft_agree_k) == (3, 1500, 2)

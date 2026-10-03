@@ -391,6 +391,7 @@ objects are JSON; relative paths are relative to `backend/`. Every setting:
 | `SUBTITLE_ASR__PARTIAL_INTERVAL_MS` | `120` | Minimum gap between partial captions (ms) |
 | `SUBTITLE_ASR__DRAFT_STABLE_PARTIALS` | `3` | Draft translation of a line that is still open: a word counts as stable after this many partial results in a row (0 = no drafts) |
 | `SUBTITLE_ASR__DRAFT_DEBOUNCE_MS` | `1500` | The stable part of an open line is re-translated at most once per this many ms (lower: earlier drafts, more rewriting on screen) |
+| `SUBTITLE_ASR__DRAFT_AGREE_K` | `2` | Local agreement: of a draft translation only the start that the line's last K drafts agree on is shown (1 = every draft as it is); halves the rewrites on screen (`docs/latency.md`) |
 | `SUBTITLE_ASR__WARMUP_LANGUAGES` | `["en", "zh", "bn"]` | Recognizers loaded at startup so a language switch is instant |
 
 **Cloud providers (off by default; text leaves this computer when on)**
@@ -538,10 +539,11 @@ Windows (`.github/workflows/ci.yml`). `DEVLOG.md` is the project history; every 
   spoken language under *Live Captions* in the popup instead of *Auto-detect*.
 - There is no glossary: a word the recognizer gets wrong (a name, a dish) stays wrong, and an Alt+E correction
   covers only the exact sentence it was made on.
-- A draft translation is the translation of the part of a sentence heard so far, and it is usually rewritten when
-  the next one arrives (1.5 times per line on the live clip, 3 times on a long English sentence), so the line above
-  the words can change under your eyes until the sentence ends. `SUBTITLE_ASR__DRAFT_STABLE_PARTIALS=0` turns drafts
-  off.
+- A draft translation is the translation of the part of a sentence heard so far. Only the start that the last two
+  drafts agree on is shown, so it grows rather than changes under your eyes, but it is short (about two words on
+  the live clip) and the final translation still replaces it, which rewrites the line 0.8 times per line on the
+  live clip and twice on a long English sentence. `SUBTITLE_ASR__DRAFT_STABLE_PARTIALS=0` turns drafts off,
+  `SUBTITLE_ASR__DRAFT_AGREE_K=1` shows every draft whole.
 - A very short line that was misrecognised can get an invented translation: OPUS-MT turned three misheard Bengali
   words into "We were married in July 1955." (`docs/latency.md`).
 - Fast dialogue with pauses under half a second still runs two sentences into one line (up to the 6-second cut;

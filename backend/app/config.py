@@ -264,6 +264,10 @@ class ASRConfig(BaseSettings):
     # non-append revisions per line; 2 / 300 ms gave 3.8-4.2 (docs/latency.md).
     draft_stable_partials: int = Field(default=3)
     draft_debounce_ms: int = Field(default=1500)
+    # Local agreement: only the longest common prefix of a line's last K draft translations is
+    # shown (1 = every draft as it is); the first draft of a line is shown as it is. Measured on
+    # the live clip and the samples in docs/latency.md (the batch "local agreement").
+    draft_agree_k: int = Field(default=2)
     warmup_languages: List[str] = Field(default=["en", "zh", "bn"], description="Recognizers loaded at startup so auto-detect switches are instant")
 
     @field_validator("zh_model")

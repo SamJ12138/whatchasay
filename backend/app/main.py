@@ -28,7 +28,7 @@ from .cache import get_translation_memory, get_translation_cache
 from .websocket_handler import websocket_endpoint, manager, format_result, ignore_cloud_keys, save_correction
 from .translation.cloud_translator import cloud_receivers
 from . import asr as asr_pkg
-from .asr.draft import DraftScheduler
+from .asr.draft import DraftScheduler, LocalAgreement, word_count
 from . import obs
 from .security import OriginGuard, allowed_origins, origin_allowed
 
@@ -341,13 +341,25 @@ async def ws_asr(websocket: WebSocket):
             tr = format_result(result)["translations"].get(target)
             if not tr or tr.get("status") not in ("ok", "fallback") or not drafts.is_open(key):
                 return
+            # local agreement: what reaches the screen is the prefix the line's last drafts agree on
+            raw = tr.get("single_line") or tr.get("display_text") or ""
+            shown = agreement.push((key, target), raw)
+            words = word_count(raw)
+            if shown is None:
+                obs.log("draft", "skip", utterance_id=key, target=target, words=words, shown_words=0, k=agreement.k,
+                        error_type="input_invalid", error_message="no new agreed prefix: the display is unchanged")
+                return
+            tr = dict(tr, single_line=shown, display_text=shown, lines=[shown])
+            obs.log("draft", "success", utterance_id=key, target=target, words=words, shown_words=word_count(shown), k=agreement.k)
             await send({"type": "draft", "utterance_id": key, "cue_id": "asr_%s" % key, "source_text": text,
                         "source_lang": lang, "lang_status": msg.get("lang_status"), "translations": {target: tr},
+                        "agreed_k": agreement.k,
                         "w_first": msg.get("w_first"), "w_last": msg.get("w_last"), "server_ts": time.time()})
 
         await asyncio.gather(*(one(t) for t in session.config.target_langs if t != lang))
 
     drafts = DraftScheduler(translate_draft, settings.asr.draft_debounce_ms / 1000)
+    agreement = LocalAgreement(settings.asr.draft_agree_k)
 
     def _handle_events(msgs: List[Dict[str, Any]]) -> List[asyncio.Task]:
         tasks = []
@@ -355,8 +367,11 @@ async def ws_asr(websocket: WebSocket):
             stable = m.pop("stable_text", None)
             if m.get("type") == "final":
                 drafts.close(m.get("utterance_id"))
+                for t in session.config.target_langs:
+                    agreement.close((m.get("utterance_id"), t))
             elif m.get("type") == "reset":
                 drafts.reset()
+                agreement.reset()
             elif stable:
                 drafts.offer(m.get("utterance_id"), stable, m)
             if m.get("type") == "final":

@@ -47,10 +47,10 @@ def pct(xs, p):
 
 
 def run_log_stats(run_id: str, clip_s: float, lang: str | None = None) -> dict:
-    """Segment lengths (finals in the detected language) and translate calls of one
-    backend run, from its run log."""
+    """Segment lengths (finals in the detected language), translate calls and the drafts
+    sent (words shown per draft, after local agreement) of one backend run, from its run log."""
     path = Path(os.environ.get("SUBTITLE_OBS_DIR") or BACKEND / "logs") / f"run_{run_id}.jsonl"
-    segments, translate = [], []
+    segments, translate, draft_words = [], [], []
     if path.exists():
         for line in path.read_text(encoding="utf-8").splitlines():
             try:
@@ -62,9 +62,13 @@ def run_log_stats(run_id: str, clip_s: float, lang: str | None = None) -> dict:
                 segments.append(ctx.get("audio_s"))
             elif r.get("stage") == "translate" and r.get("event") == "success" and isinstance(r.get("duration_ms"), (int, float)):
                 translate.append(r["duration_ms"])
+            elif r.get("stage") == "draft" and r.get("event") == "success" and isinstance(ctx.get("shown_words"), (int, float)):
+                draft_words.append(ctx["shown_words"])
     return {"segments_s": segments, "translate_calls": len(translate),
             "translate_calls_per_s": round(len(translate) / clip_s, 2) if clip_s else None,
-            "translate_p50_ms": pct(translate, 50), "translate_p95_ms": pct(translate, 95)}
+            "translate_p50_ms": pct(translate, 50), "translate_p95_ms": pct(translate, 95),
+            "drafts_sent": len(draft_words),
+            "words_per_draft": round(sum(draft_words) / len(draft_words), 2) if draft_words else None}
 
 
 def row(name: str, s: dict) -> dict:
@@ -93,7 +97,7 @@ def row(name: str, s: dict) -> dict:
         "first_confirmed_s": ll.get("first_confirmed_after_play_s"),
         "non_append_revisions_per_line": mean("non_append_revisions"), "drafts_per_line": mean("drafts"),
         **{k: (s.get("run_log") or {}).get(k) for k in ("segments_s", "translate_calls", "translate_calls_per_s",
-                                                           "translate_p50_ms", "translate_p95_ms")},
+                                                           "translate_p50_ms", "translate_p95_ms", "drafts_sent", "words_per_draft")},
     }
 
 
@@ -105,8 +109,8 @@ def markdown(rows: list[dict]) -> str:
         return "-" if ms is None else f"{ms / 1000:.2f}"
 
     out = ["| Clip | run_id | Lines | First display p50 / max (s) | First translation p50 / max (s) | Final p50 / max (s) "
-           "| First confirmed subtitle (s) | Segments (s) | Translate calls (per s) | Translate p50 / p95 (ms) | Drafts per line | Non-append revisions per line |",
-           "|---|---|---|---|---|---|---|---|---|---|---|---|"]
+           "| First confirmed subtitle (s) | Segments (s) | Translate calls (per s) | Translate p50 / p95 (ms) | Drafts per line | Words per draft | Non-append revisions per line |",
+           "|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
     for r in rows:
         segs = ", ".join(f"{x:g}" for x in (r.get("segments_s") or [])) or "-"
         out.append(f"| {r['clip']} | `{r['run_id']}` | {r['lines']} | {s(r['first_display_p50_ms'])} / {s(r['first_display_max_ms'])} "
@@ -114,7 +118,7 @@ def markdown(rows: list[dict]) -> str:
                    f"| {s(r['final_p50_ms'])} / {s(r['final_max_ms'])} | {f(r['first_confirmed_s'])} | {segs} "
                    f"| {f(r['translate_calls'])} ({f(r['translate_calls_per_s'])}) "
                    f"| {f(r['translate_p50_ms'])} / {f(r['translate_p95_ms'])} | {f(r.get('drafts_per_line'))} "
-                   f"| {f(r['non_append_revisions_per_line'])} |")
+                   f"| {f(r.get('words_per_draft'))} | {f(r['non_append_revisions_per_line'])} |")
     return "\n".join(out)
 
 

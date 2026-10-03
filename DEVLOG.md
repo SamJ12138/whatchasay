@@ -804,3 +804,23 @@ D4 cloud providers off by default, keys only in backend config.
   2.08 s in all; one 1.5 s translate stall in run 2, the only call over 100 ms of 49). Observations A11 fixed; README
   limitation reworded (the policy case) and the harness flag's line. Node `tests/capture-prime.test.js` (5; injected
   before main.js). Tallies: fast 335, slow 42, node 146.
+- Batch 3 (local agreement for drafts; commit "feat: local-agreement display for draft translations"). `asr/draft.py`
+  `LocalAgreement(k)`: `push(key, text)` returns the longest common prefix (words; CJK characters; trailing
+  punctuation ignored for the comparison and not kept on a cut) of the line's last K draft translations, None when
+  the display does not change (the same prefix again, or nothing in common: what is shown stays until the final);
+  the first draft of a line is shown as it is (waiting for a second would cost the 1.5 s debounce). `main.py`
+  `translate_draft` sends the agreed text as the draft's translation (`agreed_k` on the message), logs stage `draft`
+  (`words`, `shown_words`, `k`; `skip input_invalid` when nothing new is agreed) and closes / resets the agreement
+  with the scheduler. Setting `asr.draft_agree_k` (`SUBTITLE_ASR__DRAFT_AGREE_K`), default **2**. Tests: a scripted
+  sequence through the filter is append-only except where the agreed prefix itself shrinks; k = 1 passes drafts
+  through; CJK; per line; the /ws/asr test asserts the drafts are prefixes of the newest translation and
+  append-only with the prefix-stable fake MT. `line_latency_table.py` gained "Words per draft" (from the `draft`
+  records; CJK characters count). Measured (3 browser runs per clip and K, no harness priming; table in
+  `docs/latency.md`): live clip non-append revisions per line 1.83-2.00 (K = 1, i.e. the current N = 3 / 1500 ms)
+  -> **0.80** (K = 2) -> 0.83 (K = 3), first translated text p50 2.07 s in all, words shown per draft 4.3-6.0 -> 1.7-2.0
+  -> 2.0; English sample (to Chinese) 3 -> 2 -> 1 rewrites, 9.7 -> 6 -> 5 characters per draft, first text
+  2.46-2.50 s (K = 3: up to 2.75); Bengali sample 1.0-1.5 -> 1.0 -> 0.5, words 5.3-6 -> 4.5 -> 2.0; Mandarin sample
+  0-0.25 -> 0 -> 0 with 0-0.5 drafts per line. K = 2 chosen: half the rewrites at no cost in first translated text;
+  K = 3 gains nothing more on the live clip and shows fewer words. Found on the way: the first English-sample runs
+  counted a Chinese draft as one word (`split()`); the metric now counts CJK characters and those rows were rerun.
+  README: the config row and the draft limitation. Tallies: fast 339, slow 42, node 146.

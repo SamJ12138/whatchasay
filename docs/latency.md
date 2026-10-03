@@ -267,6 +267,48 @@ time I have ten thousand."). Two things got worse, both Bengali to English:
 English to Chinese and Mandarin to English: the final translations of the sample lines are the same before and
 after (English sample: identical; Mandarin sample: the first line is no longer run together with the next word).
 
+## Local agreement for drafts (2026-10-02)
+
+Every draft rewrote the previous one (Batch 2 above), so the flicker budget was met only by showing fewer drafts.
+Now the backend shows, of each draft translation, only the **longest common prefix of the line's last K draft
+translations** (`asr/draft.py` `LocalAgreement`, `SUBTITLE_ASR__DRAFT_AGREE_K`; words, CJK characters; punctuation
+glued to a word does not break the agreement). The first draft of a line is shown as it is: waiting for a second
+one would cost a whole debounce interval (1.5 s), more than the 0.5 s this batch may lose. When the last K agree on
+nothing, what is on screen stays (the final replaces it); when they agree on the same prefix again nothing is
+re-sent. The shown text is therefore append-only except when the agreed prefix itself shrinks (the last drafts
+agree on less than the ones before); `tests/test_draft_translation.py` holds that on a scripted sequence. The run
+log's `draft` records carry the words of the raw and of the shown translation; `line_latency_table.py` has the
+column "Words per draft".
+
+Three browser runs per clip and setting, `line_latency_table.py` (no priming by the harness, see above), the same
+N = 3 / 1500 ms underneath; each cell the range over the runs:
+
+| Clip | K | run_ids | Lines | Drafts per line | Words per draft | Non-append revisions per line | First translated text p50 / max (s) | First display p50 (s) | Final p50 (s) |
+|---|---|---|---|---|---|---|---|---|---|
+| Live clip (Bengali film scene) | 1 (none: the current N=3 / 1500 ms) | `20261002T205149-8e975a`, `20261002T205231-e39749`, `20261002T205313-19b0cf` | 5-6 | 1.83-2.20 | 4.27-6.00 | **1.83-2.00** | 2.07-2.07 / 2.37-2.42 | 0.78-0.78 | 1.32-1.33 |
+| Live clip (Bengali film scene) | 2 | `20261002T205856-64577f`, `20261002T205937-c337de`, `20261002T210019-128750` | 5 | 0.80-1.20 | 1.67-2.00 | **0.80** | 2.07-2.07 / 2.39-2.40 | 0.78-0.78 | 1.32-1.35 |
+| Live clip (Bengali film scene) | 3 | `20261002T210559-e148ea`, `20261002T210640-6f0879`, `20261002T210721-de1b93` | 6 | 0.83 | 2.00 | **0.83** | 2.07-2.07 / 2.41-2.45 | 0.78-0.78 | 1.32-1.33 |
+| English sample | 1 (none: the current N=3 / 1500 ms) | `20261002T211501-7b0ef5`, `20261002T211535-40fdb6`, `20261002T211608-c6298d` | 1 | 3.00 | 9.67 | **3.00** | 2.46-2.53 / 2.46-2.53 | 0.30-0.35 | 0.91-0.97 |
+| English sample | 2 | `20261002T211642-7ba649`, `20261002T211715-559106`, `20261002T211748-068dba` | 1 | 2.00 | 6.00 | **2.00** | 2.46-2.48 / 2.46-2.48 | 0.30-0.31 | 0.91-0.96 |
+| English sample | 3 | `20261002T211822-3c86e8`, `20261002T211856-b54047`, `20261002T211930-0c3882` | 1 | 1.00 | 5.00 | **1.00** | 2.46-2.50 / 2.46-2.50 | 0.30-0.35 | 0.91-0.96 |
+| Mandarin sample | 1 (none: the current N=3 / 1500 ms) | `20261002T205538-a9033f`, `20261002T205611-1143fa`, `20261002T205644-fecc1e` | 4-5 | 0.20-0.50 | 1.00 | **0.00-0.25** | 1.39-1.72 / 2.36-2.92 | 0.34-0.41 | 0.80-0.83 |
+| Mandarin sample | 2 | `20261002T210242-70cda4`, `20261002T210315-0fceb0`, `20261002T210347-466946` | 5 | 0.20 | 1.00 | **0.00** | 1.63-1.64 / 2.36-2.37 | 0.41-0.42 | 0.83-0.84 |
+| Mandarin sample | 3 | `20261002T210942-20e16b`, `20261002T211015-8e80ca`, `20261002T211046-32f05f` | 4-5 | 0.00-0.25 | 1.00 | **0.00** | 1.83-1.98 / 2.92-2.92 | 0.41-0.41 | 0.80-0.91 |
+| Bengali sample | 1 (none: the current N=3 / 1500 ms) | `20261002T205716-3e9fca`, `20261002T205749-81cea3`, `20261002T205822-d91de9` | 2 | 1.50 | 5.33-6.00 | **1.00-1.50** | 3.26-3.28 / 3.97-3.97 | 0.74-0.74 | 1.17-1.25 |
+| Bengali sample | 2 | `20261002T210419-d17174`, `20261002T210453-aaa67e`, `20261002T210526-0b6dfa` | 2 | 1.00 | 4.50 | **1.00** | 3.26-3.29 / 3.92-4.01 | 0.70-0.78 | 1.16-1.25 |
+| Bengali sample | 3 | `20261002T211119-d67226`, `20261002T211151-57a7e0`, `20261002T211225-d3fd29` | 2 | 0.50 | 2.00 | **0.50** | 3.26-3.26 / 3.97-4.00 | 0.74-0.78 | 1.25-1.28 |
+
+**Chosen default: K = 2.** On the live clip the non-append revisions go from 1.83-2.00 per line to **0.80** (the
+budget was "under 2"), the first translated text does not move (p50 2.07 s, max 2.39-2.40 s), and the first
+display and the final are unchanged; the price is shorter drafts (1.7-2.0 words on screen per draft instead of
+4.3-6.0: the agreed start of a verb-final sentence is short). English to Chinese: 3 -> 2 rewrites of the one long
+sentence, first text 2.46-2.49 s as before. K = 3 gains nothing more on the live clip (0.83), halves the Bengali
+sample's words per draft again (2.0 against 4.5) and leaves the Mandarin sample almost without drafts; it is better
+only on the English sentence (1 rewrite, 5 characters per draft, first text up to 0.25 s later). The
+"first translated text" differences on the Mandarin sample (1.39-1.98 s across all settings) come from which lines
+got a draft at all (0-0.5 per line), not from the agreement. Translate calls are not changed by K: the agreement
+runs on the translation's result.
+
 ## A11 fixed: the first sentence without the harness's priming (2026-10-02)
 
 The extension now keeps the captured tab's audio output running itself (`lib/capture-prime.js`: an inaudible tone
