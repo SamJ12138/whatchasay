@@ -2,8 +2,9 @@
 
 Plays each clip N times through the browser harness (scripts/e2e_extension.py: the real
 extension in Chromium, tab capture, a backend started per run, spoken language
-Auto-detect, target English, or Chinese when the speech is English; the tab's audio output
-already running when the clip starts, see --no-prime) and collects, per run:
+Auto-detect, target English, or Chinese when the speech is English; the clip played after
+captions are started, as a viewer would, the extension itself keeping the tab's audio output
+running, see --prime-audio) and collects, per run:
 
   first display      audio of a line's first word -> first text of the line on screen
   final              audio of its last word -> final translation on screen
@@ -131,9 +132,9 @@ def main() -> int:
     ap.add_argument("--keep-text", action="store_true", help="keep the first five lines' text in --out (default: numbers only)")
     ap.add_argument("--extension", type=Path, help="extension folder to load (default: this checkout's)")
     ap.add_argument("--backend-dir", type=Path, help="backend folder to run (default: this checkout's; see the harness)")
-    ap.add_argument("--no-prime", action="store_true",
-                    help="do not start the tab's audio output before the clip plays (the harness's --prime-audio; without "
-                         "it Chrome drops the clip's first few hundred milliseconds from the capture)")
+    ap.add_argument("--prime-audio", action="store_true",
+                    help="also start the tab's audio output from the page before the clip plays (the harness's flag; the "
+                         "extension primes the output itself since A11 was fixed, so this is for comparisons only)")
     args = ap.parse_args()
 
     env_py = os.environ.get("ST_PLAYWRIGHT_PYTHON")
@@ -156,7 +157,7 @@ def main() -> int:
             proc = subprocess.run(
                 [python, str(HARNESS), "--start-backend", "--port", str(args.port), "--path", "audio", "--video", str(wav),
                  "--wav", str(wav), "--source", "auto", "--targets", "auto", "--lines", "5",
-                 "--hold", str(round(seconds + 4)), "--timeout", "60"] + ([] if args.no_prime else ["--prime-audio"])
+                 "--hold", str(round(seconds + 4)), "--timeout", "60"] + (["--prime-audio"] if args.prime_audio else [])
                 + (["--extension", str(args.extension)] if args.extension else [])
                 + (["--backend-dir", str(args.backend_dir)] if args.backend_dir else []),
                 capture_output=True, text=True, encoding="utf-8", errors="replace", env=env, timeout=600)

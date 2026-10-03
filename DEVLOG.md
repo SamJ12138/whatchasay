@@ -784,3 +784,23 @@ D4 cloud providers off by default, keys only in backend config.
   0.58 s (latency.md: 0.70-0.75 s), so the row hold delayed no first draft. Node tests updated (wrap once, four-row
   reservation, packing); browser test asserts the text in the band. `docs/overlay/README.md` "Lines that wrap
   once"; README overlay paragraph and limitation. Tallies: fast 335, slow 42, node 141.
+- Batch 2 (A11 in the product; commit "fix: first sentence no longer lost at capture start (A11)"). The extension
+  primes the capture itself: `lib/capture-prime.js` (pure, `createPrimer({AudioContext, document, log})`) plays an
+  inaudible tone (Web Audio, gain 0.00002 = -94 dBFS, under the offscreen document's 0.002 RMS silence threshold)
+  from the content script from the moment live captions start (`ASR_STATE capturing: true`, and on a page that finds
+  a session already running) and stops it when they stop; `main.js primeTab()` waits for the context to run plus
+  `PRIME_SETTLE_MS` 500 and answers `ASR_STATE` with the state, and `background.js startAsr` awaits that answer (2 s
+  cap for a page without the script) before it reports the start, so the output is running when the viewer presses
+  play. Chosen over gating the recognizer: the audio is lost before the capture, so nothing downstream can wait for
+  it. Chrome's autoplay policy: on a page with no user activation the context stays `suspended`; logged as
+  `ext_prime skip input_invalid`, resumed at the next click or key on the page (logged again); the README says so.
+  Browser, YouTube page, no `--prime-audio`, 3 of 3 runs: the first line is the clip's opening sentence ("A Royal
+  Book Shower"), first segment 2.08-2.72 s (was the second sentence, 2.8 s, in 17 of 18 unprimed runs), first
+  confirmed subtitle 1.64-2.28 s after play (runs `20261002T203832-86ccb0`, `20261002T203930-46ebb6`,
+  `20261002T204010-93b09e`). `--prime-audio` removed from `line_latency_table.py` (now `--prime-audio` is an opt-in
+  for comparisons; `--no-prime` is gone) and from the browser tests; the live-clip row rerun without it in
+  `docs/latency.md` (3 runs `20261002T204134-a84c67`, `20261002T204217-9c05eb`, `20261002T204300-4dfbeb`: first
+  confirmed subtitle 2.10-2.16 s, first translated text p50 2.07-2.08 s, first display p50 0.78 s, the first segment
+  2.08 s in all; one 1.5 s translate stall in run 2, the only call over 100 ms of 49). Observations A11 fixed; README
+  limitation reworded (the policy case) and the harness flag's line. Node `tests/capture-prime.test.js` (5; injected
+  before main.js). Tallies: fast 335, slow 42, node 146.

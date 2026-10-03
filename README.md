@@ -482,8 +482,8 @@ driven over raw CDP because Playwright keeps workers alive), `permissions`, `cle
 `--start-backend` to start a backend with scratch data. `--video FILE --record DIR --screenshot FILE` produce the
 demo and the screenshot in this README. `--url URL --targets auto --lines 5` live-captions a real page's video
 (`docs/live-test-youtube.md`); it stops with exit code 2 on a consent wall or bot check instead of getting past it.
-`--prime-audio` starts the tab's audio output before the clip plays, as over a video that is already playing
-(without it Chrome drops the clip's first few hundred milliseconds from the capture).
+`--prime-audio` starts the tab's audio output from the page before the clip plays; the extension does that itself
+now (`docs/observations.md`, A11), so the flag is only for comparisons.
 `--correct --correct-text TEXT` corrects the first translated line with Alt+E and reports whether the page's video
 was disturbed by the typing; `--tm FILE` keeps the scratch translation memory between two runs (never a file under
 `backend/data`). `--geometry` reads the overlay's lines and block against the video's rectangle every tick (coverage,
@@ -528,8 +528,10 @@ Windows (`.github/workflows/ci.yml`). `DEVLOG.md` is the project history; every 
 - With *Auto-detect*, the first seconds (about 2 for Mandarin or Bengali speech, 4 for English) are recognised as
   English until detection has heard enough. That text is dimmed under *Detecting language…* and thrown away if the
   language turns out to be another one; choosing the spoken language avoids the wait.
-- When a silent tab starts to play, its first few hundred milliseconds of sound do not reach the capture: a video
-  that opens with speech can lose its first words (`docs/observations.md`, A11).
+- While live captions are on, the extension plays an inaudible tone on the tab (-94 dB, Web Audio) so that a video
+  started afterwards is captured from its first sample (`docs/observations.md`, A11). On a page you have not
+  clicked or typed on yet, Chrome's autoplay policy holds the tone back until your first click or key there: start
+  the video by clicking it and the first words may still be lost that once.
 - Spoken-language detection (whisper-tiny) is unreliable on Bengali: on its own it often takes Bengali for Hindi or
   Nepali. The backend now picks the likeliest of English, Mandarin and Bengali, and stays on its first guess when
   that is not clear enough: the captions then stay dimmed under *Language not detected, assuming English*. Set the

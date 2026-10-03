@@ -122,7 +122,7 @@
       // Ask background whether live captions are already running for this tab
       chrome.runtime.sendMessage({ type: 'ASR_STATUS' }, (st) => {
         void chrome.runtime.lastError;
-        if (st && st.capturing) { live.sessionId = st.sessionId || null; setLiveState(true, st.sourceLang, false); }
+        if (st && st.capturing) { live.sessionId = st.sessionId || null; setLiveState(true, st.sourceLang, false); primeTab(); }
       });
 
       console.log('[SubTrans] Initialized, connected:', connected);
@@ -381,11 +381,29 @@
 
   const langInfo = (lang) => ({ lang: lang || null, name: LANG_NAMES[lang] || lang || null });
 
+  // A11: keep the tab's audio output running while live captions are on (an inaudible
+  // tone, lib/capture-prime.js), so a video played after captions were started is captured
+  // from its first sample. The worker waits for primeTab() before it reports the start.
+  const PRIME_SETTLE_MS = 500;   // the capture attaches a few hundred ms after the output starts
+  const primer = globalThis.STCapturePrime
+    ? globalThis.STCapturePrime.createPrimer({
+        AudioContext: globalThis.AudioContext, document,
+        log: (event, context) => obs.log('ext_prime', event, Object.assign({ session_id: live.sessionId || undefined }, context)),
+      })
+    : { start: async () => ({ state: null }), stop() {}, state: () => null };
+
+  async function primeTab() {
+    const r = await primer.start();
+    if (r.state === 'running') await new Promise((resolve) => setTimeout(resolve, PRIME_SETTLE_MS));
+    return r.state;
+  }
+
   // fresh: live captions were started just now (not found already running when this
   // script loaded; then the next caption says what the language status is)
   function setLiveState(active, sourceLang, fresh = true) {
     live.active = active;
     live.sourceLang = sourceLang || null;
+    if (!active) primer.stop();
     if (active) {
       overlay.clear();
       lineLatency.start();
@@ -587,8 +605,10 @@
       case 'ASR_STATE':
         live.sessionId = message.capturing ? (message.sessionId || null) : null;
         setLiveState(!!message.capturing, message.sourceLang);
-        sendResponse({ success: true });
-        break;
+        if (!message.capturing) { sendResponse({ success: true }); break; }
+        // the tab's output is running (or the policy's wait is logged) before the start is reported
+        primeTab().then((prime) => sendResponse({ success: true, prime }), () => sendResponse({ success: true, prime: null }));
+        return true;
 
       case 'ASR_CAPTION':
         handleLiveEvent(message.event);

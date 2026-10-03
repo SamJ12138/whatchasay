@@ -340,10 +340,18 @@ async function startAsr(tabId, overrides = {}) {
     }
     Object.assign(asrState, { tabId, capturing: true, sourceLang, targetLangs, sessionId });
     await saveAsrState();
-    chrome.tabs.sendMessage(tabId, { type: 'ASR_STATE', capturing: true, sourceLang, targetLangs, sessionId }, { frameId: 0 })
-      .catch((e) => logRelayFail('ext_relay', e, { session_id: sessionId, msg_type: 'ASR_STATE' }));
-    obs.log('ext_capture', 'success', { session_id: sessionId, duration_ms: performance.now() - t0, tab_id: tabId, source_lang: sourceLang, target_langs: targetLangs, overlay: injected });
-    return { ok: true };
+    // the content script answers once the tab's audio output is primed (A11: a video played
+    // after this is captured from its first sample), so the start is reported after that;
+    // a page without the script, or a slow one, does not hold the start up for long
+    step = 'prime';
+    const prime = await Promise.race([
+      chrome.tabs.sendMessage(tabId, { type: 'ASR_STATE', capturing: true, sourceLang, targetLangs, sessionId }, { frameId: 0 })
+        .then((r) => (r && 'prime' in r ? r.prime : null))
+        .catch((e) => { logRelayFail('ext_relay', e, { session_id: sessionId, msg_type: 'ASR_STATE' }); return null; }),
+      new Promise((resolve) => setTimeout(() => resolve('timeout'), 2000)),
+    ]);
+    obs.log('ext_capture', 'success', { session_id: sessionId, duration_ms: performance.now() - t0, tab_id: tabId, source_lang: sourceLang, target_langs: targetLangs, overlay: injected, prime });
+    return { ok: true, prime };
   } catch (e) {
     const msg = e.message || String(e);
     obs.log('ext_capture', 'fail', {

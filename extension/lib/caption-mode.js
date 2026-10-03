@@ -42,6 +42,7 @@
     'content-scripts/subtitle-detector.js',
     'lib/overlay-layout.js',
     'lib/overlay-rows.js',
+    'lib/capture-prime.js',
     'content-scripts/overlay.js',
     'content-scripts/line-latency.js',
     'content-scripts/main.js',

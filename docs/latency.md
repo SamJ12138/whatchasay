@@ -266,3 +266,27 @@ time I have ten thousand."). Two things got worse, both Bengali to English:
 
 English to Chinese and Mandarin to English: the final translations of the sample lines are the same before and
 after (English sample: identical; Mandarin sample: the first line is no longer run together with the next word).
+
+## A11 fixed: the first sentence without the harness's priming (2026-10-02)
+
+The extension now keeps the captured tab's audio output running itself (`lib/capture-prime.js`: an inaudible tone
+from the content script from the moment live captions start, and the worker reports the start only once it runs;
+`docs/observations.md` A11), so the harness's `--prime-audio` is no longer needed for an honest first-subtitle
+number and `line_latency_table.py` no longer passes it: the clip is played after captions are started, as a viewer
+would, and nothing else runs on the page. The live-clip row, rerun that way (3 runs; the row above was measured
+with the harness priming the page):
+
+| Clip | run_id | Lines | First display p50 / max (s) | First translated text p50 / max (s) | Final translation p50 / max (s) | First confirmed subtitle (s) | Segments (s) | Translate calls per s | Translate p50 / p95 (ms) | Non-append revisions per line |
+|---|---|---|---|---|---|---|---|---|---|---|
+| Live clip (Bengali film scene), no priming by the harness | `20261002T204134-a84c67` | 5 | 0.78 / 2.37 | 2.07 / 2.40 | 1.32 / 1.42 | 2.10 | 2.08, 2.64, 6.12, 4.0, 4.64 | 0.80 | 33 / 67 | 2.0 |
+| | `20261002T204217-9c05eb` | 6 | 0.78 / 2.42 | 2.08 / 3.92 | 1.41 / 2.84 | 2.16 | 2.08, 2.64, 4.32, 2.4, 2.8, 4.64 | 0.80 | 33 / 1495 | 1.5 |
+| | `20261002T204300-4dfbeb` | 6 | 0.78 / 2.38 | 2.07 / 2.42 | 1.33 / 1.41 | 2.12 | 2.08, 2.72, 4.36, 2.36, 2.8, 4.64 | 0.85 | 29 / 53 | 1.67 |
+
+The first segment is the clip's first sentence (2.08 s, as in the primed runs) in 3 of 3; without the fix it was
+missing in 17 of 18 unprimed runs and the first confirmed subtitle came at 3.62-3.69 s. First confirmed subtitle
+2.10-2.16 s (primed: 2.13-2.17 s), first translated text p50 2.07-2.08 s (1.99-2.04 s), first display p50 0.78 s
+(0.70-0.75 s): the same picture within run-to-run noise. Run 2 had one translate call of 1.5 s (its p95; the
+line's final came 2.84 s after its last word): a one-off stall on the CPU, the only call over 100 ms among the 49
+of the three runs (the next longest: 70 ms). On the YouTube page itself (3 runs, `20261002T203832-86ccb0`, `20261002T203930-46ebb6`,
+`20261002T204010-93b09e`, no priming) the first line is the clip's opening sentence in 3 of 3, first confirmed
+subtitle 1.87, 2.28 and 1.64 s after play.

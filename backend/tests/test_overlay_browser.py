@@ -28,7 +28,7 @@ YOUTUBE_URL = os.environ.get("ST_YOUTUBE_URL")
 def geometry_run(*args):
     wav = zipformer_dir("en") / "test_wavs" / "0.wav"
     summary, proc = run_harness("--path", "audio", "--video", str(wav), "--source", "en", "--targets", "zh",
-                                "--prime-audio", "--size", "960x540", "--hold", "8", "--geometry", *args)
+                                "--size", "960x540", "--hold", "8", "--geometry", *args)
     assert summary["ok"], (summary, proc.stderr[-2000:])
     ov = summary["overlay"]
     assert ov["with_lines"] >= 10, ov   # the overlay was read while lines were on screen
@@ -61,7 +61,7 @@ def test_the_block_stays_clear_of_the_control_bar_when_it_is_showing():
 @pytest.mark.skipif(not YOUTUBE_URL, reason="set ST_YOUTUBE_URL (network, headful browser)")
 @pytest.mark.parametrize("fullscreen", [False, True], ids=["normal", "fullscreen"])
 def test_on_the_youtube_page(fullscreen):
-    args = ["--path", "audio", "--url", YOUTUBE_URL, "--source", "auto", "--targets", "auto", "--prime-audio",
+    args = ["--path", "audio", "--url", YOUTUBE_URL, "--source", "auto", "--targets", "auto",
             "--size", "960x540", "--hold", "20", "--timeout", "60", "--headful", "--geometry"]
     if fullscreen:
         args.append("--fullscreen")
@@ -105,7 +105,7 @@ def test_the_block_holds_still_across_50_partial_updates():
 def test_the_block_holds_still_on_the_live_clip():
     # the scene's dialogue gives 47-49 partial updates in 75 s (then music); the looping
     # sample above gives the full 50
-    pu, summary = partial_updates_run("--url", YOUTUBE_URL, "--source", "auto", "--targets", "auto", "--prime-audio",
+    pu, summary = partial_updates_run("--url", YOUTUBE_URL, "--source", "auto", "--targets", "auto",
                                       "--timeout", "60", "--hold", "75", "--headful", at_least=40)
     if summary.get("blocked"):
         pytest.skip(f"page blocked: {summary['blocked']}")
