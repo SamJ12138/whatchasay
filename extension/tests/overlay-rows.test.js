@@ -208,15 +208,22 @@ test('a final that comes too soon waits in row 2 and moves up when the hold ends
   assert.deepEqual(screen(overlay).map((l) => [l.row, l.text]), [['1', '短句']]);
 });
 
-test('each row is one visual row: a long final keeps its newest words with an ellipsis', () => {
+test('a line may wrap once; only beyond two rows does it keep its newest words with an ellipsis', () => {
   const { overlay, at } = newOverlay();
+  assert.equal(overlay.settings.rowsPerLine, 2);
+  overlay.primaryLang = 'en';                                              // Latin rows of 42 characters
+  const two = 'It is too expensive to raise it any larger than this one.';   // 57 chars: two rows of 42
+  at(1); overlay.showTranslation('asr_0', 'src', tr('en', two), { sourceLang: 'bn', langStatus: 'manual' });
+  let text = screen(overlay)[0].text;
+  assert.equal(text.split('\n').length, 2, text);
+  assert.ok(!text.includes('…') && text.endsWith('this one.'), text);
   const words = [];
-  for (let i = 1; i <= 20; i++) words.push('word' + i);
-  at(1); overlay.showTranslation('asr_0', 'src', tr('zh', words.join(' ')), { sourceLang: 'en', langStatus: 'manual' });
-  const text = screen(overlay)[0].text;
-  assert.ok(!text.includes('\n'));
+  for (let i = 1; i <= 20; i++) words.push('word' + i);                   // 20 words, 130 chars: over two rows
+  at(5); overlay.showTranslation('asr_1', 'src', tr('en', words.join(' ')), { sourceLang: 'bn', langStatus: 'manual' });
+  text = screen(overlay).at(-1).text;                                      // asr_0's hold (3.8 s) is over
+  assert.equal(text.split('\n').length, 2, text);
   assert.ok(text.startsWith('…') && text.endsWith('word20'), text);
-  assert.ok(text.length <= 42);
+  assert.ok(text.split('\n').every((r) => r.length <= 42));
 });
 
 test('the source row, when on, is a third dimmer row for the current line only', () => {
@@ -230,12 +237,21 @@ test('the source row, when on, is a third dimmer row for the current line only',
   assert.match(css, /row-source[^{]*\{[^}]*opacity:\s*0\.7/);
 });
 
-test('the stack reserves two translation rows (plus the source row when on) and no more', () => {
+test('the stack reserves two visual rows per line (plus the source row when on) and no more', () => {
   const { overlay } = newOverlay();
   const font = overlay.roleStyle('primary').fontPx;
   const h = overlay.reservedHeight();
-  assert.ok(h >= 2 * font * 1.2 && h < 3 * font * 1.2, `${h} for ${font}px`);
-  assert.ok(h <= 0.15 * 540 - 8, `${h} fits the bottom 15% with the margin`);
+  assert.ok(h >= 4 * font * 1.2 && h < 5 * font * 1.2, `${h} for ${font}px`);
   overlay.setShowOriginal(true);
   assert.ok(overlay.reservedHeight() > h);
+});
+
+test('the lines pack at the bottom of the reserved box over a video, at its top below one', () => {
+  const { overlay } = newOverlay();
+  const css = overlay._getStyles();
+  // the grid's tracks are sized by their text, so one-row lines sit next to each other and a
+  // line that wraps grows into the reserved space; the box itself keeps its height
+  assert.match(css, /\.subtitle-stack\s*\{[^}]*grid-template-rows:\s*auto auto;/);
+  assert.match(css, /\.subtitle-stack\s*\{[^}]*align-content:\s*end;/);
+  assert.match(css, /\.mode-page \.subtitle-stack\s*\{[^}]*align-content:\s*start;/);
 });

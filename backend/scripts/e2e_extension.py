@@ -599,6 +599,7 @@ class GeometryLog:
     block's box across consecutive partial updates (it must not move or grow)."""
 
     MOMENTS = ("idle", "partial", "final")
+    BAND = 0.20   # the bottom part of a fullscreen video the captions should stay in (docs/overlay/README.md)
 
     def __init__(self, shots_dir: Path | None, shot_name: str | None, partial_updates: int):
         self.shots_dir, self.shot_name = shots_dir, shot_name
@@ -611,8 +612,8 @@ class GeometryLog:
         self.with_lines = 0
         self.block_intersects_video = 0
         self.block_outside_video = 0
-        self.block_in_bottom_15 = 0
-        self.lines_in_bottom_15 = 0
+        self.block_in_band = 0        # the block's box inside the bottom BAND of the video
+        self.lines_in_band = 0        # every caption line over the video inside it (the text the viewer sees)
         self.lines_over_video = 0
         self.controls_overlap = 0
         self.most_lines = None   # the sample with the most caption lines: types, cues, lengths (for diagnosis)
@@ -646,9 +647,13 @@ class GeometryLog:
         for ln in lines:
             if ln["type"] in ("primary", "secondary") and not ln["draft"] and ln["text"]:
                 key = f'{ln["cue_id"]}/{ln["type"]}'
-                rec = self.finals.setdefault(key, {"first": t, "last": t, "chars": len(ln["text"]), "cue_id": ln["cue_id"]})
+                rec = self.finals.setdefault(key, {"first": t, "last": t, "chars": len(ln["text"]), "cue_id": ln["cue_id"],
+                                                   "rows": 1, "truncated": False})
                 rec["last"] = t
                 rec["chars"] = len(ln["text"])
+                # as drawn: the rows it wrapped to, and whether its start was cut (the leading ellipsis)
+                rec["rows"] = max(rec["rows"], ln["text"].count("\n") + 1)
+                rec["truncated"] = rec["truncated"] or ln["text"].startswith("…")
         if lines and (self.most_lines is None or len(lines) > self.most_lines["n"]):
             self.most_lines = {"n": len(lines), "t": t, "lines": [{"type": ln["type"], "cue_id": ln["cue_id"], "chars": len(ln["text"]),
                                                                   "in_progress": ln["in_progress"], "draft": ln["draft"]} for ln in lines]}
@@ -662,12 +667,12 @@ class GeometryLog:
                     self.block_intersects_video += 1
                 else:
                     self.block_outside_video += 1
-                if block["y"] >= v["y"] + 0.85 * v["h"] - 0.5 and block["y"] + block["h"] <= v["y"] + v["h"] + 0.5:
-                    self.block_in_bottom_15 += 1
+                if block["y"] >= v["y"] + (1 - self.BAND) * v["h"] - 0.5 and block["y"] + block["h"] <= v["y"] + v["h"] + 0.5:
+                    self.block_in_band += 1
             if any(rect_intersection(b, v) for b in boxes):
                 self.lines_over_video += 1
-                if all(b["y"] >= v["y"] + 0.85 * v["h"] - 0.5 for b in boxes if rect_intersection(b, v)):
-                    self.lines_in_bottom_15 += 1
+                if all(b["y"] >= v["y"] + (1 - self.BAND) * v["h"] - 0.5 for b in boxes if rect_intersection(b, v)):
+                    self.lines_in_band += 1
             if controls and any(rect_intersection(b, controls) for b in boxes):
                 self.controls_overlap += 1
         # consecutive partial updates: the in-progress line's text changed
@@ -703,8 +708,9 @@ class GeometryLog:
         return {"samples": len(self.samples), "with_lines": self.with_lines, "max_coverage": self.max_coverage,
                 "moments": self.moments,
                 "block_intersects_video": self.block_intersects_video, "block_outside_video": self.block_outside_video,
-                "block_in_bottom_15": self.block_in_bottom_15, "lines_over_video": self.lines_over_video,
-                "lines_in_bottom_15": self.lines_in_bottom_15, "controls_overlap": self.controls_overlap,
+                "band_pct": round(self.BAND * 100), "block_in_band": self.block_in_band,
+                "lines_over_video": self.lines_over_video, "lines_in_band": self.lines_in_band,
+                "controls_overlap": self.controls_overlap,
                 "partial_updates": {"count": len(self.updates), "heights": heights, "height_changes": max(0, len(heights) - 1),
                                     "position_changes": moves, "first": self.updates[0] if self.updates else None,
                                     "last": self.updates[-1] if self.updates else None},
@@ -714,17 +720,20 @@ class GeometryLog:
     def display_times(self) -> dict:
         """Seconds each final translation was on screen (first to last sighting, so a lower
         bound by up to one sampling interval), the last line excluded when it was still up
-        at the end: min, p50, and per line with its length and the minimum the layout rule
-        would give it (max(1.5 s, chars / 15 per s))."""
+        at the end: min, p50, and per line with its length, the rows it was drawn on, whether
+        its start was cut, and the minimum the layout rule would give it (max(1.5 s, chars /
+        15 per s)); `wrapped` and `truncated` count the lines."""
         recs = sorted(self.finals.values(), key=lambda r: r["first"])
         if recs and self.samples and recs[-1]["last"] >= self.samples[-1]["t"] - 0.3:
             recs = recs[:-1]   # still on screen when sampling stopped
-        per = [{"cue_id": r["cue_id"], "chars": r["chars"], "shown_s": round(r["last"] - r["first"], 2),
-                "rule_min_s": round(max(1.5, r["chars"] / 15), 2)} for r in recs]
+        per = [{"cue_id": r["cue_id"], "chars": r["chars"], "rows": r["rows"], "truncated": r["truncated"],
+                "shown_s": round(r["last"] - r["first"], 2), "rule_min_s": round(max(1.5, r["chars"] / 15), 2)} for r in recs]
         shown = sorted(x["shown_s"] for x in per)
         return {"lines": len(per), "min_s": shown[0] if shown else None,
                 "p50_s": shown[len(shown) // 2] if shown else None,
-                "under_rule": sum(1 for x in per if x["shown_s"] < x["rule_min_s"]), "per_line": per[:20]}
+                "under_rule": sum(1 for x in per if x["shown_s"] < x["rule_min_s"]),
+                "wrapped": sum(1 for x in per if x["rows"] > 1), "truncated": sum(1 for x in per if x["truncated"]),
+                "per_line": per[:20]}
 
 
 def test_extension_copy(extension: Path, scratch: Path, extra_origins=()) -> Path:

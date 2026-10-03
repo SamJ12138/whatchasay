@@ -163,8 +163,9 @@ translations are deleted 30 days after their last use. *Settings → Data Manage
 deletes everything in it (translations, corrections, glossary) and compacts the file.
 
 **The overlay.** It shows the translation only, on two rows: the previous sentence's finished translation on the
-upper row and the current sentence's draft (then its final, briefly) on the lower one, each one row of about 42
-characters (22 for Chinese, Japanese and Korean); a longer line keeps its newest words, with "…" at the start. A
+upper row and the current sentence's draft (then its final, briefly) on the lower one. A line wraps once at about
+42 characters (22 for Chinese, Japanese and Korean); only one longer than two rows keeps its newest words, with "…"
+at the start. A
 finished translation stays at least 1.5 s, or its length at 15 characters per second, before the next one can push
 it off the upper row; if the next sentence finishes sooner, it waits on the lower row until then. Its font is
 4.5 % of the video's height
@@ -544,8 +545,10 @@ Windows (`.github/workflows/ci.yml`). `DEVLOG.md` is the project history; every 
 - Fast dialogue with pauses under half a second still runs two sentences into one line (up to the 6-second cut;
   `docs/observations.md`, A9, and `docs/latency.md`).
 - Below a video on a normal page the block sits over whatever the page has there (on YouTube, the title); drag it
-  elsewhere if that is in the way. Each row is one line of about 42 characters: a longer translation keeps its
-  end, with "…" at the start.
+  elsewhere if that is in the way. A line is at most two rows of about 42 characters: a longer translation keeps
+  its end, with "…" at the start (none of the live clip's 12 lines needed it, `docs/overlay/README.md`). In
+  fullscreen the two lines can take up to a quarter of the picture's height when both wrap; lower the font in
+  *Settings → Display* if that is too much.
 - Korean and Portuguese targets stay untranslated with OPUS-MT (no model from English).
 - Sites that protect their audio (DRM) give silence; the popup then says no audio is reaching the capture.
 - Chrome's built-in on-device translator (Chrome 138+, *Prepare on-device translation* in the popup) is wired in but

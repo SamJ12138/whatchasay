@@ -24,7 +24,7 @@ test('a video that does not fill the viewport gets the block below its bottom ed
   assert.equal(p.bottom, undefined);
 });
 
-test('a fullscreen video, or one that fills the viewport, gets the block over its bottom with a margin, inside the bottom 15%', () => {
+test('a fullscreen video, or one that fills the viewport, gets the block over its bottom with a margin, inside the bottom 20%', () => {
   for (const input of [
     { video: box(0, 0, 1280, 720), viewport: VP, fullscreen: true, blockHeight: 80 },
     { video: box(0, 20, 1280, 690), viewport: VP, fullscreen: false, blockHeight: 80 },   // fills it without the API
@@ -33,7 +33,7 @@ test('a fullscreen video, or one that fills the viewport, gets the block over it
     assert.equal(p.mode, 'overlay');
     const v = input.video;
     assert.ok(p.bottom <= v.y + v.h - 8, 'a safe margin above the bottom edge');
-    assert.ok(p.bottom - input.blockHeight >= v.y + v.h * 0.85, 'the block stays within the bottom 15%');
+    assert.ok(p.bottom - input.blockHeight >= v.y + v.h * 0.80, 'the block stays within the bottom 20%');
     assert.equal(p.top, undefined);
   }
 });

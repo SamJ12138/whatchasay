@@ -42,11 +42,13 @@ def test_on_a_normal_page_the_block_sits_below_the_video_and_never_over_it():
     assert ov["max_coverage"] == 0.0, ov
 
 
-def test_when_the_video_fills_the_viewport_the_block_overlays_its_bottom_15_percent():
+def test_when_the_video_fills_the_viewport_the_text_sits_in_its_bottom_20_percent():
     ov, _ = geometry_run("--layout", "fill")
     assert ov["block_intersects_video"] == ov["with_lines"], ov
-    assert ov["block_in_bottom_15"] == ov["with_lines"], ov
-    assert ov["lines_in_bottom_15"] == ov["lines_over_video"], ov
+    # the caption text (the lines' boxes) stays inside the band; the reserved box behind them is
+    # two visual rows per line and reaches above it (docs/overlay/README.md, "Lines that wrap")
+    assert ov["band_pct"] == 20, ov
+    assert ov["lines_in_band"] == ov["lines_over_video"], ov
 
 
 def test_the_block_stays_clear_of_the_control_bar_when_it_is_showing():
@@ -72,7 +74,8 @@ def test_on_the_youtube_page(fullscreen):
     if fullscreen:
         assert summary.get("fullscreen") is True, summary
         assert ov["block_intersects_video"] == ov["with_lines"], ov
-        assert ov["block_in_bottom_15"] == ov["with_lines"], ov
+        # both rows wrapped at once reach above the band (four rows at 4.5 %): most samples, not all
+        assert ov["lines_in_band"] >= 0.8 * ov["lines_over_video"], ov
     else:
         assert ov["block_intersects_video"] == 0, ov
         assert ov["max_coverage"] == 0.0, ov

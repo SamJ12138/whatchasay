@@ -247,8 +247,8 @@ def _g(lines, video=_box(0, 0, 100, 100), block=None):
             "extras": [], "coverage": h.coverage_of(lines, video)}
 
 
-def _line(kind, text, box, in_progress=False, draft=False):
-    return {"type": kind, "text": text, "box": box, "cue_id": "asr_0", "in_progress": in_progress, "draft": draft}
+def _line(kind, text, box, in_progress=False, draft=False, cue_id="asr_0"):
+    return {"type": kind, "text": text, "box": box, "cue_id": cue_id, "in_progress": in_progress, "draft": draft}
 
 
 def test_geometry_log_finds_the_three_moments_once_each():
@@ -274,14 +274,31 @@ def test_geometry_log_places_the_block_against_the_video():
     video = _box(0, 0, 100, 100)
     below = _line("primary", "below the video", _box(10, 104, 80, 10))
     g.add(_g([below], video, block=_box(10, 102, 80, 20)), 1.0)
-    inside = _line("primary", "in the bottom 15%", _box(10, 88, 80, 8))
-    g.add(_g([inside], video, block=_box(10, 86, 80, 12)), 2.0)
+    inside = _line("primary", "in the bottom 20%", _box(10, 82, 80, 8))
+    g.add(_g([inside], video, block=_box(10, 80, 80, 12)), 2.0)
     high = _line("primary", "too high", _box(10, 50, 80, 10))
     g.add(_g([high], video, block=_box(10, 50, 80, 10)), 3.0)
+    # the text inside the band, the reserved box (taller than the text) reaching above it
+    text_in = _line("primary", "two rows\nof text", _box(10, 81, 80, 15))
+    g.add(_g([text_in], video, block=_box(10, 70, 80, 26)), 4.0)
     s = g.summary()
-    assert (s["block_outside_video"], s["block_intersects_video"], s["block_in_bottom_15"]) == (1, 2, 1)
-    assert (s["lines_over_video"], s["lines_in_bottom_15"]) == (2, 1)
-    assert s["max_coverage"] == 0.08
+    assert s["band_pct"] == 20
+    assert (s["block_outside_video"], s["block_intersects_video"], s["block_in_band"]) == (1, 3, 1)
+    assert (s["lines_over_video"], s["lines_in_band"]) == (3, 2)
+    assert s["max_coverage"] == 0.12
+
+
+def test_display_times_count_the_finals_that_wrap_and_the_ones_still_truncated():
+    g = h.GeometryLog(None, None, 0)
+    video = _box(0, 0, 100, 100)
+    g.add(_g([_line("primary", "one row", _box(10, 90, 80, 8), cue_id="asr_0")], video), 1.0)
+    g.add(_g([_line("primary", "two rows\nof text", _box(10, 82, 80, 16), cue_id="asr_1")], video), 3.0)
+    g.add(_g([_line("primary", "…newest words of a\nlonger translation", _box(10, 82, 80, 16), cue_id="asr_2")], video), 5.0)
+    g.add(_g([], video), 9.0)
+    d = g.summary()["display_times"]
+    assert d["lines"] == 3
+    assert [(p["cue_id"], p["rows"], p["truncated"]) for p in d["per_line"]] == [("asr_0", 1, False), ("asr_1", 2, False), ("asr_2", 2, True)]
+    assert (d["wrapped"], d["truncated"]) == (2, 1)
 
 
 def test_geometry_log_records_the_block_at_each_partial_text_change():

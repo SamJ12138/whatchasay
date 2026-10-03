@@ -34,7 +34,7 @@ class SubtitleOverlay {
       fontFamily: '"Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif',
       overlayBgOpacity: 0.6,   // the rounded box behind each line
       position: 'above', // 'above' or 'below'
-      rowsPerLine: 1,          // each line is one visual row; a longer text keeps its newest words
+      rowsPerLine: 2,          // a line may wrap once; beyond that it keeps its newest words
       maxLines: 2,             // (the backend line breaker's setting; the overlay draws rowsPerLine)
       maxCharsLatin: 42,       // characters per row
       maxCharsCJK: 22,         // ...for zh / ja / ko
@@ -694,9 +694,9 @@ class SubtitleOverlay {
         flex-direction: column-reverse;
       }
 
-      /* the rows pack against the video: at the top of their row below it, at the bottom over it */
+      /* the rows pack against the video: at the top of the reserved box below it, at the bottom over it */
       .mode-page .subtitle-stack {
-        align-items: start;
+        align-content: start;
       }
 
       .overlay-extras {
@@ -729,14 +729,17 @@ class SubtitleOverlay {
         pointer-events: none;
       }
 
-      /* the rolling rows: a grid of fixed rows (row 1, row 2, per role; the source row), so the
-         block's height never changes while text streams */
+      /* the rolling rows: a grid (row 1, row 2, per role; the source row) in a box of fixed height,
+         rowsPerLine visual rows per line, so the block never changes height while text streams; the
+         tracks are sized by their text and packed against the video, so one-row lines sit next to
+         each other and a line that wraps grows into the reserved space */
       .subtitle-stack {
         width: 100%;
         height: ${this.reservedHeight()}px;
         display: grid;
         grid-template-rows: ${grid.template};
         row-gap: ${grid.gapPx}px;
+        align-content: end;
         align-items: end;
         justify-items: center;
         font-size: ${text.fontPx}px;
@@ -1148,10 +1151,11 @@ ${grid.rules}
   }
 
   /**
-   * The height the stack reserves, in px: maxLines rows for each translation role that
-   * is configured, and maxLines rows of the source font when the source line is on,
-   * each with its line box's padding, plus the gaps between them. The stack is given
-   * this height, so the block never changes height while text streams (batch 3).
+   * The height the stack reserves, in px: rowsPerLine visual rows for row 1 and row 2 of
+   * each translation role that is configured, and rowsPerLine rows of the source font when
+   * the source line is on, each with its line box's padding, plus the gaps between them.
+   * The stack is given this height, so the block never changes height while text streams
+   * (batch 3); the lines pack against the video inside it (grid tracks sized by their text).
    */
   reservedHeight() {
     return this._gridRows().heightPx;
@@ -1164,9 +1168,10 @@ ${grid.rules}
   }
 
   /**
-   * The grid's rows: for row 1 and row 2, one row per translation role, then the source
-   * row when it is on; each row one line of text with its box's padding. {template, rules
-   * (grid-row per row class), gapPx, heightPx}.
+   * The grid's rows: for row 1 and row 2, one track per translation role, then the source
+   * row when it is on; each track sized by its text (`auto`), and rowsPerLine rows of text
+   * with the box's padding reserved for it. {template, rules (grid-row per row class),
+   * gapPx, heightPx (the reservation)}.
    */
   _gridRows() {
     const rows = Math.max(1, this.settings.rowsPerLine || 1);
@@ -1187,7 +1192,7 @@ ${grid.rules}
       rules.push(`      .subtitle-line.row-source { grid-row: ${heights.length}; }`);
     }
     const total = heights.reduce((a, b) => a + b, 0) + (heights.length - 1) * gapPx;
-    return { template: heights.map((h) => `${Math.round(h * 10) / 10}px`).join(' '), rules: rules.join('\n'), gapPx,
+    return { template: heights.map(() => 'auto').join(' '), rules: rules.join('\n'), gapPx,
              heightPx: Math.ceil(total) };
   }
 

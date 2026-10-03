@@ -765,3 +765,22 @@ D4 cloud providers off by default, keys only in backend config.
   bytes); README: the overlay paragraph and the opening caption, the "one line at a time" limitation removed (a
   one-row line keeps its end, with an ellipsis, stays as a note); `docs/overlay/README.md` has the section and the
   before / after table. Tallies: fast 334, slow 42, node 140.
+
+
+### 2026-10-02 — Overlay and draft follow-ups (wrap once, A11, local agreement, minimum draft)
+- Batch 1 (lines wrap once; commit "feat: lines wrap once; 20 % band"). `rowsPerLine` 2: a line is drawn whole on up
+  to two rows of 42 characters (CJK: 22) and only a longer one keeps its newest words with the ellipsis. The stack
+  still reserves two visual rows per line (the block's box is constant), but the grid's tracks are `auto` and packed
+  against the video (`align-content: end` over it, `start` below it), so one-row lines sit next to each other and a
+  wrapping line grows into the reserved space; the one movement left is the previous line moving up a row when the
+  draft wraps. Band 15 % -> 20 % of a fullscreen video, measured on the caption text (`lines_in_band`; harness keys
+  `band_pct`, `block_in_band`, `lines_in_band` replace `*_bottom_15`); per final `rows` / `truncated` and the counts
+  `display_times.wrapped` / `.truncated`. **Conflict with the brief:** the reserved box (four rows at 4.5 % plus
+  padding = 24 % of the video's height) cannot sit inside a 20 % band at this font; the font was kept and the band is
+  measured on the text, which is what covers the picture. Live clip, YouTube page, fullscreen (run
+  `20261002T202950-98adb0`): truncated finals 5 of 13 -> 0 of 12 (4 wrapped), text inside the bottom 20 % in 841 of
+  841 samples, block 71 -> 129 px of 540, coverage at the final moment 1.5 %, max 8.0 % (was 6.2 %), shortest final
+  on screen 1.97 s, p50 4.14 s (4 lines read 30-60 ms under the rule: one sighting interval), `first_display_ms` p50
+  0.58 s (latency.md: 0.70-0.75 s), so the row hold delayed no first draft. Node tests updated (wrap once, four-row
+  reservation, packing); browser test asserts the text in the band. `docs/overlay/README.md` "Lines that wrap
+  once"; README overlay paragraph and limitation. Tallies: fast 335, slow 42, node 141.

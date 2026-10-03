@@ -88,6 +88,6 @@ test('the rows pack at the bottom over a video and at the top below it', () => {
   const css = newOverlay()._getStyles();
   // the rule whose selector is exactly `sel` (not one that merely ends with it)
   const rule = (sel) => (css.match(new RegExp('\\n\\s*' + sel.replace(/[.\-]/g, '\\$&') + '\\s*\\{([^}]*)\\}')) || [])[1] || '';
-  assert.match(rule('.subtitle-stack'), /align-items:\s*end/);
-  assert.match(rule('.mode-page .subtitle-stack'), /align-items:\s*start/);
+  assert.match(rule('.subtitle-stack'), /align-content:\s*end/);
+  assert.match(rule('.mode-page .subtitle-stack'), /align-content:\s*start/);
 });

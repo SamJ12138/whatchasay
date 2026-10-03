@@ -166,6 +166,50 @@ Same run, after: the block inside the bottom 15 % in 940 of 940 samples, one blo
 (the machine on scripted sequences of partials and finals, fast speech included; the overlay drawing the rows);
 browser tests as before (`tests/test_overlay_browser.py`).
 
-**Settings added:** `minDisplayS` 1.5, `readCharsPerS` 15, `rowsPerLine` 1 (overlay settings, not in Options).
+**Settings added:** `minDisplayS` 1.5, `readCharsPerS` 15, `rowsPerLine` 1 (overlay settings, not in Options;
+`rowsPerLine` is 2 since the section below).
+
+## Lines that wrap once (commit after `12148b0`)
+
+One visual row per line cut the start off every translation longer than 42 characters (5 of the 13 finals of the
+run above kept only their newest words). Now **a line may wrap once** (`rowsPerLine` 2): a translation of up to two
+rows of 42 characters (CJK: 22) is drawn whole, and only a longer one keeps its newest words with an ellipsis at
+the start. The stack still reserves its height, two visual rows per line, so the block's box never changes while
+text streams; but the grid's tracks are sized by their text and packed against the video (`align-content: end`
+over it, `start` below it), so two one-row lines sit next to each other with no empty row between them, and a line
+that wraps grows into the reserved space. One movement is left: when the current line's draft wraps to a second
+row over a video, the previous line moves up one row.
+
+**The band.** The part of a fullscreen video the captions should stay in is the bottom **20 %** (was 15 %),
+measured on the caption text, the lines' boxes (`lines_in_band`), since that is what covers the picture. The
+reserved box behind the text (`block_in_band`) is taller than the text by construction: four rows at 4.5 % of the
+height, with their padding, are 24 % of it, so the box cannot be inside a 20 % band at this font (**a conflict
+with the criterion as written**; the font was kept and the text measured instead). The margin above the video's
+bottom edge stays 1.2 %. With both lines wrapped at once the text reaches 25 % up the picture; it did not happen
+in the run below.
+
+**Measured on the live clip** (YouTube page, fullscreen, defaults, `--display-times`, 40 ms polling; the finals
+as drawn, the last one excluded):
+
+| | run_id | Final lines | Truncated (start cut) | Wrapped to 2 rows | Text inside the band | Block (reserved) | Coverage, final moment / max | Shortest on screen / p50 |
+|---|---|---|---|---|---|---|---|---|
+| Before (one row per line) | `20261002T200253-469a90` | 10 | 5 of 13 (the brief's count; not recorded by the harness then) | 0 | bottom 15 %: 940 of 940 samples (block) | 71 px of 540 (13 %) | 1.9 % / 6.2 % (the fullscreen run `20261002T192408-295079`) | 2.52 s / 4.80 s |
+| After (wrap once) | `20261002T202950-98adb0` | 12 | **0 of 12** | 4 of 12 | bottom 20 %: **841 of 841** samples (lines); the block's box 0 of 841 (see above) | 129 px of 540 (24 %) | 1.5 % / 8.0 % | 1.97 s / 4.14 s |
+
+Four finals are read as under the reading rule by 30-60 ms (3.64 s against 3.67, 4.70 against 4.73, 1.97 against
+2.00, 4.14 against 4.20): the sighting interval is 40 ms and the measure is a lower bound, so these are the rule's
+own hold, not an early push. First display of a line's text, `first_display_ms` p50 **0.58 s** (max 2.03 s, the
+first line waiting for language ID) against 0.70-0.75 s in `docs/latency.md`'s live-clip row: the row hold (a draft
+of the line after next waits for row 2) did not delay a first draft on this clip. Non-append revisions 1.4 per line.
+
+**Tests.** Node: a line wraps once and truncates only beyond two rows, the reservation is two visual rows per line,
+the tracks pack against the video (`overlay-rows.test.js`, `overlay-layout.test.js`, `overlay-stable.test.js`);
+harness: the band at 20 % on the lines and the per-final `rows` / `truncated` flags with their counts
+(`test_harness_url.py`); browser: the text inside the bottom 20 % on the fill page in every sample, at least 80 %
+of the samples on the YouTube page (`test_overlay_browser.py`).
+
+**Settings changed:** `rowsPerLine` 2 (was 1). Harness summary: `band_pct`, `block_in_band`, `lines_in_band`
+(were `block_in_bottom_15`, `lines_in_bottom_15`); `display_times.wrapped`, `.truncated`, per line `rows`,
+`truncated`.
 
 ![Rolling rows on the YouTube page in fullscreen: the finished line above, the next line's draft below](../demo-youtube.gif)
