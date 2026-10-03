@@ -575,8 +575,13 @@ Windows (`.github/workflows/ci.yml`). `DEVLOG.md` is the project history; every 
   `SUBTITLE_ASR__DRAFT_AGREE_K=1` shows every draft whole.
 - A very short line that was misrecognised can get an invented translation: OPUS-MT turned three misheard Bengali
   words into "We were married in July 1955." (`docs/latency.md`).
-- Fast dialogue with pauses under half a second still runs two sentences into one line (up to the 6-second cut;
-  `docs/observations.md`, A9, and `docs/latency.md`).
+- Bengali lines end a little later than English or Mandarin ones, and fast dialogue with pauses under half a
+  second still runs two sentences into one line (up to the 6-second cut). The Bengali model decodes in 0.64 s
+  chunks (`decode_chunk_len` 64 in its encoder; the English and Mandarin models 0.32 s), so it sees a pause and
+  ends a line only on a chunk boundary: its final translation comes 1.2-1.4 s after the last word against 0.8-0.9 s
+  (`docs/latency.md`), and its first words 0.7-0.8 s after they were spoken against 0.3-0.4 s. It is a model limit:
+  sherpa-onnx has one Bengali streaming model and it comes in this one export, with no checkpoint to re-export
+  from, so there is no smaller-chunk export to switch to (`docs/observations.md`, A9).
 - Below a video on a normal page the block sits over whatever the page has there (on YouTube, the title); drag it
   elsewhere if that is in the way. A line is at most two rows of about 42 characters: a longer translation keeps
   its end, with "…" at the start (none of the live clip's 12 lines needed it, `docs/overlay/README.md`). In

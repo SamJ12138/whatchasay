@@ -158,3 +158,19 @@ def test_latency_doc_has_the_baseline_the_before_after_tables_and_the_flicker_nu
         assert part in doc, part
     after = doc[doc.index("## Before and after"):]
     assert len(set(re.findall(r"`(\d{8}T\d{6}-[0-9a-f]{6})`", after))) >= 24      # 4 clips x 3 runs x before / after
+
+
+def test_a9_is_closed_as_a_model_limit_with_the_chunk_number():
+    """A9 remainder: the Bengali recognizer ends utterances on its 0.64 s decode-chunk
+    boundary and sherpa-onnx offers no smaller-chunk export of that model (one Bengali
+    streaming model in its catalogue, one ONNX export, no checkpoint). The README's
+    limitations and observations A9 say so, with the number, and A9 is closed."""
+    limits = README[README.index("## Status and limitations"):README.index("## License")]
+    bengali = [b for b in limits.split("\n- ") if "0.64" in b]
+    assert len(bengali) == 1, bengali
+    for part in ("0.64", "0.32", "decode", "no smaller-chunk export"):
+        assert part in bengali[0], (part, bengali[0])
+    obs = (REPO / "docs" / "observations.md").read_text(encoding="utf-8")
+    a9 = next(line for line in obs.splitlines() if line.startswith("| A9 |"))
+    assert "closed" in a9 and "model limit" in a9 and "0.64" in a9 and "alphacep/vosk-model-small-streaming-bn" in a9, a9
+    assert "Fast dialogue with pauses under half a second still runs two sentences into one line" not in README

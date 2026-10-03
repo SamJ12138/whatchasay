@@ -894,3 +894,14 @@ D4 cloud providers off by default, keys only in backend config.
   rewritten), observations T13 / T14 fixed with the placeholder table, `docs/live-test-youtube.md` "The glossary".
   Tests: `tests/test_glossary.py` (26), harness `--glossary` unit test, node `tests/glossary.test.js` (13), slow
   `tests/test_glossary_live.py`. Tallies: fast 369, slow 44, node 159.
+- Batch 2 (A9 remainder; commit "docs: A9 is a model limit"). Question: does sherpa-onnx offer a smaller-chunk export
+  of the Bengali model with a declared license? No. The model is `sherpa-onnx-streaming-zipformer-bn-vosk-2026-02-09`
+  (the catalogue's one Bengali streaming model: 1 of the 498 assets of release `asr-models`), repackaged from
+  `alphacep/vosk-model-small-streaming-bn` (Apache-2.0), whose repository holds a single ONNX export
+  (`am-onnx/encoder.onnx`, `decode_chunk_len` 64 = 0.64 s, `T` 77; English and Mandarin exports: 32 = 0.32 s) and no
+  PyTorch checkpoint; the chunk size is fixed at export, so nothing smaller exists or can be made from what is
+  published (the two other Hugging Face repositories with the name are copies). Documented as a model limit:
+  observations A9 "Remainder closed", README limitations (the Bengali bullet carries the numbers: final 1.2-1.4 s
+  after the last word against 0.8-0.9 s, first display 0.7-0.8 s against 0.3-0.4 s, from `docs/latency.md`);
+  `tests/test_docs_media.py::test_a9_is_closed_as_a_model_limit_with_the_chunk_number` pins it. No code change.
+  Tallies: fast 370, slow 44, node 159.
