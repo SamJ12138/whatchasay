@@ -364,6 +364,39 @@
     .preview-secondary {
       color: #ffcc00;
     }
+
+    .glossary-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+    .glossary-table th, .glossary-table td {
+      text-align: left;
+      padding: 6px 8px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+      vertical-align: top;
+    }
+    .glossary-table th {
+      color: #aaa;
+      font-weight: 500;
+      font-size: 12px;
+    }
+    .glossary-table input[type="text"], .glossary-table select {
+      padding: 6px 8px;
+      font-size: 13px;
+      min-width: 6em;
+    }
+    .glossary-table .row-actions {
+      white-space: nowrap;
+    }
+    .glossary-table .row-actions button {
+      padding: 6px 10px;
+      font-size: 12px;
+      margin-left: 4px;
+    }
+    .glossary-table tr.editing td {
+      background: rgba(79, 172, 254, 0.08);
+    }
   </style>
 </head>
 <body>
@@ -694,6 +727,36 @@
       </p>
     </div>
     
+    <!-- Glossary (observations T13, T14) -->
+    <div class="section">
+      <h2 class="section-title">Glossary</h2>
+      <p style="font-size: 12px; color: #999; margin-bottom: 12px;">
+        Names, dishes, jargon: a term the recognizer gets wrong or the translator does not know.
+        Give its correct spelling in the spoken language, the spellings it is <em>heard as</em>
+        (comma-separated; a near spelling is matched too), and how it should read in each
+        target language. Terms apply to the next line of a running session. On the page, select
+        a word in the spoken-words line and press <kbd>Alt</kbd>+<kbd>E</kbd> to add one.
+      </p>
+      <table id="glossaryTable" class="glossary-table">
+        <thead>
+          <tr>
+            <th>Spoken</th>
+            <th>Correct spelling</th>
+            <th>Heard as</th>
+            <th class="rendering-head" data-lang="primary">Shown as (primary)</th>
+            <th class="rendering-head" data-lang="secondary">Shown as (secondary)</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="glossaryRows"></tbody>
+      </table>
+      <p id="glossaryNote" style="font-size: 12px; color: #888; margin-top: 8px;"></p>
+      <div class="button-group" style="justify-content: flex-start; margin-top: 12px;">
+        <button class="btn-secondary" id="glossaryAdd">Add a term</button>
+        <button class="btn-secondary" id="glossaryReload">Reload</button>
+      </div>
+    </div>
+
     <!-- Data Management -->
     <div class="section">
       <h2 class="section-title">Data Management</h2>
@@ -728,6 +791,7 @@
   <script src="../lib/caption-mode.js"></script>
   <script src="../lib/target-routes.js"></script>
   <script src="../lib/settings-migration.js"></script>
+  <script src="../lib/glossary.js"></script>
   <script src="options.js"></script>
 </body>
 </html>

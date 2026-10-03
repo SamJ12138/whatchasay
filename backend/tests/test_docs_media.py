@@ -116,19 +116,20 @@ def test_relative_links_in_the_readme_exist():
     assert links and not missing, missing
 
 
-def test_using_it_states_the_correction_limitation_in_one_line_and_the_case_stays_in_the_live_test():
-    """"Using it" carries no worked correction example: one limitation line says what a
-    correction is matched on and that a term-level glossary is planned. The full case (the
-    real mistranscription, what was typed, what the rerun showed) lives in
-    docs/live-test-youtube.md."""
+def test_using_it_explains_the_glossary_with_the_rajbhog_case_and_the_limitation_line_is_gone():
+    """"Using it": corrections point at the glossary for a word that keeps coming out wrong;
+    the glossary paragraph says what a term is, both ways to add one, that a running session
+    uses it on its next line, and gives the live test's rajbhog case as the example. The old
+    "a term-level glossary is planned" limitation line is gone; the full case (every pass of
+    the recognizer, what was typed, the reruns) stays in docs/live-test-youtube.md."""
     using = " ".join(README[README.index("## Using it"):README.index("## Optional extras")].split())
-    corrections = using[using.index("**Corrections.**"):using.index("**What is remembered.**")]
-    for gone in ("রাজভোগ", "রাজবুক", "A Royal Book Shower", "Show me a rajbhog.", "*Example"):
-        assert gone not in corrections, gone
-    limitation = [s for s in re.split(r"(?<=[.)])\s+(?=[*A-Z])", corrections) if "glossary" in s]
-    assert len(limitation) == 1, limitation
-    for part in ("whole recognised sentence", "rarely reused on live speech", "term-level glossary is planned", "T13", "T14"):
-        assert part in limitation[0], (part, limitation[0])
+    corrections = using[using.index("**Corrections.**"):using.index("**The glossary.**")]
+    assert "teach the glossary" in corrections
+    assert "glossary is planned" not in README and "There is no glossary" not in README
+    glossary = using[using.index("**The glossary.**"):using.index("**What is remembered.**")]
+    for part in ("correct spelling", "heard as", "Settings → Glossary", "Alt+E", "next line", "রাজভোগ", "রাজবুক",
+                 "rajbhog", "A royal book.", "3 of 3"):
+        assert part in glossary, (part, glossary)
     assert "in live captions and in caption mode alike" not in README
     doc = (REPO / "docs" / "live-test-youtube.md").read_text(encoding="utf-8")
     for real in ("রাজভোগ", "রাজবুক", "A Royal Book Shower", "Show me a rajbhog.", "was not fixed"):

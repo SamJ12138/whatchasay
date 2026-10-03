@@ -184,3 +184,33 @@ sentence, Bengali confirmed 2.3 s in, the first translation on screen 2.4 s afte
 translated text 2.7 s after a line's first word (p50), 0.7 draft rewrites per line (local agreement, K = 2, and
 no draft before three stable words), lines wrap once instead of losing their start ("What mosquitos are so big
 that it won't / turn into a king?"). রাজভোগ is now heard as "A Royal Book Shower"; the mosquito is still a mosquito.
+
+## The glossary (2026-10-02, observations T13 / T14 fixed)
+
+The term the first glossary check could not enter (above) can be taught now: *Settings → Glossary*, or on the page
+with the misheard word selected in the spoken-words line and Alt+E. `tests/test_glossary_live.py` teaches it the way
+the user would (`e2e_extension.py --glossary`: correct spelling রাজভোগ, heard as রাজবুক, shown in English as
+*rajbhog*) and plays the recorded 20 s through the harness page three times (`--source auto --targets auto
+--show-source`):
+
+| run_id | Line 1 as recognised, on screen | Line 1 in English |
+|---|---|---|
+| `run_20261002T225943-1c3058` | রাজভোগ দান্ত | rajbhog Dont |
+| `run_20261002T230007-d2f7f1` | রাজভোগ দেখান্ত | rajbhog View |
+| `run_20261002T230028-284d60` | রাজভোগ দান্ত | rajbhog Dont |
+
+The term is right in 3 of 3; the rest of line 1 is what the recognizer made of "দেখা তো" this time. What the three
+runs before the fix showed matters as much: the recognizer wrote **আজ বুক দেখেন তো** (the word split in two, the
+initial consonant dropped) in 3 of 3 (`run_20261002T225608-87e3c1`, `..T225654-0d6cf0` and one more), and the first
+version of the matcher, one word at a time against the taught spelling রাজবুক, caught none of them ("Today, you've
+got to look at your book."). The fuzzy pass now also tries two adjacent words run together, and folds a Bengali
+independent vowel to its sign form (আ for রা is one dropped consonant, not two edits), so আজ বুক, কাজ বুক and রাজব
+all become রাজভোগ from the one taught spelling. Offline on the recorded sentences (`tests/test_glossary.py` has the
+cases): "একটা রাজবুক দেখা তো" -> "I've seen a rajbhog.", "কাল যে আমার দশ হাজার রাজবুক লাগবে" -> "I need ten thousand
+rajbhog tomorrow.", "… দশ হাজার রাজব লাগবে" -> "… I need 10,000 rajbhog.", where without the glossary OPUS-MT gave
+"A royal book.", "ten thousand royal books" and "ten thousand kings".
+
+How the term survives translation: it goes through OPUS-MT as a placeholder and the rendering is put back. No
+placeholder survives in every direction (`docs/observations.md` T13 has the table), so the result is checked and the
+sentence re-translated with the next placeholder of the direction when one is lost; on these runs the first
+placeholder (`X1X`, bn -> en) survived every time (run log stage `glossary`, `attempts: 1`).

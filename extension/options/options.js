@@ -731,6 +731,169 @@ async function clearMemory() {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Glossary (observations T13, T14): the backend's terms in a table, add / edit / delete.
+// lib/glossary.js has the client and the pure row <-> term logic; this is the DOM.
+// ---------------------------------------------------------------------------
+
+const GLOSSARY_SPOKEN = ['en', 'zh', 'bn'];
+const glossaryState = { terms: [], editing: null };   // editing: a term id, or 'new'
+
+function glossaryServerUrl() {
+  const host = elements.serverHost?.value || '127.0.0.1';
+  const port = elements.serverPort?.value || 8765;
+  return `ws://${host}:${port}/ws`;
+}
+
+/** The two target languages of the Settings page, for the "shown as" columns. */
+function glossaryTargetLangs() {
+  const langs = getTargetLanguages ? getTargetLanguages() : [];
+  const out = langs.filter((l) => l && l !== 'none').slice(0, 2);
+  return out.length ? out : ['en', 'zh'];
+}
+
+function glossaryNote(text, isError) {
+  const el = document.getElementById('glossaryNote');
+  if (!el) return;
+  el.textContent = text || '';
+  el.style.color = isError ? '#ff6b6b' : '#888';
+}
+
+async function loadGlossary() {
+  const res = await window.STGlossary.list(glossaryServerUrl());
+  if (!res.ok) {
+    glossaryNote('The glossary lives in the backend: start it to see and edit the terms (' + res.error + ').', true);
+    glossaryState.terms = [];
+  } else {
+    glossaryState.terms = res.terms || [];
+    glossaryNote(glossaryState.terms.length ? '' : 'No terms yet.');
+  }
+  renderGlossary();
+}
+
+function glossaryCell(child) {
+  const td = document.createElement('td');
+  if (typeof child === 'string') td.textContent = child; else if (child) td.appendChild(child);
+  return td;
+}
+
+function glossaryInput(value, placeholder) {
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.value = value || '';
+  if (placeholder) input.placeholder = placeholder;
+  return input;
+}
+
+function glossaryButton(label, cls, onClick) {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = cls;
+  b.textContent = label;
+  b.addEventListener('click', onClick);
+  return b;
+}
+
+function renderGlossary() {
+  const tbody = document.getElementById('glossaryRows');
+  if (!tbody) return;
+  const langs = glossaryTargetLangs();
+  const heads = document.querySelectorAll('#glossaryTable .rendering-head');
+  heads.forEach((th, i) => { th.textContent = langs[i] ? `Shown in ${LANGUAGE_NAMES[langs[i]] || langs[i]}` : ''; th.hidden = !langs[i]; });
+  tbody.innerHTML = '';
+  const rows = window.STGlossary.rowsOf(glossaryState.terms, langs);
+  for (const row of rows) {
+    tbody.appendChild(glossaryState.editing === row.id ? glossaryEditRow(row, langs) : glossaryViewRow(row, langs));
+  }
+  if (glossaryState.editing === 'new') {
+    tbody.appendChild(glossaryEditRow({ id: null, sourceLang: elements.asrSourceLang?.value && elements.asrSourceLang.value !== 'auto' ? elements.asrSourceLang.value : 'en',
+      canonical: '', heardAs: '', renderings: {} }, langs));
+  }
+}
+
+function glossaryViewRow(row, langs) {
+  const tr = document.createElement('tr');
+  tr.dataset.id = row.id;
+  tr.appendChild(glossaryCell(LANGUAGE_NAMES[row.sourceLang] || row.sourceLang));
+  tr.appendChild(glossaryCell(row.canonical));
+  tr.appendChild(glossaryCell(row.heardAs));
+  for (const lang of langs) tr.appendChild(glossaryCell(row.renderings[lang] || ''));
+  const actions = document.createElement('div');
+  actions.className = 'row-actions';
+  actions.appendChild(glossaryButton('Edit', 'btn-secondary', () => { glossaryState.editing = row.id; renderGlossary(); }));
+  actions.appendChild(glossaryButton('Delete', 'btn-danger', () => deleteGlossaryTerm(row)));
+  tr.appendChild(glossaryCell(actions));
+  return tr;
+}
+
+function glossaryEditRow(row, langs) {
+  const tr = document.createElement('tr');
+  tr.className = 'editing';
+  const spoken = document.createElement('select');
+  for (const code of GLOSSARY_SPOKEN) {
+    const opt = document.createElement('option');
+    opt.value = code;
+    opt.textContent = LANGUAGE_NAMES[code] || code;
+    if (code === row.sourceLang) opt.selected = true;
+    spoken.appendChild(opt);
+  }
+  const canonical = glossaryInput(row.canonical, 'correct spelling');
+  const heardAs = glossaryInput(row.heardAs, 'heard as, comma-separated');
+  const renderings = {};
+  tr.appendChild(glossaryCell(spoken));
+  tr.appendChild(glossaryCell(canonical));
+  tr.appendChild(glossaryCell(heardAs));
+  for (const lang of langs) {
+    renderings[lang] = glossaryInput(row.renderings[lang] || '', `in ${LANGUAGE_NAMES[lang] || lang}`);
+    tr.appendChild(glossaryCell(renderings[lang]));
+  }
+  const save = async () => {
+    let term;
+    try {
+      term = window.STGlossary.formToTerm({
+        id: row.id, sourceLang: spoken.value, canonical: canonical.value, heardAs: heardAs.value,
+        renderings: Object.fromEntries(langs.map((l) => [l, renderings[l].value])),
+      });
+    } catch (e) {
+      glossaryNote(e.message, true);
+      return;
+    }
+    const res = await window.STGlossary.save(term, glossaryServerUrl());
+    obs.log('ext_glossary', res.ok ? 'success' : 'fail', { path: '/glossary', from: 'options', ...(res.ok ? {} : { error_type: 'process', error_message: res.error }) });
+    if (!res.ok) { glossaryNote('Not saved: ' + res.error, true); return; }
+    glossaryState.editing = null;
+    showStatus('Glossary term saved', 'success');
+    await loadGlossary();
+  };
+  const actions = document.createElement('div');
+  actions.className = 'row-actions';
+  actions.appendChild(glossaryButton('Save', 'btn-primary', save));
+  actions.appendChild(glossaryButton('Cancel', 'btn-secondary', () => { glossaryState.editing = null; renderGlossary(); }));
+  tr.appendChild(glossaryCell(actions));
+  for (const input of [canonical, heardAs, ...Object.values(renderings)]) {
+    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') save(); if (e.key === 'Escape') { glossaryState.editing = null; renderGlossary(); } });
+  }
+  setTimeout(() => canonical.focus(), 0);
+  return tr;
+}
+
+async function deleteGlossaryTerm(row) {
+  if (!confirm(`Delete the glossary term "${row.canonical}"?`)) return;
+  const res = await window.STGlossary.remove(row.id, glossaryServerUrl());
+  obs.log('ext_glossary', res.ok ? 'success' : 'fail', { path: '/glossary', action: 'delete', ...(res.ok ? {} : { error_type: 'process', error_message: res.error }) });
+  if (!res.ok) { glossaryNote('Not deleted: ' + res.error, true); return; }
+  await loadGlossary();
+}
+
+function initGlossary() {
+  if (!window.STGlossary || !document.getElementById('glossaryTable')) return;
+  document.getElementById('glossaryAdd')?.addEventListener('click', () => { glossaryState.editing = 'new'; renderGlossary(); });
+  document.getElementById('glossaryReload')?.addEventListener('click', loadGlossary);
+  elements.primaryLang?.addEventListener('change', renderGlossary);
+  elements.secondaryLang?.addEventListener('change', renderGlossary);
+  loadGlossary();
+}
+
 /**
  * Initialize color picker events
  */
@@ -867,6 +1030,7 @@ document.addEventListener('DOMContentLoaded', () => {
   loadSettings();
   initEventListeners();
   initCaptionMode();
+  initGlossary();
   showBoundShortcuts();
   elements.asrSourceLang?.addEventListener('change', applyTargetRoutes);
 

@@ -152,11 +152,23 @@ tab** in the popup for a particular tab. Switching caption mode off gives the si
 **Corrections.** Press **Alt+E** while a translation is on screen, edit it, and press Enter (Escape cancels). The
 subtitles hold still while you type. The correction is stored in the translation memory and used whenever the same
 source sentence comes up again, letter for letter. Page subtitles (caption mode) repeat exactly, so there a
-correction holds. Live captions mostly do not: the recognizer rarely writes a sentence the same way twice.
+correction holds. Live captions mostly do not: the recognizer rarely writes a sentence the same way twice. For a
+word that keeps coming out wrong, teach the glossary instead.
 
-*Limitation:* corrections are matched on the whole recognised sentence and are rarely reused on live speech; a
-term-level glossary is planned (`docs/observations.md`, T13 and T14; the worked case is in
-`docs/live-test-youtube.md`).
+**The glossary.** A term you teach once: a name, a dish, a piece of jargon. A term has its correct spelling in
+the spoken language, the spellings the recognizer tends to write for it ("heard as"), and how it should read in
+each target language. From then on the heard-as spelling is replaced with the correct one on the recognised line
+(an exact spelling, or one within a letter or two of it), and the term goes through translation untouched and
+comes out as you said. Two ways to add one: *Settings → Glossary* (a table: add, edit, delete), or on the page:
+turn the spoken words on (**Alt+O**), select the misheard word in that line with the mouse, press **Alt+E**, type
+what it should be and how it should read, Enter. A running session uses a new term on its next line. The worked
+case from `docs/live-test-youtube.md`: in a Bengali film scene the sweet রাজভোগ (*rajbhog*) came out as রাজবুক,
+রাজব, কাজ বুক or আজ বুক and was translated as "A royal book." Taught once as correct spelling রাজভোগ, heard as
+রাজবুক, shown in English as *rajbhog*, the recognised line reads রাজভোগ and its translation carries *rajbhog* in 3 of
+3 live runs (the near spellings are caught too: a letter off, or the word split in two); offline, "একটা রাজবুক দেখা
+তো" -> "I've seen a rajbhog." and "ten thousand royal books" later in the scene -> "ten thousand rajbhog". What the
+glossary cannot do is mend the rest of a badly heard line. Terms are kept in `backend/data/translation_memory.db`
+with your corrections.
 
 **What is remembered.** Live-caption text and its translations are kept in memory only until the session ends.
 Page subtitles from caption mode and your corrections are kept in `backend/data/translation_memory.db`; machine
@@ -181,8 +193,8 @@ choice is remembered. `docs/overlay/README.md` has the measurements (how much of
 before and after).
 
 **Keyboard shortcuts.** Alt+L start/stop live captions, Alt+T show/hide the overlay, Alt+S swap the two languages,
-Alt+. larger font (the popup also has a smaller-font button), Alt+E edit the current translation, Alt+O show/hide
-the spoken words. Change the first four at `chrome://extensions/shortcuts` (Alt+E and Alt+O are handled on the
+Alt+. larger font (the popup also has a smaller-font button), Alt+E edit the current translation (with a word
+selected in the spoken-words line: teach the glossary), Alt+O show/hide the spoken words. Change the first four at `chrome://extensions/shortcuts` (Alt+E and Alt+O are handled on the
 page: Chrome allows four changeable shortcuts per extension).
 
 **When something does not work**
@@ -363,6 +375,7 @@ objects are JSON; relative paths are relative to `backend/`. Every setting:
 | `SUBTITLE_TRANSLATION__OPUS_MAX_TOKENS` | `128` | Hard cap on output tokens |
 | `SUBTITLE_TRANSLATION__OPUS_MAX_LENGTH_RATIO` | `3.0` | Output tokens <= ratio x source tokens + 4 (stops a runaway decode; 0 = only the hard cap) |
 | `SUBTITLE_TRANSLATION__OPUS_TARGET_TOKENS` | `{"Helsinki-NLP/opus-mt-en-zh": ">>cmn_Hans<<", "Helsinki-...` | Target-language token for multi-target models |
+| `SUBTITLE_TRANSLATION__GLOSSARY_MAX_ATTEMPTS` | `3` | Glossary: a term travels through MT as a placeholder; a sentence whose placeholder the engine lost is re-translated with the next placeholder of the direction, this many attempts in all (1-3), then unprotected |
 
 **Language detection for page subtitles without a declared language**
 
@@ -548,8 +561,13 @@ Windows (`.github/workflows/ci.yml`). `DEVLOG.md` is the project history; every 
   Nepali. The backend now picks the likeliest of English, Mandarin and Bengali, and stays on its first guess when
   that is not clear enough: the captions then stay dimmed under *Language not detected, assuming English*. Set the
   spoken language under *Live Captions* in the popup instead of *Auto-detect*.
-- There is no glossary: a word the recognizer gets wrong (a name, a dish) stays wrong, and an Alt+E correction
-  covers only the exact sentence it was made on.
+- The glossary replaces a term's heard-as spellings on the recognised line and carries the term through
+  translation as a placeholder the engine copies. OPUS-MT keeps no placeholder in every direction, so the result is
+  checked and the sentence re-translated with the next placeholder (up to three; measured, the three cover 48 of 48
+  test sentences over the six en/zh/bn directions, `docs/observations.md` T13); a sentence where none survives is
+  translated with the correct spelling and no rendering. The term is matched on the recognised words, so a spelling
+  the recognizer has never produced before, and is more than a letter or two from the ones taught, is not caught
+  until it is added. An Alt+E correction of a whole translation still covers only the exact sentence it was made on.
 - A draft translation is the translation of the part of a sentence heard so far. Only the start that the last two
   drafts agree on is shown, so it grows rather than changes under your eyes, but it is short (about two words on
   the live clip) and the final translation still replaces it, which rewrites the line 0.8 times per line on the

@@ -846,3 +846,51 @@ D4 cloud providers off by default, keys only in backend config.
   `--prime-audio`, 9.5 s from 0.1 s before play, 4,660,616 bytes): the first line is the clip's opening sentence,
   11 lines in 45 s, 0.7 rewrites per line; `docs/live-test-youtube.md` has the run. Tallies: fast 342, slow 42,
   node 146.
+
+### 2026-10-02 — Glossary, A9 remainder, fast speech
+- Batch 1 (term glossary, T13 / T14; commit "feat: term glossary applied to recognised text and protected through
+  translation"). A term = canonical spelling in the source language + "heard as" spellings + a rendering per target.
+  Storage: TM schema 3 (`glossary_terms` / `glossary_heard` / `glossary_renderings`; the old storage-only `glossary`
+  table's rows become terms with renderings; the file is backed up as `.bak-2` first), `list_glossary`,
+  `upsert_glossary_term` (extends by canonical spelling; `term_id` + `replace` for an edit), `delete_glossary_term`,
+  `forget_machine_rows_containing`. Endpoints `GET /glossary`, `POST /glossary` (422 on a blank spelling; clears the
+  in-memory caches, live sessions' included, and forgets machine TM rows holding one of the spellings), `DELETE
+  /glossary/{id}` (CORS now allows DELETE). `translation/glossary.py` (pure): `Glossary.correct` (exact phrases
+  first, longest first; then fuzzy: a word, or two adjacent words run together, within 1 edit for a spelling of up
+  to 4 code points / 2 up to 8 / 3 beyond, same first character unless it is the one edit of a 5+ code-point
+  spelling, never a word under 4; Bengali independent vowels folded to their sign form for the comparison; CJK by
+  substring), `protect` / `restore` (placeholder per distinct term, numbered in reading order; restore refuses a lost
+  or doubled placeholder; in English the article before the term follows the rendering, "an X1X" -> "a rajbhog"),
+  `ProtectRun` / `translate_protected` (verify and retry with the direction's next template, then unprotected;
+  stage `glossary` `kind=protect` with attempts / protected / placeholder, counts only). `GlossaryStore` (process
+  singleton, reloaded by the TM after every change) so an open `/ws/asr` session uses a new term on its next line;
+  `main.py _apply_glossary` corrects partials, finals (`raw_text` + `glossary` hits on the message) and the draft's
+  stable prefix before display and MT; `pipeline._translate_with_glossary` wraps every engine call (page subtitles
+  and `/translate` too). **Placeholder evidence** (two scratch probes on the real CT2 models, 20 then 26 candidates,
+  5 then 8 sentences per direction, six en/zh/bn directions): nothing survives everywhere (`X1X` 8/8 bn>en but 0/8
+  en>bn; `[1]` 8/8 en>zh, 0/8 en>bn, `[1]`+`[2]` -> `[1和2]`; `{X1}` 8/8 en>bn, 1/8 en>zh; `%s` 25/30 but
+  unnumbered; a private-use character 0/30; `Zorblax` transliterated). Chosen: per-direction ranked families (bn>en
+  `X{n}X, {{n}}, [{n}]`; en>zh `[{n}], KX{n}, X{n}X`; zh>en `KX{n}, N{n}N, X{n}X`; en>bn `{X{n}}, <X{n}>, <{n}>`;
+  bn>zh `KX{n}, XY{n}Z, [{n}]`; zh>bn `%s, [X{n}], X{n}X`; default `[X{n}], [{n}], XX{n}`) + verify + retry:
+  48 of 48 probe sentences protected within the top three (zh>bn needed attempt 2 once). Setting
+  `translation.glossary_max_attempts` 3 (`SUBTITLE_TRANSLATION__GLOSSARY_MAX_ATTEMPTS`; `.env.example`, README).
+  Extension: `lib/glossary.js` (client list / save / remove, `rowsOf`, `formToTerm`, `termFromSelection`), Options
+  page *Glossary* table (add / edit / delete, inline rows, rendering columns follow the two target languages),
+  overlay term editor (`selectedSourceText` reads the closed shadow root's selection; `enableTermEdit` opens "heard
+  X, should be [ ], shown in <lang> as [ ]", Enter saves, Esc cancels, keys stopped; the recognised line is
+  `user-select: text` and a press on it is a selection, not a drag), `main.js` `toggle-edit` tries the term editor
+  first, `SUBMIT_GLOSSARY_TERM` -> worker `STGlossary.save` (extension origin). Harness `--glossary JSON` posts the
+  terms before the clip. **Live clip, 3 browser runs** (`tests/test_glossary_live.py`, runs `20261002T225943-1c3058`,
+  `..T230007-d2f7f1`, `..T230028-284d60`): line 1 on screen রাজভোগ দান্ত / রাজভোগ দেখান্ত, English "rajbhog Dont" /
+  "rajbhog View" / "rajbhog Dont": the term right in 3 of 3, the rest of the line the recognizer's. The three runs
+  before that (`20261002T225608-87e3c1`, `..T225654-0d6cf0`, one more) wrote **আজ বুক দেখেন তো** in 3 of 3 and the
+  one-word matcher caught none ("Today, you've got to look at your book."): hence the two-word window and the vowel
+  fold. Offline on the recorded sentences, bn>en, 6 of 6 protected at attempt 1 ("I've seen a rajbhog.", "ten
+  thousand rajbhog", the fuzzy রাজব). Found on the way: `tests/test_e2e_extension.py run_harness` decoded the
+  harness summary with the console codepage (GBK here) and lost it on Bengali text: UTF-8 on both ends now; the
+  Python 3.10 Playwright on this machine wants Chromium 1187, which is not installed (`ST_PLAYWRIGHT_PYTHON` ->
+  `C:\Python314\python.exe`, Playwright 1.58, Chromium 1208). Docs: README (Corrections points at the glossary; the
+  glossary paragraph with the rajbhog case replaces the limitation line; shortcuts; config row; limitation bullet
+  rewritten), observations T13 / T14 fixed with the placeholder table, `docs/live-test-youtube.md` "The glossary".
+  Tests: `tests/test_glossary.py` (26), harness `--glossary` unit test, node `tests/glossary.test.js` (13), slow
+  `tests/test_glossary_live.py`. Tallies: fast 369, slow 44, node 159.

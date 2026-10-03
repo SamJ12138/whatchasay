@@ -63,10 +63,13 @@ class SubtitleOverlay {
     this.container = null;
     this.subtitleStack = null;
 
-    // Edit state
+    // Edit state (Alt+E: the translation of a line, or, with a word selected in the
+    // recognised line, a glossary term: termEditor = {heard, cueId, sourceLang, renderingLang, fields})
     this.editMode = false;
     this.editCueId = null;
+    this.termEditor = null;
     this.onCorrectionCallback = null;
+    this.onGlossaryTermCallback = null;
 
     // Position tracking (docs/overlay/README.md): the block sits below the video in the
     // page's space, or over its bottom when the video is fullscreen / fills the viewport;
@@ -582,6 +585,7 @@ class SubtitleOverlay {
     this.editMode = false;
     this.editCueId = null;
     this._editingLine = null;
+    this.termEditor = null;
     this._updateDisplay();
   }
 
@@ -590,6 +594,124 @@ class SubtitleOverlay {
    */
   onCorrection(callback) {
     this.onCorrectionCallback = callback;
+  }
+
+  /** Set the callback for glossary terms taught with Alt+E (lib/glossary.js termFromSelection). */
+  onGlossaryTerm(callback) {
+    this.onGlossaryTermCallback = callback;
+  }
+
+  // ---- the glossary's term editor: Alt+E with a word selected in the recognised line ----
+
+  _isSourceLine(el) {
+    for (let n = el; n && n.classList; n = n.parentNode) {
+      if (n.classList.contains('partial') || n.classList.contains('original')) return true;
+      if (n.classList.contains('subtitle-line')) return false;
+    }
+    return false;
+  }
+
+  /**
+   * The text selected in the recognised line (the partial or the original row), with its
+   * cue, or null. Chrome keeps a closed shadow root's selection on the root itself.
+   */
+  selectedSourceText() {
+    let sel = null;
+    try {
+      sel = this.shadowRoot && typeof this.shadowRoot.getSelection === 'function' ? this.shadowRoot.getSelection()
+        : (typeof document !== 'undefined' && document.getSelection ? document.getSelection() : null);
+    } catch (_) { sel = null; }
+    if (!sel || sel.isCollapsed) return null;
+    const text = String(sel.toString() || '').trim();
+    if (!text) return null;
+    let node = sel.anchorNode;
+    while (node && !(node.classList && node.classList.contains('subtitle-line'))) node = node.parentNode;
+    if (!node || !this._isSourceLine(node)) return null;
+    return { text, cueId: node.dataset ? node.dataset.cueId : null };
+  }
+
+  /**
+   * Open the term editor for the selection: "heard as <selection>: should be [ ], in <lang> [ ]".
+   * Returns false when nothing is selected in the recognised line (Alt+E then edits the
+   * translation as before).
+   */
+  enableTermEdit() {
+    const sel = this.selectedSourceText();
+    if (!sel || !sel.text) return false;
+    const cue = sel.cueId ? this.currentCues.get(sel.cueId) : null;
+    const sourceLang = (cue && cue.sourceLang) || (this.partial && this.partial.lang) || this.liveLang || null;
+    const primary = this.primaryOnTop ? this.primaryLang : this.secondaryLang;
+    const secondary = this.primaryOnTop ? this.secondaryLang : this.primaryLang;
+    const renderingLang = [primary, secondary].find((l) => l && l !== 'none' && l !== sourceLang) || null;
+    this.editMode = true;
+    this.editCueId = null;
+    this.termEditor = { heard: sel.text, cueId: sel.cueId || null, sourceLang, renderingLang, fields: {} };
+    this._updateDisplay();
+    return true;
+  }
+
+  _createTermEditor() {
+    const ed = this.termEditor;
+    const line = document.createElement('div');
+    line.className = 'subtitle-line term-edit editing';
+    line.dataset.state = 'term-edit';
+    const label = (text) => {
+      const s = document.createElement('span');
+      s.className = 'term-label';
+      s.textContent = text;
+      return s;
+    };
+    const field = (name, value) => {
+      const f = document.createElement('span');
+      f.className = 'term-field';
+      f.textContent = value;
+      f.contentEditable = 'true';
+      f.spellcheck = false;
+      f.dataset.field = name;
+      f.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          if (typeof e.preventDefault === 'function') e.preventDefault();
+          this._saveTermEdit();
+        } else if (e.key === 'Escape') {
+          this.disableEditMode();
+        }
+      });
+      // typed text, not the page's player shortcuts (observations E18)
+      for (const type of ['keydown', 'keypress', 'keyup']) f.addEventListener(type, (e) => e.stopPropagation());
+      ed.fields[name] = f;
+      return f;
+    };
+    line.appendChild(label(`heard “${ed.heard}”, should be`));
+    line.appendChild(field('canonical', ed.heard));
+    if (ed.renderingLang) {
+      line.appendChild(label(`shown in ${this._languageName(ed.renderingLang)} as`));
+      line.appendChild(field('rendering', ''));
+    }
+    line.appendChild(label('Enter saves, Esc cancels'));
+    for (const type of ['keydown', 'keypress', 'keyup']) line.addEventListener(type, (e) => e.stopPropagation());
+    this._editingLine = line;
+    setTimeout(() => { try { ed.fields.canonical.focus(); } catch (_) {} }, 0);
+    return line;
+  }
+
+  _languageName(code) {
+    const names = { en: 'English', zh: 'Chinese', bn: 'Bengali', vi: 'Vietnamese', ja: 'Japanese', ko: 'Korean', es: 'Spanish',
+      fr: 'French', de: 'German', ru: 'Russian', pt: 'Portuguese', it: 'Italian' };
+    return names[code] || code;
+  }
+
+  _saveTermEdit() {
+    const ed = this.termEditor;
+    if (!ed) return;
+    const G = globalThis.STGlossary;
+    const term = G ? G.termFromSelection({
+      selected: ed.heard, sourceLang: ed.sourceLang,
+      canonical: ed.fields.canonical ? ed.fields.canonical.textContent : '',
+      renderingLang: ed.renderingLang,
+      rendering: ed.fields.rendering ? ed.fields.rendering.textContent : '',
+    }) : null;
+    this.disableEditMode();
+    if (term && this.onGlossaryTermCallback) this.onGlossaryTermCallback(term);
   }
 
   /**
@@ -766,6 +888,32 @@ ${grid.rules}
         pointer-events: auto;
       }
 
+      /* the recognised line can be selected with the mouse (Alt+E then teaches the glossary) */
+      .subtitle-line.partial, .subtitle-line.original {
+        user-select: text;
+        cursor: text;
+      }
+
+      /* the term editor: "heard as X" and two fields the user types into */
+      .subtitle-line.term-edit {
+        color: #ffffff;
+        font-size: 0.85em;
+        white-space: nowrap;
+        user-select: text;
+      }
+      .subtitle-line.term-edit .term-field {
+        display: inline-block;
+        min-width: 3em;
+        margin: 0 0.3em;
+        padding: 0 0.3em;
+        border-bottom: 1px solid rgba(255,255,255,0.7);
+        outline: none;
+        color: #ffeb3b;
+      }
+      .subtitle-line.term-edit .term-label {
+        opacity: 0.8;
+      }
+
       .subtitle-line.primary {
         color: ${this.settings.primaryColor || this.settings.enColor};
       }
@@ -938,6 +1086,9 @@ ${grid.rules}
         fresh.push(line);
       }
     }
+
+    // the glossary's term editor, under the rows, while it is open
+    if (this.editMode && this.termEditor) fresh.push(this._createTermEditor());
 
     this._reconcile(fresh);
     this._renderExtras();
@@ -1292,6 +1443,9 @@ ${grid.rules}
     const THRESHOLD = 4;
     this.block.addEventListener('pointerdown', (e) => {
       if (e.button !== 0 || this.editMode) return;
+      // the recognised line (partial / original) is selectable text for Alt+E's term
+      // editor: a press on it starts a selection, not a drag of the block
+      if (this._isSourceLine(e.target)) return;
       this._drag = { x: e.clientX, y: e.clientY, moved: false, pointerId: e.pointerId };
     });
     this.block.addEventListener('pointermove', (e) => {

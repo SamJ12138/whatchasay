@@ -314,3 +314,25 @@ def test_geometry_log_records_the_block_at_each_partial_text_change():
     g2.add(_g([_line("partial", "x y", None, in_progress=True)], block=_box(10, 70, 80, 30)), 1)
     s2 = g2.summary()["partial_updates"]
     assert s2["height_changes"] == 1 and s2["position_changes"] == 1
+
+
+def test_glossary_flag_posts_each_term_to_the_running_backend(app_env):
+    """--glossary: the terms are POSTed to /glossary before the clip plays (the user had
+    taught them earlier); the summary says how many were saved."""
+    import threading
+    import uvicorn
+    from app.main import app
+
+    port = 8798
+    server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="error"))
+    t = threading.Thread(target=server.run, daemon=True)
+    t.start()
+    try:
+        assert h.wait_http(f"http://127.0.0.1:{port}/health/json", 30)
+        out = h.post_glossary(port, [{"source_lang": "bn", "canonical": "রাজভোগ", "heard_as": ["রাজবুক"], "renderings": {"en": "rajbhog"}},
+                                     {"source_lang": "bn", "canonical": " ", "heard_as": [], "renderings": {}}])
+        assert out["saved"] == 1 and out["failed"] == 1 and len(out["ids"]) == 1, out
+        assert json.loads(__import__("urllib.request").request.urlopen(f"http://127.0.0.1:{port}/glossary").read())["terms"][0]["canonical"] == "রাজভোগ"
+    finally:
+        server.should_exit = True
+        t.join(timeout=10)

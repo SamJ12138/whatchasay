@@ -28,6 +28,7 @@ from .base_translator import (
     STATUS_OK, STATUS_FALLBACK, STATUS_UNTRANSLATED, STATUS_ERROR,
 )
 from .line_breaker import format_subtitle_lines
+from .glossary import ProtectRun, store as glossary_store
 from ..cache.memory_cache import get_translation_cache, TranslationCache
 from ..cache.translation_memory import get_translation_memory, TranslationMemory
 from .. import obs
@@ -275,7 +276,7 @@ class TranslationPipeline:
             self.stats.translations += len(texts)
             tally["mt_items"] = tally.get("mt_items", 0) + len(texts)
             try:
-                outs = await self.base_translator.translate_batch_detailed(texts, src, tgt)
+                outs = await self._translate_with_glossary(texts, src, tgt)
             except Exception as e:
                 logger.error("MT failed %s->%s: %s", src, tgt, e)
                 obs.log_exc("translate", e, src=src, tgt=tgt, n=len(texts), phase="mt_group",
@@ -334,6 +335,28 @@ class TranslationPipeline:
 
         await self._await_stores(stores)
         return [r for r in results if r is not None]
+
+    async def _translate_with_glossary(self, texts: List[str], src: str, tgt: str) -> List[MTItem]:
+        """The engine call of one (src, tgt) group, with the glossary's terms protected
+        through it (translation/glossary.py): a placeholder per term, checked on the way
+        back, the next placeholder of the direction when one was lost. Texts without a
+        term go through in one call as before."""
+        glossary = glossary_store.for_lang(src)
+        if glossary is None:
+            return await self.base_translator.translate_batch_detailed(texts, src, tgt)
+        run = ProtectRun(texts, src, tgt, glossary, settings.translation.glossary_max_attempts)
+        last: Dict[int, MTItem] = {}
+        while (batch := run.next_batch()) is not None:
+            who = list(run.who)
+            items = await self.base_translator.translate_batch_detailed(batch, src, tgt)
+            for i, it in zip(who, items):
+                last[i] = it
+            run.accept([it.text if it.status in (STATUS_OK, STATUS_FALLBACK) else None for it in items])
+        out: List[MTItem] = []
+        for i, text in enumerate(run.outs):
+            it = last.get(i) or MTItem("", STATUS_ERROR, None, "unknown", "no translation produced")
+            out.append(MTItem(text, it.status, it.engine, it.error_type, it.error) if text is not None else it)
+        return out
 
     async def _await_stores(self, stores: List[Any]) -> None:
         """TM writes are awaited before the result is returned (T7): a failure is

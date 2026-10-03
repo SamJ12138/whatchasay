@@ -879,6 +879,23 @@ def tm_corrections(port: int) -> int:
         return json.loads(r.read())["translation_memory"]["user_corrections"]
 
 
+def post_glossary(port: int, terms: list[dict]) -> dict:
+    """--glossary: POST each term to the backend before the clip plays (the user had taught
+    it earlier). Returns {saved, failed, ids}."""
+    out = {"saved": 0, "failed": 0, "ids": []}
+    for term in terms:
+        req = urllib.request.Request(f"http://127.0.0.1:{port}/glossary", data=json.dumps(term, ensure_ascii=False).encode("utf-8"),
+                                     headers={"Content-Type": "application/json"}, method="POST")
+        try:
+            with urllib.request.urlopen(req, timeout=10) as r:
+                out["ids"].append(json.loads(r.read())["term"]["id"])
+                out["saved"] += 1
+        except Exception as e:  # noqa: BLE001
+            out["failed"] += 1
+            out.setdefault("errors", []).append(str(e))
+    return out
+
+
 def asr_models(port: int) -> dict:
     """{lang: model name} of the backend's Zipformer engine, and the punctuation model."""
     with urllib.request.urlopen(f"http://127.0.0.1:{port}/health/json", timeout=5) as r:
@@ -1309,6 +1326,8 @@ def main() -> int:
     ap.add_argument("--screenshot", type=Path, help="audio path: save a screenshot after the first translation")
     ap.add_argument("--correct", action="store_true", help="audio path: after the first translation, correct it with Alt+E")
     ap.add_argument("--correct-text", default="corrected by the harness", help="--correct: the translation typed in its place")
+    ap.add_argument("--glossary", help="audio path: a glossary term (JSON object, or a list of them: source_lang, canonical, "
+                    "heard_as, renderings) posted to the backend's /glossary before the clip plays")
     ap.add_argument("--tm", type=Path, help="--start-backend: keep the translation memory in this file between runs "
                                             "(default: a scratch file, deleted); not under backend/data")
     ap.add_argument("--font-size", type=int, help="overlay font size in px (the Options page setting; default 20)")
@@ -1392,6 +1411,9 @@ def main() -> int:
             return 1
         with urllib.request.urlopen(health, timeout=5) as r:
             summary["run_id"] = json.loads(r.read()).get("run_id")
+        if args.glossary:
+            terms = json.loads(args.glossary)
+            summary["glossary"] = post_glossary(args.port, terms if isinstance(terms, list) else [terms])
 
         site = scratch / "site"
         site.mkdir()

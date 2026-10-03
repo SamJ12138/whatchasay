@@ -14,6 +14,7 @@ import './lib/websocket-client.js';
 import './lib/tab-connections.js';
 import './lib/caption-mode.js';
 import './lib/corrections.js';
+import './lib/glossary.js';
 import './lib/settings-migration.js';
 
 const obs = globalThis.STObs;
@@ -552,6 +553,26 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const res = await STCorrections.submit(message.correction || {}, (await getSettings()).serverUrl);
         obs.log('ext_correction', res.ok ? 'success' : 'fail', {
           path: '/corrections', tab_id: sender.tab.id, cue_id: (message.correction || {}).cueId,
+          ...(res.ok ? {} : { error_type: 'process', error_message: res.error }),
+        });
+        sendResponse(res);
+      })();
+      return true;
+    }
+    case 'SUBMIT_GLOSSARY_TERM': {
+      // Alt+E with a word selected in the recognised line: the term is posted to the
+      // backend's /glossary from here, with the extension's origin. Only from a tab's
+      // content script. Running live sessions use it on their next line.
+      if (!sender.tab || (sender.url || '').startsWith(chrome.runtime.getURL(''))) {
+        sendResponse({ ok: false, error: 'not from a tab' });
+        return false;
+      }
+      (async () => {
+        const term = message.term || {};
+        const res = await STGlossary.save(term, (await getSettings()).serverUrl);
+        obs.log('ext_glossary', res.ok ? 'success' : 'fail', {
+          path: '/glossary', tab_id: sender.tab.id, source_lang: term.source_lang,
+          heard_as: (term.heard_as || []).length, renderings: Object.keys(term.renderings || {}),
           ...(res.ok ? {} : { error_type: 'process', error_message: res.error }),
         });
         sendResponse(res);

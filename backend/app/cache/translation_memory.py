@@ -28,7 +28,10 @@ logger = logging.getLogger(__name__)
 #   1  baseline (fffcdda): translations, corrections, glossary
 #   2  + translations.engine (Phase 2a; databases migrated by 2a have the column
 #      but user_version 0, and are recognised by it)
-SCHEMA_VERSION = 2
+#   3  the term glossary (T13): glossary_terms / glossary_heard / glossary_renderings
+#      replace the storage-only `glossary` table, whose rows (one per target language)
+#      become terms with renderings
+SCHEMA_VERSION = 3
 
 
 def _detect_version(con: sqlite3.Connection) -> int:
@@ -39,6 +42,8 @@ def _detect_version(con: sqlite3.Connection) -> int:
     tables = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     if "translations" not in tables:
         return 0
+    if "glossary_terms" in tables:
+        return 3
     columns = {r[1] for r in con.execute("PRAGMA table_info(translations)")}
     return 2 if "engine" in columns else 1
 
@@ -168,31 +173,40 @@ class TranslationMemory:
                 applied BOOLEAN DEFAULT FALSE
             );
             
-            -- Glossary for consistent terms
-            CREATE TABLE IF NOT EXISTS glossary (
+            -- The term glossary (T13): a term has one canonical spelling in its source
+            -- language, any number of "heard as" spellings and a rendering per target language
+            CREATE TABLE IF NOT EXISTS glossary_terms (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                source_term TEXT NOT NULL,
                 source_lang TEXT NOT NULL,
-                target_term TEXT NOT NULL,
-                target_lang TEXT NOT NULL,
-                context TEXT,
+                canonical TEXT NOT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE(source_term, source_lang, target_lang)
+                UNIQUE(source_lang, canonical)
             );
-            
-            CREATE INDEX IF NOT EXISTS idx_glossary_source 
-                ON glossary(source_term, source_lang);
+            CREATE TABLE IF NOT EXISTS glossary_heard (
+                term_id INTEGER NOT NULL REFERENCES glossary_terms(id) ON DELETE CASCADE,
+                heard TEXT NOT NULL,
+                position INTEGER NOT NULL DEFAULT 0,
+                UNIQUE(term_id, heard)
+            );
+            CREATE TABLE IF NOT EXISTS glossary_renderings (
+                term_id INTEGER NOT NULL REFERENCES glossary_terms(id) ON DELETE CASCADE,
+                target_lang TEXT NOT NULL,
+                rendering TEXT NOT NULL,
+                UNIQUE(term_id, target_lang)
+            );
         """)
-        
+
         # Additive migration: which engine produced a row (fallback rows are
         # stored with a lower quality and replaced by a later primary result).
         async with self._connection.execute("PRAGMA table_info(translations)") as cursor:
             columns = {row[1] async for row in cursor}
         if "engine" not in columns:
             await self._connection.execute("ALTER TABLE translations ADD COLUMN engine TEXT")
+        await self._migrate_old_glossary()
 
         await self._connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         await self._connection.commit()
+        await self._publish_glossary()
         mig = self._migration
         if mig and mig.get("backup"):
             obs.log("tm_migration", "success", duration_ms=mig.get("backup_ms"), from_version=mig["from_version"],
@@ -372,51 +386,154 @@ class TranslationMemory:
             engine="user",
         )
     
-    async def get_glossary_term(
-        self,
-        source_term: str,
-        source_lang: str,
-        target_lang: str
-    ) -> Optional[str]:
-        """
-        Get glossary translation for a term.
-        
-        Useful for maintaining consistency on names and technical terms.
-        """
+    # ------------------------------------------------------------------ glossary (T13)
+
+    async def _migrate_old_glossary(self) -> None:
+        """Schema 1-2 kept a `glossary` table (source_term, target_term per target language,
+        lower-cased). Each distinct (source_lang, source_term) becomes a term whose renderings
+        are its rows; the old table goes."""
+        async with self._connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='glossary'") as cur:
+            if await cur.fetchone() is None:
+                return
+        async with self._connection.execute("SELECT source_lang, source_term, target_lang, target_term FROM glossary ORDER BY id") as cur:
+            rows = [tuple(r) async for r in cur]
+        for source_lang, source_term, target_lang, target_term in rows:
+            if not (source_term or "").strip():
+                continue
+            await self._connection.execute("INSERT OR IGNORE INTO glossary_terms (source_lang, canonical) VALUES (?, ?)",
+                                           (source_lang, source_term.strip()))
+            async with self._connection.execute("SELECT id FROM glossary_terms WHERE source_lang = ? AND canonical = ?",
+                                                (source_lang, source_term.strip())) as cur:
+                term_id = (await cur.fetchone())[0]
+            if (target_term or "").strip():
+                await self._connection.execute("""
+                    INSERT INTO glossary_renderings (term_id, target_lang, rendering) VALUES (?, ?, ?)
+                    ON CONFLICT(term_id, target_lang) DO UPDATE SET rendering = excluded.rendering
+                """, (term_id, target_lang, target_term.strip()))
+        await self._connection.execute("DROP TABLE glossary")
+        if rows:
+            obs.log("tm_migration", "success", component="glossary", rows=len(rows), db=self.db_path.name)
+
+    async def _publish_glossary(self) -> None:
+        """Hand the terms to the in-process store the pipeline and live sessions read."""
+        from ..translation.glossary import Term, store
+
+        terms = await self._list_glossary()   # also called from _initialize, before the flag is set
+        store.load(Term(source_lang=t["source_lang"], canonical=t["canonical"], heard_as=list(t["heard_as"]),
+                        renderings=dict(t["renderings"]), id=t["id"]) for t in terms)
+
+    async def _glossary_term(self, term_id: int) -> Optional[Dict[str, Any]]:
+        async with self._connection.execute("SELECT id, source_lang, canonical FROM glossary_terms WHERE id = ?", (term_id,)) as cur:
+            row = await cur.fetchone()
+        if row is None:
+            return None
+        async with self._connection.execute("SELECT heard FROM glossary_heard WHERE term_id = ? ORDER BY position, rowid", (term_id,)) as cur:
+            heard = [r[0] async for r in cur]
+        async with self._connection.execute("SELECT target_lang, rendering FROM glossary_renderings WHERE term_id = ? ORDER BY target_lang",
+                                            (term_id,)) as cur:
+            renderings = {r[0]: r[1] async for r in cur}
+        return {"id": row[0], "source_lang": row[1], "canonical": row[2], "heard_as": heard, "renderings": renderings}
+
+    async def list_glossary(self, source_lang: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Every term (of one source language), oldest first."""
         if not self._initialized:
             await self.initialize()
-        
-        async with self._connection.execute("""
-            SELECT target_term
-            FROM glossary
-            WHERE source_term = ? AND source_lang = ? AND target_lang = ?
-        """, (source_term.lower(), source_lang, target_lang)) as cursor:
-            row = await cursor.fetchone()
-        
-        return row[0] if row else None
-    
-    async def add_glossary_term(
-        self,
-        source_term: str,
-        source_lang: str,
-        target_term: str,
-        target_lang: str,
-        context: Optional[str] = None
-    ) -> None:
-        """Add or update a glossary term."""
+        return await self._list_glossary(source_lang)
+
+    async def _list_glossary(self, source_lang: Optional[str] = None) -> List[Dict[str, Any]]:
+        sql, args = "SELECT id FROM glossary_terms", ()
+        if source_lang:
+            sql, args = sql + " WHERE source_lang = ?", (source_lang,)
+        async with self._connection.execute(sql + " ORDER BY id", args) as cur:
+            ids = [r[0] async for r in cur]
+        out = []
+        for i in ids:
+            t = await self._glossary_term(i)
+            if t is not None:
+                out.append(t)
+        return out
+
+    async def upsert_glossary_term(self, source_lang: str, canonical: str, heard_as: Optional[List[str]] = None,
+                                   renderings: Optional[Dict[str, str]] = None, term_id: Optional[int] = None,
+                                   replace: bool = False) -> Dict[str, Any]:
+        """Create a term, or extend the one with this canonical spelling (heard-as spellings
+        are added, renderings given replace the old one for that language). With term_id
+        the term is addressed by id, and replace=True makes the lists exactly what is given
+        (an edit from the Options table). Blank spellings raise ValueError."""
         if not self._initialized:
             await self.initialize()
-        
-        await self._connection.execute("""
-            INSERT INTO glossary (source_term, source_lang, target_term, target_lang, context)
-            VALUES (?, ?, ?, ?, ?)
-            ON CONFLICT(source_term, source_lang, target_lang) DO UPDATE SET
-                target_term = excluded.target_term,
-                context = excluded.context
-        """, (source_term.lower(), source_lang, target_term, target_lang, context))
-        
+        source_lang = (source_lang or "").strip()
+        canonical = (canonical or "").strip()
+        if not source_lang:
+            raise ValueError("a term needs a source language")
+        if not canonical:
+            raise ValueError("a term needs its canonical spelling")
+        heard = []
+        for h in heard_as or []:
+            h = (h or "").strip()
+            if h and h != canonical and h not in heard:
+                heard.append(h)
+        rend = {k.strip(): (v or "").strip() for k, v in (renderings or {}).items() if k and k.strip()}
+        if term_id is not None:
+            existing = await self._glossary_term(term_id)
+            if existing is None:
+                raise KeyError(f"no glossary term {term_id}")
+            await self._connection.execute("UPDATE glossary_terms SET source_lang = ?, canonical = ? WHERE id = ?",
+                                           (source_lang, canonical, term_id))
+        else:
+            await self._connection.execute("INSERT OR IGNORE INTO glossary_terms (source_lang, canonical) VALUES (?, ?)",
+                                           (source_lang, canonical))
+            async with self._connection.execute("SELECT id FROM glossary_terms WHERE source_lang = ? AND canonical = ?",
+                                                (source_lang, canonical)) as cur:
+                term_id = (await cur.fetchone())[0]
+        if replace:
+            await self._connection.execute("DELETE FROM glossary_heard WHERE term_id = ?", (term_id,))
+            await self._connection.execute("DELETE FROM glossary_renderings WHERE term_id = ?", (term_id,))
+        async with self._connection.execute("SELECT COALESCE(MAX(position), -1) FROM glossary_heard WHERE term_id = ?", (term_id,)) as cur:
+            pos = (await cur.fetchone())[0]
+        for h in heard:
+            pos += 1
+            await self._connection.execute("INSERT OR IGNORE INTO glossary_heard (term_id, heard, position) VALUES (?, ?, ?)",
+                                           (term_id, h, pos))
+        # a heard-as spelling equal to the (new) canonical one is no longer a mishearing
+        await self._connection.execute("DELETE FROM glossary_heard WHERE term_id = ? AND heard = ?", (term_id, canonical))
+        for lang, text in rend.items():
+            if text:
+                await self._connection.execute("""
+                    INSERT INTO glossary_renderings (term_id, target_lang, rendering) VALUES (?, ?, ?)
+                    ON CONFLICT(term_id, target_lang) DO UPDATE SET rendering = excluded.rendering
+                """, (term_id, lang, text))
+            else:
+                await self._connection.execute("DELETE FROM glossary_renderings WHERE term_id = ? AND target_lang = ?", (term_id, lang))
         await self._connection.commit()
-    
+        await self._publish_glossary()
+        return await self._glossary_term(term_id)
+
+    async def delete_glossary_term(self, term_id: int) -> bool:
+        if not self._initialized:
+            await self.initialize()
+        cur = await self._connection.execute("DELETE FROM glossary_terms WHERE id = ?", (term_id,))
+        removed = bool(cur.rowcount)
+        # cascades need the pragma; delete the children by hand so it works without it
+        await self._connection.execute("DELETE FROM glossary_heard WHERE term_id = ?", (term_id,))
+        await self._connection.execute("DELETE FROM glossary_renderings WHERE term_id = ?", (term_id,))
+        await self._connection.commit()
+        await self._publish_glossary()
+        return removed
+
+    async def forget_machine_rows_containing(self, spellings: List[str]) -> int:
+        """Machine translations (never user corrections) whose source text holds one of
+        the spellings: translated before the term existed, so their rendering is stale."""
+        if not self._initialized:
+            await self.initialize()
+        removed = 0
+        for sp in {s for s in spellings if s and s.strip()}:
+            cur = await self._connection.execute(
+                "DELETE FROM translations WHERE NOT is_user_corrected AND instr(lower(source_text), lower(?)) > 0", (sp,))
+            removed += cur.rowcount or 0
+        await self._connection.commit()
+        return removed
+
     async def export_corrections(self, output_path: Path) -> int:
         """
         Export corrections to JSONL file for training.
@@ -475,12 +592,15 @@ class TranslationMemory:
         if not self._initialized:
             await self.initialize()
         removed = {}
-        for table in ("translations", "corrections", "glossary"):
+        for table, key in (("translations", "translations"), ("corrections", "corrections"), ("glossary_terms", "glossary")):
             cur = await self._connection.execute(f"DELETE FROM {table}")
-            removed[table] = cur.rowcount or 0
+            removed[key] = cur.rowcount or 0
+        for table in ("glossary_heard", "glossary_renderings"):
+            await self._connection.execute(f"DELETE FROM {table}")
         await self._connection.commit()
         await self._connection.execute("VACUUM")
         await self._connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        await self._publish_glossary()
         return removed
 
     async def get_stats(self) -> Dict[str, Any]:
@@ -508,9 +628,9 @@ class TranslationMemory:
         ) as cursor:
             stats['pending_corrections'] = (await cursor.fetchone())[0]
         
-        # Glossary size
+        # Glossary size (terms)
         async with self._connection.execute(
-            "SELECT COUNT(*) FROM glossary"
+            "SELECT COUNT(*) FROM glossary_terms"
         ) as cursor:
             stats['glossary_size'] = (await cursor.fetchone())[0]
         

@@ -33,9 +33,11 @@ def run_harness(*args, env=None):
     port = os.environ.get("ST_HARNESS_PORT", "8799")
     # the backend reads the real models (MODELS_ROOT: backend/data/models or ST_MODELS_ROOT)
     models = {"SUBTITLE_ASR__MODELS_DIR": str(MODELS_DIR), "SUBTITLE_ASR__PUNCT_DIR": str(MODELS_ROOT / "punct")}
+    # the summary line carries subtitle text in any script: UTF-8 on both ends, not the console codepage
     proc = subprocess.run(
         [PW_PYTHON, str(ROOT / "scripts" / "e2e_extension.py"), "--start-backend", "--port", port, *args],
-        capture_output=True, text=True, timeout=300, env={**os.environ, **models, **(env or {})},
+        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300,
+        env={**os.environ, **models, "PYTHONIOENCODING": "utf-8", **(env or {})},
     )
     summary = json.loads(proc.stdout.strip().splitlines()[-1])
     return summary, proc

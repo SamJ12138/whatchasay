@@ -93,6 +93,7 @@
       if (overlay) {
         overlay.init();
         overlay.onCorrection(handleCorrection);
+        overlay.onGlossaryTerm(handleGlossaryTerm);
         applyOverlaySettings();
       }
 
@@ -370,6 +371,21 @@
     } catch (error) {
       console.error('[SubTrans] Correction submission failed:', error);
       obs.log('ext_ws_request', 'fail', { msg_type: 'correction', cue_id: correction.cueId, error_type: reqErrorType(error), error_message: error.message || String(error) });
+    }
+  }
+
+  /** A glossary term from Alt+E (overlay term editor): the worker posts it to /glossary. */
+  async function handleGlossaryTerm(term) {
+    const shown = term.canonical + (Object.values(term.renderings || {})[0] ? ' → ' + Object.values(term.renderings)[0] : '');
+    try {
+      const res = await chrome.runtime.sendMessage({ type: 'SUBMIT_GLOSSARY_TERM', term });
+      if (!res || !res.ok) throw new Error((res && res.error) || 'term not saved');
+      overlay.showNotice('Glossary: ' + shown, 'info');
+      obs.log('ext_glossary', 'success', { source_lang: term.source_lang, heard_as: (term.heard_as || []).length });
+    } catch (error) {
+      console.error('[SubTrans] Glossary term not saved:', error);
+      overlay.showNotice('Glossary term not saved: ' + (error.message || error), 'warn', 6000);
+      obs.log('ext_glossary', 'fail', { source_lang: term.source_lang, error_type: reqErrorType(error), error_message: error.message || String(error) });
     }
   }
 
@@ -653,8 +669,10 @@
         rememberSettings({ showOriginal: overlay.setShowOriginal(!overlay.showOriginal) });
         break;
       case 'toggle-edit': {
-        // the newest cue that has a translation (with live captions the newest cue is
-        // often the next sentence, still in progress, with nothing to correct yet)
+        // a word selected in the recognised line teaches the glossary (heard as X, should be
+        // Y); else edit the newest cue that has a translation (with live captions the newest
+        // cue is often the next sentence, still in progress, with nothing to correct yet)
+        if (overlay.enableTermEdit()) break;
         const editable = Array.from(overlay.currentCues.entries()).reverse()
           .find(([, cue]) => cue && !cue.provisional && cue.translations && Object.keys(cue.translations).length);
         if (editable) overlay.enableEditMode(editable[0]);

@@ -146,6 +146,10 @@ class TranslationConfig(BaseSettings):
         "Helsinki-NLP/opus-mt-en-zh": ">>cmn_Hans<<",
         "Helsinki-NLP/opus-mt-de-ZH": ">>cmn_Hans<<",
     })
+    # The glossary (translation/glossary.py): a term goes through MT as a placeholder; a
+    # sentence whose placeholder the engine lost is re-translated with the next one of the
+    # direction's list, this many times in all, then translated unprotected.
+    glossary_max_attempts: int = Field(default=3, description="placeholder attempts per sentence before a term travels unprotected (1-3)")
 
 
 class LangDetectConfig(BaseSettings):

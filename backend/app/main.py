@@ -27,6 +27,8 @@ from .translation.pipeline import audio_session_policy
 from .cache import get_translation_memory, get_translation_cache
 from .websocket_handler import websocket_endpoint, manager, format_result, ignore_cloud_keys, save_correction
 from .translation.cloud_translator import cloud_receivers
+from .translation.glossary import store as glossary_store
+from .translation.pipeline import clear_memory_caches
 from . import asr as asr_pkg
 from .asr.draft import DraftScheduler, LocalAgreement, word_count
 from . import obs
@@ -167,7 +169,7 @@ class _AllowedOrigins:
 # refuses foreign origins (403, WebSockets before the upgrade); CORS then only
 # ever echoes an allowed origin, never "*".
 app.add_middleware(CORSMiddleware, allow_origins=_AllowedOrigins(), allow_credentials=False,
-                   allow_methods=["GET", "POST", "OPTIONS"], allow_headers=["Content-Type", "X-Session-Id"])
+                   allow_methods=["GET", "POST", "DELETE", "OPTIONS"], allow_headers=["Content-Type", "X-Session-Id"])
 app.add_middleware(OriginGuard)
 app.add_middleware(ObsMiddleware)
 
@@ -361,10 +363,28 @@ async def ws_asr(websocket: WebSocket):
     drafts = DraftScheduler(translate_draft, settings.asr.draft_debounce_ms / 1000)
     agreement = LocalAgreement(settings.asr.draft_agree_k)
 
+    def _apply_glossary(m: Dict[str, Any], stable: Optional[str]) -> Optional[str]:
+        """The glossary's heard-as spellings become the canonical ones on the recognised
+        text (partial, final and the draft's stable prefix) before display and MT. A
+        changed final keeps what the recognizer wrote in raw_text and lists the hits."""
+        if m.get("type") not in ("partial", "final") or not m.get("text"):
+            return stable
+        text, hits = glossary_store.correct(m["text"], m.get("lang"))
+        if hits:
+            if m["type"] == "final":
+                m.setdefault("raw_text", m["text"])
+                m["glossary"] = hits
+                obs.log("glossary", "success", kind="correct", utterance_id=m.get("utterance_id"), lang=m.get("lang"),
+                        hits=len(hits), fuzzy=sum(1 for h in hits if h["how"] == "fuzzy"))
+            m["text"] = text
+        if stable:
+            stable = glossary_store.correct(stable, m.get("lang"))[0]
+        return stable
+
     def _handle_events(msgs: List[Dict[str, Any]]) -> List[asyncio.Task]:
         tasks = []
         for m in msgs:
-            stable = m.pop("stable_text", None)
+            stable = _apply_glossary(m, m.pop("stable_text", None))
             if m.get("type") == "final":
                 drafts.close(m.get("utterance_id"))
                 for t in session.config.target_langs:
@@ -691,6 +711,55 @@ async def post_correction(correction: TranslationCorrection):
                     degraded="error sent to the extension")
         return JSONResponse(status_code=500, content={"status": "error", "error": f"correction not saved: {e}",
                                                       "error_type": obs.classify(e, "process")})
+
+
+class GlossaryTermIn(BaseModel):
+    """A glossary term as the Options page and Alt+E send it (translation/glossary.py)."""
+
+    source_lang: str
+    canonical: str
+    heard_as: List[str] = []
+    renderings: Dict[str, str] = {}
+    id: Optional[int] = None          # edit this term (else: the term with this canonical spelling, or a new one)
+    replace: bool = False             # with id: the lists become exactly these (an edit); else they are extended
+
+
+@app.get("/glossary")
+async def list_glossary(source_lang: Optional[str] = Query(None)):
+    tm = await get_translation_memory()
+    return {"terms": await tm.list_glossary(source_lang)}
+
+
+@app.post("/glossary")
+async def upsert_glossary(term: GlossaryTermIn):
+    """Create or extend a term. Running live sessions use it on their next line; the
+    in-memory caches are emptied and machine translations of sentences that hold one
+    of its spellings are forgotten, so the rendering is not served from before."""
+    tm = await get_translation_memory()
+    t0 = time.perf_counter()
+    try:
+        saved = await tm.upsert_glossary_term(term.source_lang, term.canonical, heard_as=term.heard_as,
+                                              renderings=term.renderings, term_id=term.id, replace=term.replace)
+    except ValueError as e:
+        return JSONResponse(status_code=422, content={"status": "error", "error": str(e), "error_type": "input_invalid"})
+    except KeyError as e:
+        return JSONResponse(status_code=404, content={"status": "error", "error": str(e), "error_type": "input_invalid"})
+    cleared = clear_memory_caches((await get_pipeline())._memory_cache)
+    forgotten = await tm.forget_machine_rows_containing([saved["canonical"], *saved["heard_as"]])
+    obs.log("glossary", "success", kind="store", duration_ms=(time.perf_counter() - t0) * 1000, term_id=saved["id"],
+            source_lang=saved["source_lang"], heard_as=len(saved["heard_as"]), renderings=sorted(saved["renderings"]),
+            caches_cleared=cleared, tm_rows_forgotten=forgotten, terms=glossary_store.version)
+    return {"status": "saved", "term": saved}
+
+
+@app.delete("/glossary/{term_id}")
+async def delete_glossary(term_id: int):
+    tm = await get_translation_memory()
+    if not await tm.delete_glossary_term(term_id):
+        return JSONResponse(status_code=404, content={"status": "error", "error": f"no glossary term {term_id}", "error_type": "input_invalid"})
+    cleared = clear_memory_caches((await get_pipeline())._memory_cache)
+    obs.log("glossary", "success", kind="delete", term_id=term_id, caches_cleared=cleared)
+    return {"status": "deleted", "id": term_id}
 
 
 @app.post("/cache/clear")
