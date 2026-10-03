@@ -41,6 +41,7 @@
     'content-scripts/backend-port.js',
     'content-scripts/subtitle-detector.js',
     'lib/overlay-layout.js',
+    'lib/overlay-rows.js',
     'content-scripts/overlay.js',
     'content-scripts/line-latency.js',
     'content-scripts/main.js',

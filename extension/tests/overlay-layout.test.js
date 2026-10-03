@@ -134,17 +134,22 @@ test('with the source line on, it is drawn under the translation, smaller and di
   assert.deepEqual(lines(overlay).map((l) => l.kind), ['primary']);
 });
 
-test('a long translation is capped at 2 lines of 42, the oldest words cut with an ellipsis at the start', () => {
+test('a long translation is one row of 42 (the rolling layout), the oldest words cut with an ellipsis at the start', () => {
   const overlay = newOverlay();
   const words = [];
   for (let i = 1; i <= 30; i++) words.push('word' + i);
   overlay.showTranslation('asr_0', 'src', tr('zh', words.join(' ')), { sourceLang: 'en', langStatus: 'manual' });
-  const text = lines(overlay)[0].text;
-  const rows = text.split('\n');
-  assert.equal(rows.length, 2);
-  assert.ok(rows[0].startsWith('…'));
-  assert.ok(rows[1].endsWith('word30'));
-  assert.ok(rows.every((r) => r.length <= 42));
+  const rows = lines(overlay)[0].text.split('\n');
+  assert.equal(rows.length, 1);
+  assert.ok(rows[0].startsWith('…') && rows[0].endsWith('word30'), rows[0]);
+  assert.ok(rows[0].length <= 42);
+  // two rows per line when asked (rowsPerLine): the wrapped layout of batch 1
+  overlay.updateSettings({ rowsPerLine: 2 });
+  overlay.showTranslation('asr_0', 'src', tr('zh', words.join(' ')), { sourceLang: 'en', langStatus: 'manual' });
+  const two = lines(overlay)[0].text.split('\n');
+  assert.equal(two.length, 2);
+  assert.ok(two[0].startsWith('…') && two[1].endsWith('word30'));
+  assert.ok(two.every((r) => r.length <= 42));
 });
 
 test('a growing partial source line is truncated from the start, never from the end', () => {
@@ -165,7 +170,7 @@ test('a growing partial source line is truncated from the start, never from the 
 
 test('CJK translations wrap at the CJK limit', () => {
   const overlay = newOverlay();
-  overlay.updateSettings({ maxCharsCJK: 20, maxCharsLatin: 42 });
+  overlay.updateSettings({ maxCharsCJK: 20, maxCharsLatin: 42, rowsPerLine: 2 });
   overlay.showTranslation('asr_0', 'src', tr('zh', '你把钥匙放在哪里了我找了一整天都没有找到它们可能在厨房的桌子上'), { sourceLang: 'en', langStatus: 'manual' });
   const rows = lines(overlay)[0].text.split('\n');
   assert.deepEqual(rows.map((r) => r.length), [20, 11]);

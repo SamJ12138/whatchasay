@@ -742,3 +742,26 @@ D4 cloud providers off by default, keys only in backend config.
   the run. Harness: `summary.overlay.most_lines` (the sample with the most caption lines, for diagnosis). Found on
   the way: a relative `--screenshot` path is resolved against the harness's working directory (it wrote
   `backend/docs/screenshot.png` once; removed, not committed). Tallies: fast 334, slow 42, node 125.
+- Rolling two rows (commit "feat: rolling two-row overlay with a minimum display time"). Measured first, on the
+  live clip in fullscreen with the new harness flag `--display-times` (each final translation's first to last
+  sighting at 40 ms polling): the one-text-per-role rule left a final on screen for as little as 0.51 s (min over 13
+  lines, p50 1.82 s, 8 of 13 under the reading rule; run `20261002T194945-ea5b15`). `lib/overlay-rows.js`, a pure
+  state machine with an explicit clock: row 1 the previous line's final, row 2 the current line's draft (or its
+  final, briefly); a final stays at least max(`minDisplayS` 1.5 s, chars / `readCharsPerS` 15) before it can be
+  pushed out of row 1; a next line that finalises sooner waits in row 2 (a draft of the line after that waits
+  for row 2); fast speech pushes the oldest out early, the newest is always on screen; removing the newest line
+  (the 8 s silence hide) clears both rows. The overlay: `rows` with `open` / `final` (the drawn length) / `remove`
+  from showPartial / showDraft / showTranslation / hideTranslation, a `setTimeout` at `nextWake()` for the hold's
+  end (`.unref()`'d under node), the stack a CSS grid of fixed rows (one visual row per line, `rowsPerLine` 1;
+  `row-1-<role>`, `row-2-<role>`, `row-source`; line-height 1.2, padding 0.1 em), the source row a third dimmer row
+  for the current line only, `currentCues` bounded to 8 by the overlay (never the rows' cues or the one being
+  edited); `main.js` no longer drops older cues at a final; the fullscreen margin 1.2 % (min 6 px) so two rows at
+  4.5 % stay inside the bottom 15 % (71 px of 540). Node tests `tests/overlay-rows.test.js` (15: the machine on
+  scripted sequences, fast speech included, and the overlay drawing the rows); five older tests pinned the
+  superseded rules and were updated (one row per line; the rows module loaded; `align-items`). Browser: the four
+  harness-page tests pass; live clip in fullscreen (run `20261002T200253-469a90`): shortest final on screen
+  0.51 -> 2.52 s, p50 1.82 -> 4.80 s, 0 of 10 under the rule, block inside the bottom 15 % in 940 of 940 samples,
+  one height (71 px), 0 moves. `docs/demo-youtube.gif` regenerated (run `20261002T200449-0fa35c`, 4,606,675
+  bytes); README: the overlay paragraph and the opening caption, the "one line at a time" limitation removed (a
+  one-row line keeps its end, with an ellipsis, stays as a note); `docs/overlay/README.md` has the section and the
+  before / after table. Tallies: fast 334, slow 42, node 140.

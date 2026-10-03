@@ -16,9 +16,10 @@ you decide it should.
 *The first 9.5 seconds of "10,000 রাজভোগের Order | Ora Char Jon | Movie Scene | Prosenjit | Abhishek Chatterjee |
 Debashree" from the YouTube channel Bengali Movies with English Subtitle
 (<https://www.youtube.com/watch?v=-tpVpbIxFmI>), the player in fullscreen, run on CPU: Bengali is detected
-2 seconds in, a first translation of each line appears in italics while it is still being spoken (ending in …),
-and the finished line replaces it. Recorded by the browser harness during a live test (`docs/live-test-youtube.md`,
-run `20261002T192730-1b17fa`), not by hand; the translations are as they came out, mistakes included.*
+2 seconds in, a first translation of each line appears in italics on the lower row while it is still being spoken
+(ending in …), and the finished line moves to the upper row while the next one starts below it. Recorded by the
+browser harness during a live test (`docs/live-test-youtube.md`, run `20261002T200449-0fa35c`), not by hand; the
+translations are as they came out, mistakes included.*
 
 It is for videos and live streams that have no subtitles, lectures, and meetings held in a browser tab in a language
 you do not speak. A Chrome extension captures the tab's sound, a local Python program turns English, Mandarin or
@@ -161,8 +162,12 @@ Page subtitles from caption mode and your corrections are kept in `backend/data/
 translations are deleted 30 days after their last use. *Settings → Data Management → Clear translation memory*
 deletes everything in it (translations, corrections, glossary) and compacts the file.
 
-**The overlay.** It shows the translation only, at most two rows of about 42 characters (22 for Chinese, Japanese
-and Korean); a longer line keeps its newest words, with "…" at the start. Its font is 4.5 % of the video's height
+**The overlay.** It shows the translation only, on two rows: the previous sentence's finished translation on the
+upper row and the current sentence's draft (then its final, briefly) on the lower one, each one row of about 42
+characters (22 for Chinese, Japanese and Korean); a longer line keeps its newest words, with "…" at the start. A
+finished translation stays at least 1.5 s, or its length at 15 characters per second, before the next one can push
+it off the upper row; if the next sentence finishes sooner, it waits on the lower row until then. Its font is
+4.5 % of the video's height
 (never under 14 px), each line in a rounded box behind the text; *Settings → Display* has the percentage, the
 minimum and the box's opacity, and the popup's **A+** / **A-** change the percentage. On a normal page the block
 sits just below the video; when the video is fullscreen or fills the window it sits over the bottom of the
@@ -538,9 +543,9 @@ Windows (`.github/workflows/ci.yml`). `DEVLOG.md` is the project history; every 
   words into "We were married in July 1955." (`docs/latency.md`).
 - Fast dialogue with pauses under half a second still runs two sentences into one line (up to the 6-second cut;
   `docs/observations.md`, A9, and `docs/latency.md`).
-- The overlay shows one line at a time: the previous sentence's translation stays only until the next sentence's
-  first draft arrives (about 1.3 s into it). Below a video on a normal page the block sits over whatever the page
-  has there (on YouTube, the title); drag it elsewhere if that is in the way.
+- Below a video on a normal page the block sits over whatever the page has there (on YouTube, the title); drag it
+  elsewhere if that is in the way. Each row is one line of about 42 characters: a longer translation keeps its
+  end, with "…" at the start.
 - Korean and Portuguese targets stay untranslated with OPUS-MT (no model from English).
 - Sites that protect their audio (DRM) give silence; the popup then says no audio is reaching the capture.
 - Chrome's built-in on-device translator (Chrome 138+, *Prepare on-device translation* in the popup) is wired in but

@@ -68,9 +68,8 @@ What changed, in the order the batches made it:
    and above the site's control bar while that is showing (YouTube's `.ytp-chrome-bottom` by name, any other
    site's by its place: a visible element anchored at the video's bottom edge, wider than half the video and under
    30 % of its height). The block can be dragged; the offset is remembered per site origin and placement mode.
-   The block holds one text per role, the newest: the open line's draft or the last line's final translation, and
-   (source on) the line being recognised or the last line's words. The previous stacking of the last line, the next
-   line's draft and its partial (up to six rows) is gone: that is what keeps the block at two rows per role.
+   The block held one text per role, the newest (superseded by the rolling rows below): the previous stacking of
+   the last line, the next line's draft and its partial (up to six rows) went, which kept the block at two rows.
 3. **No jumping.** The stack reserves its height (two rows per configured translation role, two rows of the smaller
    font when the source line is on), and partial text is updated in the same element, so the block's box does not
    change while a line streams.
@@ -132,3 +131,41 @@ the control bar; one height and no moves across 50 partial updates; the YouTube 
 --prime-audio --size 960x540 --hold 20 --layout page|fill --geometry --shots docs/overlay --shot-name NAME`, and
 `--url URL --source auto --targets auto --headful [--fullscreen]` for the YouTube page; `--show-source`,
 `--hover-controls`, `--partial-updates 50` as above. The NASA clip is the one `make_demo_gif.py` downloads.
+
+## Rolling two rows (commit after `e4f1710`)
+
+The one-text-per-role rule gave the viewer too little time: on the live clip a final translation was on screen
+for as little as **0.51 s** (minimum over 13 lines, p50 1.82 s, run `20261002T194945-ea5b15`, fullscreen,
+sampled every 40 ms) before the next line's first draft replaced it; 8 of 13 lines were under the reading rule
+below.
+
+**The layout** (`lib/overlay-rows.js`, a pure state machine with an explicit clock): row 1 holds the previous
+line's final translation, row 2 the current line's draft (or its final, briefly). When the current line is
+finalised it moves to row 1 and row 2 clears for the next draft. A final stays at least
+**max(1.5 s, characters / 15 per s)** (`minDisplayS`, `readCharsPerS`; characters = the row's text as drawn) before
+it can be pushed out of row 1; if the next line finalises sooner, row 1 is held and row 2 shows the newer final
+until the hold ends, and a draft of the line after that waits until row 2 is free. Fast speech (a third final
+inside one hold) pushes the oldest line out early: the newest line is always on screen. The source line, when on,
+is a third dimmer row for the current line only (the words being recognised, else the current line's words).
+Each row is **one visual row** (`rowsPerLine` 1): a longer text keeps its newest words with an ellipsis at the
+start, so the block stays two rows of the translation font (line-height 1.2, padding 0.1 em) plus a 1.2 % margin
+in fullscreen: 71 px of a 540 px video, inside the bottom 15 %. The stack is a CSS grid of fixed rows
+(`row-1-primary`, `row-2-primary`, `row-1-secondary`…, `row-source`), so the block's height is still constant;
+`main.js` no longer drops the previous cue at a final (the overlay keeps up to 8 and bounds them itself).
+
+**Measured on the live clip** (YouTube page, fullscreen, defaults, `--display-times`: each final translation's
+first to last sighting at 40 ms polling, the line still up at the end excluded):
+
+| | run_id | Final lines | Shortest on screen | p50 | Under the rule |
+|---|---|---|---|---|---|
+| Before (one text per role) | `20261002T194945-ea5b15` | 13 | **0.51 s** | 1.82 s | 8 of 13 |
+| After (rolling rows) | `20261002T200253-469a90` | 10 | **2.52 s** | 4.80 s | 0 of 10 |
+
+Same run, after: the block inside the bottom 15 % in 940 of 940 samples, one block height (71 px) across the run,
+0 position changes, largest coverage 6.2 % (the two rows both filled). Node tests `extension/tests/overlay-rows.test.js`
+(the machine on scripted sequences of partials and finals, fast speech included; the overlay drawing the rows);
+browser tests as before (`tests/test_overlay_browser.py`).
+
+**Settings added:** `minDisplayS` 1.5, `readCharsPerS` 15, `rowsPerLine` 1 (overlay settings, not in Options).
+
+![Rolling rows on the YouTube page in fullscreen: the finished line above, the next line's draft below](../demo-youtube.gif)

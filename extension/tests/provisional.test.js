@@ -18,7 +18,7 @@ const zh = (text) => ({ zh: { lines: [text], single_line: text, display_text: te
 
 function newOverlay() {
   const dom = fakeDom();
-  const ctx = loadScripts(['content-scripts/ws-protocol.js', 'content-scripts/overlay.js'],
+  const ctx = loadScripts(['content-scripts/ws-protocol.js', 'lib/overlay-rows.js', 'content-scripts/overlay.js'],
     { window: {}, document: dom.document, ResizeObserver: dom.ResizeObserver });
   const overlay = ctx.window.subtitleOverlay;
   overlay.primaryLang = 'zh';

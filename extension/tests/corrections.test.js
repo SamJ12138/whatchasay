@@ -67,12 +67,12 @@ test('editing a live caption survives the captions that keep arriving', () => {
   // Alt+E picks the newest cue that has a translation, not the sentence still in progress
   const edit = main.slice(main.indexOf("case 'toggle-edit'"), main.indexOf("case 'toggle-edit'") + 500);
   assert.match(edit, /cue\.translations/);
-  // the cue being edited is neither hidden nor dropped by the next sentence
+  // the cue being edited is neither hidden nor dropped by the next sentence (the overlay
+  // keeps the previous line in its row 1 and bounds its cues itself; the rolling layout)
   assert.match(main, /overlay\.editMode && overlay\.editCueId === cueId\) \{ scheduleLiveHide/);
-  assert.match(main, /!\(overlay\.editMode && overlay\.editCueId === id\)/);
-  // the overlay shows the edited cue and does not rebuild the line while it is being typed in
+  assert.match(overlay, /this\.editMode && this\.editCueId === oldest\) break;/);
+  // the overlay does not rebuild the line while it is being typed in
   assert.match(overlay, /this\.editMode && this\._editingLine && this\._editingLine\.isConnected\) return;/);
-  assert.match(overlay, /this\.editMode && this\.currentCues\.has\(this\.editCueId\)/);
 });
 
 
@@ -109,7 +109,7 @@ test('keys typed into a correction do not reach the page', () => {
   const { loadScripts } = require('./load.js');
   const { fakeDom } = require('./fake-dom.js');
   const dom = fakeDom();
-  const ctx = loadScripts(['content-scripts/ws-protocol.js', 'content-scripts/overlay.js'],
+  const ctx = loadScripts(['content-scripts/ws-protocol.js', 'lib/overlay-rows.js', 'content-scripts/overlay.js'],
     { window: {}, document: dom.document, ResizeObserver: dom.ResizeObserver });
   const overlay = ctx.window.subtitleOverlay;
   overlay.primaryLang = 'en';

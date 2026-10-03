@@ -34,9 +34,12 @@ class SubtitleOverlay {
       fontFamily: '"Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif',
       overlayBgOpacity: 0.6,   // the rounded box behind each line
       position: 'above', // 'above' or 'below'
-      maxLines: 2,             // rows per line of text; past it the oldest words go
+      rowsPerLine: 1,          // each line is one visual row; a longer text keeps its newest words
+      maxLines: 2,             // (the backend line breaker's setting; the overlay draws rowsPerLine)
       maxCharsLatin: 42,       // characters per row
       maxCharsCJK: 22,         // ...for zh / ja / ko
+      minDisplayS: 1.5,        // a final translation stays at least this long...
+      readCharsPerS: 15,       // ...or its length / this many characters per second
       // Dynamic colors per language
       primaryColor: '#ffffff',
       secondaryColor: '#ffeb3b',
@@ -45,8 +48,14 @@ class SubtitleOverlay {
       zhColor: '#ffeb3b',
       originalColor: '#dddddd',
       borderRadius: '0.35em',
-      lineHeight: 1.25,
+      lineHeight: 1.2,
     };
+
+    // The rolling two-row layout (lib/overlay-rows.js): row 1 the previous line's final
+    // translation, row 2 the current line's draft (or its final while row 1 is held).
+    this.rows = this._newRows();
+    this._now = () => Date.now() / 1000;
+    this._rowTimer = null;
 
     // DOM elements
     this.hostElement = null;
@@ -98,6 +107,32 @@ class SubtitleOverlay {
   /**
    * Initialize the overlay.
    */
+  _newRows() {
+    const R = globalThis.STOverlayRows;
+    if (R) return R.createRows({ minDisplayS: this.settings.minDisplayS, charsPerS: this.settings.readCharsPerS });
+    // no module (an old injection): the newest line only
+    let only = null;
+    return { open(c) { only = { cueId: c, kind: 'draft' }; }, final(c) { only = { cueId: c, kind: 'final' }; },
+      remove() { only = null; }, clear() { only = null; }, tick() { return false; }, nextWake() { return null; },
+      view() { return { row1: only && only.kind === 'final' ? { cueId: only.cueId } : null, row2: only && only.kind === 'draft' ? only : null }; },
+      minDisplay() { return 0; } };
+  }
+
+  /** Row 1's hold may be over: let the rows move and redraw. */
+  _tickRows() {
+    if (this.rows.tick(this._now())) this._updateDisplay();
+    else this._scheduleRowTick();
+  }
+
+  _scheduleRowTick() {
+    if (this._rowTimer) { clearTimeout(this._rowTimer); this._rowTimer = null; }
+    const wake = this.rows.nextWake();
+    if (wake == null) return;
+    const ms = Math.max(0, (wake - this._now()) * 1000) + 10;
+    this._rowTimer = setTimeout(() => { this._rowTimer = null; this._tickRows(); }, ms);
+    if (this._rowTimer && typeof this._rowTimer.unref === 'function') this._rowTimer.unref();
+  }
+
   init() {
     if (this.hostElement) {
       console.log('[Overlay] Already initialized');
@@ -124,6 +159,7 @@ class SubtitleOverlay {
       this.videoObserver.disconnect();
     }
     if (this._positionTimer) clearInterval(this._positionTimer);
+    if (this._rowTimer) clearTimeout(this._rowTimer);
 
     if (this.hostElement) {
       this.hostElement.remove();
@@ -174,9 +210,40 @@ class SubtitleOverlay {
     }
     if (this._openDraftCue === cueId) this._openDraftCue = null;
 
+    const now = this._now();
+    const shown = this._finalText(cueId);
+    if (shown != null) this.rows.final(cueId, shown.length, now);   // the length the viewer has to read
+    else this.rows.open(cueId, this._hasDraftText(cueId), now);     // the final caption, its translation on its way
+    // the cues the rows can still show, plus a few for late revisions
+    while (this.currentCues.size > 8) {
+      const oldest = this.currentCues.keys().next().value;
+      const v = this.rows.view();
+      if ((v.row1 && v.row1.cueId === oldest) || (v.row2 && v.row2.cueId === oldest)) break;
+      if (this.editMode && this.editCueId === oldest) break;   // never drop the cue being corrected
+      this.currentCues.delete(oldest);
+      this.drafts.delete(oldest);
+    }
+
     // Update display
     this._updateDisplay();
     return true;
+  }
+
+  /** The final translation drawn for a cue (the primary role's, fitted), or null. */
+  _finalText(cueId) {
+    const cue = this.currentCues.get(cueId);
+    if (!cue) return null;
+    const primary = this.primaryOnTop ? this.primaryLang : this.secondaryLang;
+    const secondary = this.primaryOnTop ? this.secondaryLang : this.primaryLang;
+    for (const lang of [primary, secondary]) {
+      if (lang && lang !== 'none' && this._usable(cue.translations[lang])) return this._fit(this._translationText(cue.translations[lang]), lang);
+    }
+    return null;
+  }
+
+  _hasDraftText(cueId) {
+    const d = this.drafts.get(cueId);
+    return !!d && Object.keys(d.translations).some((l) => this._usable(d.translations[l]));
   }
 
   /**
@@ -190,6 +257,7 @@ class SubtitleOverlay {
     const drawn = langStatus ? this._treatment(langStatus, lang) : 'normal';
     if (drawn === 'drop') return false;
     this.partial = { cueId, text, lang, provisional: drawn === 'dim' };
+    if (this._finalText(cueId) == null) this.rows.open(cueId, this._hasDraftText(cueId), this._now());
     this._updateDisplay();
     return true;
   }
@@ -220,6 +288,7 @@ class SubtitleOverlay {
     this.drafts.set(cueId, { translations: Object.assign({}, existing ? existing.translations : {}, fresh), provisional: drawn === 'dim' });
     while (this.drafts.size > 4) this.drafts.delete(this.drafts.keys().next().value);
     if (!cue) this._openDraftCue = cueId;
+    if (this._finalText(cueId) == null) this.rows.open(cueId, true, this._now());
     this._updateDisplay();
     return true;
   }
@@ -250,7 +319,7 @@ class SubtitleOverlay {
       const keep = !!status && sameRecognizer;
       for (const [id, cue] of Array.from(this.currentCues.entries())) {
         if (!cue.provisional) continue;
-        if (keep) cue.provisional = false; else this.currentCues.delete(id);
+        if (keep) cue.provisional = false; else { this.currentCues.delete(id); this.rows.remove(id); }
       }
       if (this.partial && this.partial.provisional) {
         if (keep) this.partial.provisional = false; else this.partial = null;
@@ -335,6 +404,8 @@ class SubtitleOverlay {
   hideTranslation(cueId) {
     this.currentCues.delete(cueId);
     this.drafts.delete(cueId);
+    this.rows.remove(cueId);
+    if (this.partial && this.partial.cueId === cueId) this.partial = null;
     this._updateDisplay();
   }
 
@@ -346,6 +417,7 @@ class SubtitleOverlay {
     this.partial = null;
     this.drafts.clear();
     this._openDraftCue = null;
+    this.rows.clear();
     this._updateDisplay();
   }
 
@@ -457,7 +529,7 @@ class SubtitleOverlay {
     const t = String(text == null ? '' : text).replace(/\s*\n\s*/g, ' ');
     if (!layout) return t;
     const cjk = layout.isCJK(lang);
-    const r = layout.fitLines(t, { maxLines: this.settings.maxLines || 2, cjk,
+    const r = layout.fitLines(t, { maxLines: this.settings.rowsPerLine || 1, cjk,
       maxChars: cjk ? (this.settings.maxCharsCJK || 22) : (this.settings.maxCharsLatin || 42) });
     return r.lines.join('\n');
   }
@@ -471,6 +543,12 @@ class SubtitleOverlay {
    */
   updateSettings(newSettings) {
     Object.assign(this.settings, newSettings);
+    if ('minDisplayS' in newSettings || 'readCharsPerS' in newSettings) {
+      const keep = this.rows.view();
+      this.rows = this._newRows();
+      if (keep.row1) this.rows.final(keep.row1.cueId, 0, this._now() - 1e6);
+      if (keep.row2) { if (keep.row2.kind === 'final') this.rows.final(keep.row2.cueId, 0, this._now() - 1e6); else this.rows.open(keep.row2.cueId, true, this._now()); }
+    }
     if ('showOriginal' in newSettings) this.showOriginal = !!newSettings.showOriginal;
 
     // Update language configuration if provided
@@ -597,6 +675,7 @@ class SubtitleOverlay {
     const source = this.roleStyle('original');
     const notice = this.roleStyle('notice');
     const bg = `rgba(0, 0, 0, ${this.settings.overlayBgOpacity})`;
+    const grid = this._gridRows();
     return `
       .overlay-container {
         position: fixed;
@@ -615,9 +694,9 @@ class SubtitleOverlay {
         flex-direction: column-reverse;
       }
 
-      /* the rows pack against the video: at the top of the stack below it, at the bottom over it */
+      /* the rows pack against the video: at the top of their row below it, at the bottom over it */
       .mode-page .subtitle-stack {
-        justify-content: flex-start;
+        align-items: start;
       }
 
       .overlay-extras {
@@ -650,16 +729,20 @@ class SubtitleOverlay {
         pointer-events: none;
       }
 
+      /* the rolling rows: a grid of fixed rows (row 1, row 2, per role; the source row), so the
+         block's height never changes while text streams */
       .subtitle-stack {
-        max-width: 100%;
+        width: 100%;
         height: ${this.reservedHeight()}px;
-        justify-content: flex-end;
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        gap: 0.15em;
+        display: grid;
+        grid-template-rows: ${grid.template};
+        row-gap: ${grid.gapPx}px;
+        align-items: end;
+        justify-items: center;
         font-size: ${text.fontPx}px;
       }
+
+${grid.rules}
 
       /* a rounded box behind the text only, not a bar across the picture */
       .subtitle-line {
@@ -670,7 +753,7 @@ class SubtitleOverlay {
         font-family: ${this.settings.fontFamily};
         font-size: ${text.fontPx}px;
         line-height: ${this.settings.lineHeight};
-        padding: 0.15em 0.5em;
+        padding: 0.1em 0.5em;
         background: ${bg};
         border-radius: ${this.settings.borderRadius};
         text-align: center;
@@ -698,7 +781,8 @@ class SubtitleOverlay {
       }
 
       /* the source line (the spoken words): smaller and dimmer than the translation */
-      .subtitle-line.original {
+      .subtitle-line.original,
+      .subtitle-line.row-source {
         color: ${this.settings.originalColor};
         font-size: ${source.fontPx}px;
         opacity: ${source.opacity};
@@ -786,11 +870,9 @@ class SubtitleOverlay {
   }
 
   /**
-   * Update the display. The block holds one text per role, the newest (docs/overlay/
-   * README.md): each translation role shows the open line's draft if there is one, else
-   * the last line's final translation (or its own draft while the final is on its way);
-   * the source role, when it is on, shows the line being recognised, else the last
-   * line's words. So the block is at most two rows per role, whatever is in flight.
+   * Update the display from the rows (lib/overlay-rows.js): row 1 the previous line's
+   * final translation, row 2 the current line's draft (or its final while row 1 is held),
+   * and, when the source line is on, a third row with the current line's words.
    */
   _updateDisplay() {
     if (!this.subtitleStack) return;
@@ -798,61 +880,65 @@ class SubtitleOverlay {
     // discard) the line being edited; the display catches up when the edit ends.
     if (this.editMode && this._editingLine && this._editingLine.isConnected) return;
 
+    this.rows.tick(this._now());
+    const v = this.rows.view();
     const fresh = [];   // the lines wanted, top to bottom; reconciled with what is drawn below
-
-    // The cue being edited, else the most recent cue
-    const lastCue = this.editMode && this.currentCues.has(this.editCueId)
-      ? [this.editCueId, this.currentCues.get(this.editCueId)]
-      : (this.currentCues.size ? Array.from(this.currentCues.entries()).pop() : null);
-    const cueId = lastCue ? lastCue[0] : null;
-    const cueData = lastCue ? lastCue[1] : null;
-    const translations = (cueData && cueData.translations) || {};
-    const revised = !!(cueData && cueData.revised);
-    const dim = (line) => { if (cueData && cueData.provisional) line.classList.add('provisional'); return line; };
-    const usable = (lang) => this._usable(translations[lang]);
-    // a live line whose final translation is still on its way keeps its draft until then
-    const lastDraft = cueId ? this.drafts.get(cueId) : null;
-
-    // the open line: the one still being recognised (its draft, its partial text)
-    const openCue = this.partial ? this.partial.cueId : this._openDraftCue;
-    const openDraft = openCue && !this.currentCues.has(openCue) && !this.editMode ? this.drafts.get(openCue) : null;
-    const openDimmed = !!(openDraft && openDraft.provisional) || !!(this.partial && this.partial.provisional);
-
-    // Determine order based on primaryOnTop and configured languages
     const primary = this.primaryOnTop ? this.primaryLang : this.secondaryLang;
     const secondary = this.primaryOnTop ? this.secondaryLang : this.primaryLang;
+    const roles = [['primary', primary], ['secondary', secondary]].filter(([, lang]) => lang && lang !== 'none');
 
-    let shown = false;
-    for (const [role, lang] of [['primary', primary], ['secondary', secondary]]) {
-      if (!lang || lang === 'none') continue;
-      if (openDraft && this._usable(openDraft.translations[lang])) {
-        fresh.push(this._createDraftLine(openDraft.translations[lang], role, openCue, lang, openDimmed));
-        shown = true;
-      } else if (cueData && usable(lang)) {
-        fresh.push(dim(this._createSubtitleLine(this._translationText(translations[lang]), role, cueId, lang, revised)));
-        shown = true;
-      } else if (lastDraft && this._usable(lastDraft.translations[lang])) {
-        fresh.push(this._createDraftLine(lastDraft.translations[lang], role, cueId, lang, lastDraft.provisional || cueData.provisional));
-        shown = true;
+    const place = (line, row, role) => { line.classList.add(`row-${row}-${role}`); line.dataset.row = row; return line; };
+    let drewRow2 = false;
+    for (const [row, entry] of [['1', v.row1 ? Object.assign({ kind: 'final' }, v.row1) : null], ['2', v.row2]]) {
+      if (!entry) continue;
+      const cueId = entry.cueId;
+      const cue = this.currentCues.get(cueId);
+      const draft = this.drafts.get(cueId);
+      for (const [role, lang] of roles) {
+        if (entry.kind === 'final' && cue && this._usable(cue.translations[lang])) {
+          const line = this._createSubtitleLine(this._translationText(cue.translations[lang]), role, cueId, lang, !!cue.revised);
+          if (cue.provisional) line.classList.add('provisional');
+          fresh.push(place(line, row, role));
+        } else if (draft && this._usable(draft.translations[lang])) {
+          const dimmed = draft.provisional || !!(cue && cue.provisional) || !!(this.partial && this.partial.cueId === cueId && this.partial.provisional);
+          fresh.push(place(this._createDraftLine(draft.translations[lang], role, cueId, lang, dimmed), row, role));
+        } else continue;
+        if (row === '2') drewRow2 = true;
+      }
+      // a current line with nothing to translate (its final caption, no translation, no
+      // draft) shows its words in row 2, so the viewer is never left with nothing
+      if (row === '2' && !drewRow2 && cue && cue.original && !this.showOriginal) {
+        const line = this._createSubtitleLine(cue.original, 'original', cueId, null, !!cue.revised, cue.sourceLang);
+        if (cue.provisional) line.classList.add('provisional');
+        fresh.push(place(line, row, 'primary'));
+        drewRow2 = true;
       }
     }
 
-    // The source line when it is on: the line still being recognised, truncated from the
-    // start so the newest words stay on screen; else the last line's words. Also when
-    // there is nothing else to show, so the viewer is never left with nothing.
-    if (this.showOriginal && this.partial && this.partial.text) {
-      const line = document.createElement('div');
-      line.className = 'subtitle-line partial in-progress' + (this.partial.provisional ? ' provisional' : '');
-      line.textContent = this._fit(this.partial.text, this.partial.lang);
-      line.dataset.cueId = this.partial.cueId;
-      line.dataset.state = 'in-progress';
-      fresh.push(line);
-    } else if (cueData && cueData.original && (this.showOriginal || !shown)) {
-      fresh.push(dim(this._createSubtitleLine(cueData.original, 'original', cueId, null, revised, cueData.sourceLang)));
+    // the source row: the line being recognised, else the words of the current line
+    if (this.showOriginal) {
+      const current = v.row2 ? v.row2.cueId : (v.row1 ? v.row1.cueId : null);
+      if (this.partial && this.partial.text) {
+        const line = document.createElement('div');
+        line.className = 'subtitle-line partial in-progress row-source' + (this.partial.provisional ? ' provisional' : '');
+        line.textContent = this._fit(this.partial.text, this.partial.lang);
+        line.dataset.cueId = this.partial.cueId;
+        line.dataset.state = 'in-progress';
+        line.dataset.row = 'source';
+        fresh.push(line);
+      } else if (current && this.currentCues.get(current) && this.currentCues.get(current).original) {
+        const cue = this.currentCues.get(current);
+        const line = this._createSubtitleLine(cue.original, 'original', current, null, !!cue.revised, cue.sourceLang);
+        line.classList.add('row-source');
+        line.dataset.row = 'source';
+        if (cue.provisional) line.classList.add('provisional');
+        fresh.push(line);
+      }
     }
 
     this._reconcile(fresh);
     this._renderExtras();
+    this._scheduleRowTick();
   }
 
   /**
@@ -1068,17 +1154,41 @@ class SubtitleOverlay {
    * this height, so the block never changes height while text streams (batch 3).
    */
   reservedHeight() {
-    const rows = Math.max(1, this.settings.maxLines || 2);
+    return this._gridRows().heightPx;
+  }
+
+  _roles() {
+    const roles = ['primary'];
+    if (this.secondaryLang && this.secondaryLang !== 'none' && this.secondaryLang !== this.primaryLang) roles.push('secondary');
+    return roles;
+  }
+
+  /**
+   * The grid's rows: for row 1 and row 2, one row per translation role, then the source
+   * row when it is on; each row one line of text with its box's padding. {template, rules
+   * (grid-row per row class), gapPx, heightPx}.
+   */
+  _gridRows() {
+    const rows = Math.max(1, this.settings.rowsPerLine || 1);
     const text = this.roleStyle('primary').fontPx;
     const source = this.roleStyle('original').fontPx;
-    const rowBox = (px) => rows * px * this.settings.lineHeight + px * 0.3;   // padding 0.15em top and bottom
-    let roles = 1;
-    if (this.secondaryLang && this.secondaryLang !== 'none' && this.secondaryLang !== this.primaryLang) roles = 2;
-    let h = roles * rowBox(text);
-    if (this.showOriginal) h += rowBox(source);
-    const parts = roles + (this.showOriginal ? 1 : 0);
-    h += (parts - 1) * text * 0.15;   // the gap between the roles' boxes
-    return Math.ceil(h);
+    const box = (px) => rows * px * this.settings.lineHeight + px * 0.2;   // padding 0.1em top and bottom
+    const gapPx = Math.round(text * 0.1 * 10) / 10;
+    const heights = [];
+    const rules = [];
+    for (const r of ['1', '2']) {
+      for (const role of this._roles()) {
+        heights.push(box(text));
+        rules.push(`      .subtitle-line.row-${r}-${role} { grid-row: ${heights.length}; }`);
+      }
+    }
+    if (this.showOriginal) {
+      heights.push(box(source));
+      rules.push(`      .subtitle-line.row-source { grid-row: ${heights.length}; }`);
+    }
+    const total = heights.reduce((a, b) => a + b, 0) + (heights.length - 1) * gapPx;
+    return { template: heights.map((h) => `${Math.round(h * 10) / 10}px`).join(' '), rules: rules.join('\n'), gapPx,
+             heightPx: Math.ceil(total) };
   }
 
   /**

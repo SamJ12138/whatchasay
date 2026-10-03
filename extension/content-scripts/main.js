@@ -440,10 +440,7 @@
         const cueId = 'asr_' + ev.utterance_id;
         syncLanguageStatus(ev);
         live.lastUtteranceId = ev.utterance_id;
-        // drop older live cues so the stack shows one utterance at a time
-        for (const id of Array.from(overlay.currentCues.keys())) {
-          if (id !== cueId && !(overlay.editMode && overlay.editCueId === id)) overlay.currentCues.delete(id);
-        }
+        // the overlay keeps the previous line in its row 1 (lib/overlay-rows.js) and bounds its cues itself
         if (overlay.showTranslation(cueId, ev.text, {}, { sourceLang: ev.lang, langStatus: ev.lang_status })) {
           lineLatency.text(cueId, ev, { final: true });
           logLineLatency(lineLatency.confirmed(ev), ev);

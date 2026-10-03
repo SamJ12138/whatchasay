@@ -166,3 +166,12 @@ subtitle in the confirmed language 1.9 s after play, the first translation on sc
 45 s, first translated text 2.1 s after a line's first word (p50), final translation 1.1 s after its last word
 (p50), 1.7 draft rewrites per line, no rows written to the translation memory. The pipeline is the one of the
 latency batches; only the overlay changed (translation only, two rows, over the bottom 15 % in fullscreen).
+
+## Rolling rows (2026-10-02, `docs/overlay/README.md`)
+
+`docs/demo-youtube.gif` is now cut from run `run_20261002T200449-0fa35c` (same command as the section above:
+`--prime-audio --fullscreen`): Bengali confirmed about 2.4 s in, the first translation on screen 2.7 s after play,
+11 lines in 45 s, first translated text 1.8 s after a line's first word (p50), final translation 1.2 s after its
+last word (p50), 1.6 draft rewrites per line. The previous line's final translation now stays on the upper row
+while the next line streams below it: shortest time a final was on screen 2.5 s (0.5 s before the rolling rows,
+run `20261002T194945-ea5b15` vs `20261002T200253-469a90`).

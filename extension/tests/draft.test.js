@@ -15,7 +15,7 @@ const tr = (lang, text) => ({ [lang]: { lines: [text], single_line: text, displa
 
 function newOverlay(secondary = 'none') {
   const dom = fakeDom();
-  const ctx = loadScripts(['content-scripts/ws-protocol.js', 'content-scripts/overlay.js'],
+  const ctx = loadScripts(['content-scripts/ws-protocol.js', 'lib/overlay-rows.js', 'content-scripts/overlay.js'],
     { window: {}, document: dom.document, ResizeObserver: dom.ResizeObserver });
   const overlay = ctx.window.subtitleOverlay;
   overlay.primaryLang = 'zh';
@@ -97,14 +97,14 @@ test('the next line starts without the previous line\'s draft', () => {
   overlay.showPartial('asr_0', 'where did you put the keys', 'en', 'manual');
   overlay.showDraft('asr_0', tr('zh', '你把钥匙放在'), { sourceLang: 'en', langStatus: 'manual' });
   overlay.showTranslation('asr_0', 'Where did you put the keys?', tr('zh', '你把钥匙放在哪里了?'), { sourceLang: 'en', langStatus: 'manual' });
-  // one text per role, the newest (overlay batch 2): the previous line's translation stays
-  // until the next line's first draft; the source row already shows the next line's words
+  // the rolling rows: the previous line's final stays in row 1 while the next line's draft
+  // streams in row 2; the source row shows the next line's words
   overlay.showPartial('asr_1', 'i will be', 'en', 'manual');
   assert.deepEqual(screen(overlay).map((l) => [l.kind, l.text, l.draft]), [
     ['primary', '你把钥匙放在哪里了?', false], ['partial', 'i will be', false]]);
   overlay.showDraft('asr_1', tr('zh', '我会'), { sourceLang: 'en', langStatus: 'manual' });
   assert.deepEqual(screen(overlay).map((l) => [l.kind, l.text, l.draft]), [
-    ['primary', '我会', true], ['partial', 'i will be', false]]);
+    ['primary', '你把钥匙放在哪里了?', false], ['primary', '我会', true], ['partial', 'i will be', false]]);
 });
 
 test('drafts of a recognizer whose language is not confirmed are dimmed, and go when it is replaced', () => {

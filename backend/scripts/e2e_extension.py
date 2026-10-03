@@ -616,6 +616,8 @@ class GeometryLog:
         self.lines_over_video = 0
         self.controls_overlap = 0
         self.most_lines = None   # the sample with the most caption lines: types, cues, lengths (for diagnosis)
+        # how long each final translation stays on screen: (cue, role) -> {first, last, chars}
+        self.finals: dict = {}
 
     @staticmethod
     def caption_lines(g: dict) -> list[dict]:
@@ -641,6 +643,12 @@ class GeometryLog:
             self.samples.append({k: g[k] for k in ("t", "coverage", "block")} | {"lines": len(self.caption_lines(g))})
         lines = self.caption_lines(g)
         self.max_coverage = max(self.max_coverage, g["coverage"])
+        for ln in lines:
+            if ln["type"] in ("primary", "secondary") and not ln["draft"] and ln["text"]:
+                key = f'{ln["cue_id"]}/{ln["type"]}'
+                rec = self.finals.setdefault(key, {"first": t, "last": t, "chars": len(ln["text"]), "cue_id": ln["cue_id"]})
+                rec["last"] = t
+                rec["chars"] = len(ln["text"])
         if lines and (self.most_lines is None or len(lines) > self.most_lines["n"]):
             self.most_lines = {"n": len(lines), "t": t, "lines": [{"type": ln["type"], "cue_id": ln["cue_id"], "chars": len(ln["text"]),
                                                                   "in_progress": ln["in_progress"], "draft": ln["draft"]} for ln in lines]}
@@ -700,7 +708,23 @@ class GeometryLog:
                 "partial_updates": {"count": len(self.updates), "heights": heights, "height_changes": max(0, len(heights) - 1),
                                     "position_changes": moves, "first": self.updates[0] if self.updates else None,
                                     "last": self.updates[-1] if self.updates else None},
-                "last_block": last.get("block"), "most_lines": self.most_lines}
+                "last_block": last.get("block"), "most_lines": self.most_lines,
+                "display_times": self.display_times()}
+
+    def display_times(self) -> dict:
+        """Seconds each final translation was on screen (first to last sighting, so a lower
+        bound by up to one sampling interval), the last line excluded when it was still up
+        at the end: min, p50, and per line with its length and the minimum the layout rule
+        would give it (max(1.5 s, chars / 15 per s))."""
+        recs = sorted(self.finals.values(), key=lambda r: r["first"])
+        if recs and self.samples and recs[-1]["last"] >= self.samples[-1]["t"] - 0.3:
+            recs = recs[:-1]   # still on screen when sampling stopped
+        per = [{"cue_id": r["cue_id"], "chars": r["chars"], "shown_s": round(r["last"] - r["first"], 2),
+                "rule_min_s": round(max(1.5, r["chars"] / 15), 2)} for r in recs]
+        shown = sorted(x["shown_s"] for x in per)
+        return {"lines": len(per), "min_s": shown[0] if shown else None,
+                "p50_s": shown[len(shown) // 2] if shown else None,
+                "under_rule": sum(1 for x in per if x["shown_s"] < x["rule_min_s"]), "per_line": per[:20]}
 
 
 def test_extension_copy(extension: Path, scratch: Path, extra_origins=()) -> Path:
@@ -1315,12 +1339,14 @@ def main() -> int:
                     help="--geometry: poll fast and record the block's box at the first N partial-text changes")
     ap.add_argument("--show-source", action="store_true",
                     help="audio path: the source line (spoken words) on under the translation (settings.showOriginal; off by default)")
+    ap.add_argument("--display-times", action="store_true",
+                    help="--geometry: poll fast and record how long each final translation stays on screen")
     ap.add_argument("--hover-controls", action="store_true",
                     help="audio path: keep the mouse over the player so the site's control bar is showing")
     args = ap.parse_args()
     if args.shots and not args.geometry:
         args.geometry = True
-    if args.partial_updates and not args.geometry:
+    if (args.partial_updates or args.display_times) and not args.geometry:
         args.geometry = True
     if args.url and args.path != "audio":
         ap.error("--url needs --path audio")
@@ -1591,7 +1617,7 @@ def main() -> int:
                 end = time.time() + args.hold
                 while time.time() < end:
                     tick()
-                    if geometry is not None and args.partial_updates and len(geometry.updates) < args.partial_updates:
+                    if geometry is not None and (args.display_times or (args.partial_updates and len(geometry.updates) < args.partial_updates)):
                         # between ticks: fast samples so consecutive partial updates are each seen
                         for _ in range(5):
                             page.wait_for_timeout(40)

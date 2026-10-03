@@ -104,7 +104,7 @@
       if (!fills && roomBelow) {
         out = { mode: 'page', left, width, gap, top: v.y + v.h + gap };
       } else {
-        const margin = Math.max(8, Math.round(v.h * 0.02));
+        const margin = Math.max(6, Math.round(v.h * 0.012));   // two rows at 4.5 % stay inside the bottom 15 %
         let bottom = v.y + v.h - margin;
         const c = input.controls;
         if (c && c.h > 0 && c.y < bottom && c.y + c.h > bottom - blockHeight) bottom = c.y - gap;
