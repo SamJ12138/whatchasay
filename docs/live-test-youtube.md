@@ -175,3 +175,12 @@ latency batches; only the overlay changed (translation only, two rows, over the 
 last word (p50), 1.6 draft rewrites per line. The previous line's final translation now stays on the upper row
 while the next line streams below it: shortest time a final was on screen 2.5 s (0.5 s before the rolling rows,
 run `20261002T194945-ea5b15` vs `20261002T200253-469a90`).
+
+## After the draft follow-ups (2026-10-02, `docs/latency.md`)
+
+`docs/demo-youtube.gif` is now cut from run `run_20261002T214030-e46964` (`--fullscreen --record`, no `--prime-audio`:
+the extension keeps the tab's audio output running itself since A11 was fixed): the first line is the clip's opening
+sentence, Bengali confirmed 2.3 s in, the first translation on screen 2.4 s after play, 11 lines in 45 s, first
+translated text 2.7 s after a line's first word (p50), 0.7 draft rewrites per line (local agreement, K = 2, and
+no draft before three stable words), lines wrap once instead of losing their start ("What mosquitos are so big
+that it won't / turn into a king?"). রাজভোগ is now heard as "A Royal Book Shower"; the mosquito is still a mosquito.

@@ -835,3 +835,14 @@ D4 cloud providers off by default, keys only in backend config.
   2.40 -> 3.25-3.30), words per draft 1.7-2.0 -> 4.5-4.8, translate calls 0.8 -> 0.65-0.7 per s, non-append
   revisions 0.8-1.0. Tests: the rule's cases (words, share, CJK, its settings) and a scripted session where a
   one-word prefix of a six-word line gets no draft. Tallies: fast 342, slow 42, node 146.
+- Batch 5 (document; commit "docs: latency and overlay after follow-ups"). `docs/latency.md` closes with "Where the
+  numbers stand": all four clips on the finished code, 3 browser runs each, no priming by the harness (12 run_ids):
+  live clip first translated text p50 2.4-2.5 s, non-append revisions 0.8-1.0 per line, first confirmed subtitle
+  2.1-2.2 s; English sample 2.5 s (one run 4.0) and 2 rewrites; Mandarin 1.6-1.8 s, 0-0.25; Bengali 3.3 s, 1.
+  README: the latency table has a third number per cell (before -> after the latency batches -> now) and the
+  paragraph explains the agreement and the minimum draft; Quickstart's "what you will see" and the design
+  paragraph say what a draft is now and that the extension primes the capture; the opening caption names the new
+  run and the wrap. `docs/demo-youtube.gif` regenerated from run `20261002T214030-e46964` (fullscreen, no
+  `--prime-audio`, 9.5 s from 0.1 s before play, 4,660,616 bytes): the first line is the clip's opening sentence,
+  11 lines in 45 s, 0.7 rewrites per line; `docs/live-test-youtube.md` has the run. Tallies: fast 342, slow 42,
+  node 146.

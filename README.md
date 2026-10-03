@@ -17,8 +17,9 @@ you decide it should.
 Debashree" from the YouTube channel Bengali Movies with English Subtitle
 (<https://www.youtube.com/watch?v=-tpVpbIxFmI>), the player in fullscreen, run on CPU: Bengali is detected
 2 seconds in, a first translation of each line appears in italics on the lower row while it is still being spoken
-(ending in …), and the finished line moves to the upper row while the next one starts below it. Recorded by the
-browser harness during a live test (`docs/live-test-youtube.md`, run `20261002T200449-0fa35c`), not by hand; the
+(ending in …), and the finished line moves to the upper row while the next one starts below it; a long line wraps
+once. Recorded by the
+browser harness during a live test (`docs/live-test-youtube.md`, run `20261002T214030-e46964`), not by hand; the
 translations are as they came out, mistakes included.*
 
 It is for videos and live streams that have no subtitles, lectures, and meetings held in a browser tab in a language
@@ -114,9 +115,9 @@ The extension asks for no site access when it is installed.
    keep hearing it.
 
 What you will see: the translation only, in a small box below the video on a normal page, or over the bottom of
-the picture when the video is fullscreen. After a second or two of a sentence a draft translation appears in
-italics, ending in "…", and may be rewritten as the sentence grows; then the finished sentence's translation
-replaces it. The spoken words themselves are not shown unless you ask: the popup's *Show the spoken words under
+the picture when the video is fullscreen. Two or three seconds into a sentence a draft translation of its first
+words appears in italics, ending in "…"; only the start that successive drafts agree on is shown, so it mostly
+grows rather than changes; then the finished sentence's translation replaces it. Each line may wrap once. The spoken words themselves are not shown unless you ask: the popup's *Show the spoken words under
 the translation* toggle, or **Alt+O** on the page, adds them under the translation, smaller and dimmer, and the
 choice is remembered. A line ends when the speaker pauses, and after 6 seconds at the latest. The default target
 languages are English and Chinese; a language equal to the spoken one is skipped. With *Auto-detect*, what is
@@ -261,31 +262,38 @@ chunks (0.32 s for English and Mandarin, 0.64 s for Bengali) and every partial r
 draws the growing line as a line in progress. A line ends when the recognizer hears 0.6 s of silence, at a pause
 it missed (a gap of 0.5 s between two words, seen once the next word arrives), or after 6 seconds (then at its
 widest pause), so a translation never has to wait for a ten-second run of dialogue. While a line is open, the words that were the
-same in three partial results in a row count as stable; that stable part is translated (at most once every 1.5 s)
-and shown as a draft, and the final translation replaces it when the line ends. With *Auto-detect*, language ID
+same in three partial results in a row count as stable; once they are three words (or 40 % of the line so far) that
+stable part is translated (at most once every 1.5 s), and of the result only the start the last two drafts agree
+on is shown as a draft (local agreement); the final translation replaces it when the line ends. From the moment
+captions start, the extension keeps the tab's audio output running with an inaudible tone, so a video played
+afterwards is captured from its first sample. With *Auto-detect*, language ID
 first runs after one second of speech and switches the recognizer as soon as two attempts in a row agree on
 Mandarin or Bengali; the audio heard until then is replayed into the new recognizer.
 
-**Measured latency**, per subtitle line, before and after the streaming work (Windows 11, i9-13900H, everything on
-the CPU; three runs per clip in Chromium with the real extension, Auto-detect, one target language; "before" is
-the same measurement on the earlier code). Definitions, every run with its `run_id`, the tuning and what got
-worse: `docs/latency.md`.
+**Measured latency**, per subtitle line: before the streaming work, after it, and now, with the draft follow-ups
+(Windows 11, i9-13900H, everything on the CPU; three runs per clip in Chromium with the real extension,
+Auto-detect, one target language; "before" is the same measurement on the earlier code). Definitions, every run
+with its `run_id`, the tuning and what got worse: `docs/latency.md`.
 
 | Clip | First source text after the line's first word | First translated text after the line's first word | Final translation after the line's last word | First confirmed-language subtitle after the start | Draft rewrites (non-append revisions) per line |
 |---|---|---|---|---|---|
-| English sample (6.6 s, one sentence) | 0.5 s | 6.6 -> 2.6 s | 0.9 s | 3.9-4.0 -> 3.3 s | 3 |
-| Mandarin sample (10 s, slow, mixed with English) | 0.3 -> 0.4 s | 1.6 -> 1.4-1.7 s (slowest line 5.3 -> 1.9-2.3 s) | 0.8 s | 6.0-6.2 -> 2.5-2.6 s | 0-0.2 |
-| Bengali sample (7 s, one sentence) | 3.9 -> 0.6 s | 7.9 -> 2.7-3.3 s | 1.1 s | 4.1-4.2 -> 2.4-2.9 s | 1 |
-| Live clip (20 s of Bengali film dialogue) | 0.6-0.75 -> 0.7-0.75 s | 10.3-10.4 -> 2.0 s | 0.3-0.9 -> 1.3 s | 5.3-5.4 -> 2.1-2.2 s | 1.5 |
+| English sample (6.6 s, one sentence) | 0.5 -> 0.3 s | 6.6 -> 2.6 -> 2.5 s | 0.9 s | 3.9-4.0 -> 3.3 -> 3.4 s | 3 -> 2 |
+| Mandarin sample (10 s, slow, mixed with English) | 0.3 -> 0.4 s | 1.6 -> 1.4-1.7 -> 1.6-1.8 s (slowest line 5.3 -> 1.9-2.3 -> 2.4-2.9 s) | 0.8 s | 6.0-6.2 -> 2.5-2.6 -> 2.5 s | 0-0.2 -> 0-0.25 |
+| Bengali sample (7 s, one sentence) | 3.9 -> 0.6 -> 0.4-0.7 s | 7.9 -> 2.7-3.3 -> 3.3 s | 1.1 -> 1.2 s | 4.1-4.2 -> 2.4-2.9 -> 2.3-2.8 s | 1 |
+| Live clip (20 s of Bengali film dialogue) | 0.6-0.75 -> 0.7-0.75 -> 0.8 s | 10.3-10.4 -> 2.0 -> 2.4-2.5 s | 0.3-0.9 -> 1.3 -> 1.3-1.4 s | 5.3-5.4 -> 2.1-2.2 -> 2.1-2.2 s | 1.5 -> 0.8-1.0 |
 
 Read it with these in mind. The source text was never late: partial results reached the overlay before this work
-too; what waited for the whole sentence was the translation. The first translated text is now a draft, and a draft
-is usually rewritten, not extended, when the next one arrives (the translation of a longer prefix is a different
-sentence, most of all from verb-final Bengali): the last column counts those rewrites, the final translation
-included, and the settings keep it under two per line on the live clip. The live clip's lines used to be closed by
-a 10-second cut, which is why its final translation looks slower now: it waits for a real pause. Translation calls
-rose from 0.1-0.4 to 0.6-0.9 per second of speech; one call takes 15-38 ms (p50) and 28-67 ms (p95) on the CPU.
-Speech recognition takes about 2 ms per 40 ms frame and one language-ID attempt 15-45 ms.
+too; what waited for the whole sentence was the translation. The first translated text is a draft of the
+sentence's first words; it used to be rewritten, not extended, when the next draft arrived (the translation of a
+longer prefix is a different sentence, most of all from verb-final Bengali), so now only the start that the last
+two drafts agree on is shown, and a draft is not shown before the stable part of the line has three words (or
+40 % of it): that is the 0.4-0.5 s the live clip's first translated text gave back, and the last column, which
+counts the rewrites with the final translation included, fell from 1.5 to 0.8-1.0 per line. The last "first
+confirmed subtitle" numbers are measured without the harness starting the tab's audio for the extension, as a
+viewer gets it. The live clip's lines used to be closed by a 10-second cut, which is why its final translation
+looks slower than before: it waits for a real pause. Translation calls are 0.45-0.7 per second of speech; one
+call takes 17-49 ms (p50) and 25-62 ms (p95) on the CPU. Speech recognition takes about 2 ms per 40 ms frame and
+one language-ID attempt 15-45 ms.
 
 Two findings from building it:
 

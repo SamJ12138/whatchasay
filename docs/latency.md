@@ -355,3 +355,30 @@ line's final came 2.84 s after its last word): a one-off stall on the CPU, the o
 of the three runs (the next longest: 70 ms). On the YouTube page itself (3 runs, `20261002T203832-86ccb0`, `20261002T203930-46ebb6`,
 `20261002T204010-93b09e`, no priming) the first line is the clip's opening sentence in 3 of 3, first confirmed
 subtitle 1.87, 2.28 and 1.64 s after play.
+
+## Where the numbers stand (2026-10-02, after the follow-ups)
+
+All four clips once more on the finished code (lines wrap once, the extension primes the capture, local agreement
+K = 2, minimum draft length), `line_latency_table.py`, 3 browser runs per clip, no priming by the harness:
+
+| Clip | run_id | Lines | First display p50 / max (s) | First translation p50 / max (s) | Final p50 / max (s) | First confirmed subtitle (s) | Segments (s) | Translate calls (per s) | Translate p50 / p95 (ms) | Drafts per line | Words per draft | Non-append revisions per line |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| Live clip (Bengali film scene) | `20261002T213218-755d4d` | 6 | 0.78 / 2.39 | 2.42 / 3.29 | 1.40 / 1.45 | 2.14 | 2.08, 2.64, 4.32, 2.44, 2.8, 4.64 | 14 (0.7) | 30.6 / 62.1 | 0.83 | 5.2 | 0.83 |
+| Live clip (Bengali film scene) | `20261002T213300-fff9f7` | 6 | 0.78 / 2.42 | 2.45 / 3.25 | 1.33 / 1.41 | 2.18 | 2.08, 2.72, 4.32, 2.4, 2.8, 4.64 | 14 (0.7) | 27 / 42.1 | 1 | 4.5 | 1 |
+| Live clip (Bengali film scene) | `20261002T213341-0a83d0` | 6 | 0.78 / 2.36 | 2.39 / 3.21 | 1.31 / 1.41 | 2.09 | 2.08, 2.72, 4.28, 2.4, 2.8, 4.64 | 14 (0.7) | 28.1 / 58.1 | 1 | 4.5 | 1 |
+| English sample | `20261002T213422-21c245` | 1 | 0.34 / 0.34 | 2.49 / 2.49 | 0.96 / 0.96 | 3.4 | 7.84 | 4 (0.6) | 32.2 / 54.5 | 2 | 6 | 2 |
+| English sample | `20261002T213455-5470ea` | 1 | 0.34 / 0.34 | 2.49 / 2.49 | 0.97 / 0.97 | 3.38 | 7.84 | 4 (0.6) | 32.2 / 56.8 | 2 | 6 | 2 |
+| English sample | `20261002T213528-162739` | 1 | 0.30 / 0.30 | 3.97 / 3.97 | 0.92 / 0.92 | 3.36 | 7.84 | 3 (0.45) | 48.5 / 54.2 | 2 | 8.5 | 2 |
+| Mandarin sample | `20261002T213601-7cba81` | 4 | 0.33 / 1.78 | 1.55 / 2.92 | 0.80 / 0.96 | 2.46 | 3.64, 3.84, 2.24, 1.28 | 7 (0.7) | 19.1 / 26.4 | 0.5 | 1.5 | 0.25 |
+| Mandarin sample | `20261002T213634-ba04e6` | 4 | 0.42 / 1.51 | 1.77 / 2.92 | 0.80 / 0.92 | 2.5 | 2.24, 3.84, 2.24, 1.28 | 7 (0.7) | 20.1 / 28 | 0.25 | 1 | 0 |
+| Mandarin sample | `20261002T213706-e810b6` | 5 | 0.41 / 1.53 | 1.63 / 2.36 | 0.83 / 0.92 | 2.49 | 2.24, 2.56, 1.28, 2.24, 1.28 | 7 (0.7) | 16.6 / 25.5 | 0.2 | 1 | 0 |
+| Bengali sample | `20261002T213738-312eef` | 2 | 0.74 / 2.42 | 3.26 / 3.97 | 1.25 / 3.06 | 2.78 | 4.32, 3.96 | 5 (0.72) | 24.1 / 40.3 | 1 | 4.5 | 1 |
+| Bengali sample | `20261002T213810-7e3d9c` | 2 | 0.38 / 1.93 | 3.25 / 3.60 | 1.20 / 2.67 | 2.28 | 4.72, 3.6 | 5 (0.72) | 23.2 / 39.1 | 1 | 4.5 | 1 |
+| Bengali sample | `20261002T213843-f3ee9c` | 2 | 0.74 / 2.45 | 3.30 / 3.96 | 1.24 / 3.06 | 2.81 | 4.32, 3.96 | 5 (0.72) | 24.6 / 39.1 | 1 | 4.5 | 1 |
+
+Against the "Before and after" table above (the latency batches): first translated text p50 is 2.4-2.5 s on the
+live clip (was 2.0 s: the minimum draft length), 2.5 s on the English sample (one run 4.0 s, where the first draft
+came late), 1.6-1.8 s on the Mandarin sample and 3.3 s on the Bengali sample (unchanged); non-append revisions
+per line 0.8-1.0 on the live clip (was 1.5), 2 on the English sentence (was 3), 0-0.25 and 1 on the samples;
+first confirmed subtitle 2.1-2.2 s on the live clip without any priming by the harness (was 2.1-2.2 s with it,
+3.6-3.7 s without); first display and the final translation after the last word as before (0.3-0.8 s; 0.8-1.4 s).
