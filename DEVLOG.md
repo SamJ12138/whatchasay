@@ -927,3 +927,8 @@ D4 cloud providers off by default, keys only in backend config.
   the push-out were rewritten; the overlay test ("a final that comes too soon waits in row 2") holds as written.
   `docs/overlay/README.md` "Fast speech" with the table; README overlay paragraph. Tallies: fast 370, slow 44,
   node 162.
+- CI fix (commit "test: source slices read with one line ending (Windows CI)"). Run 37093191214 was red on
+  windows-2025 only: node tests that inspect a source through a fixed-width slice (corrections.test.js: 500
+  characters after `case 'toggle-edit'` must reach `cue.translations`) read the file as checked out, CRLF on the
+  Windows runner, so the window held fewer characters of code and the glossary batch's comment pushed the match out
+  of it. The six tests' `read()` normalise CRLF to LF before slicing (checked on a CRLF copy of main.js).

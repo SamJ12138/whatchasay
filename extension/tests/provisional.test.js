@@ -13,7 +13,8 @@ const path = require('node:path');
 const { loadScripts, EXT } = require('./load.js');
 const { fakeDom } = require('./fake-dom.js');
 
-const read = (f) => fs.readFileSync(path.join(EXT, f), 'utf8');
+// one line ending, so a fixed-width slice of a source holds the same text on a CRLF checkout (Windows CI)
+const read = (f) => fs.readFileSync(path.join(EXT, f), 'utf8').replace(/\r\n/g, '\n');
 const zh = (text) => ({ zh: { lines: [text], single_line: text, display_text: text, status: 'ok' } });
 
 function newOverlay() {

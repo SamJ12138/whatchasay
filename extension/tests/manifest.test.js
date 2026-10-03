@@ -8,7 +8,8 @@ const { CAPTION_ORIGINS, CONTENT_SCRIPT_FILES, registrationFor, EXPLANATION } = 
 
 const EXT = path.resolve(__dirname, '..');
 const manifest = JSON.parse(fs.readFileSync(path.join(EXT, 'manifest.json'), 'utf8'));
-const read = (f) => fs.readFileSync(path.join(EXT, f), 'utf8');
+// one line ending, so a fixed-width slice of a source holds the same text on a CRLF checkout (Windows CI)
+const read = (f) => fs.readFileSync(path.join(EXT, f), 'utf8').replace(/\r\n/g, '\n');
 
 // What the audio path needs: settings, the action-click grant, the offscreen audio
 // document, and injecting the overlay into the clicked tab; tab audio capture

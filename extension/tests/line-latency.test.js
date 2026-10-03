@@ -13,7 +13,8 @@ const { EXT } = require('./load.js');
 const { createTracker } = require('../content-scripts/line-latency.js');
 const { CONTENT_SCRIPT_FILES } = require('../lib/caption-mode.js');
 
-const read = (f) => fs.readFileSync(path.join(EXT, f), 'utf8');
+// one line ending, so a fixed-width slice of a source holds the same text on a CRLF checkout (Windows CI)
+const read = (f) => fs.readFileSync(path.join(EXT, f), 'utf8').replace(/\r\n/g, '\n');
 
 function tracker() {
   const clock = { ms: 0 };

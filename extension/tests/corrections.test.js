@@ -8,7 +8,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const EXT = path.resolve(__dirname, '..');
-const read = (f) => fs.readFileSync(path.join(EXT, f), 'utf8');
+// one line ending, so a fixed-width slice of a source holds the same text on a CRLF checkout (Windows CI)
+const read = (f) => fs.readFileSync(path.join(EXT, f), 'utf8').replace(/\r\n/g, '\n');
 const C = require('../lib/corrections.js');
 
 const CORRECTION = {
