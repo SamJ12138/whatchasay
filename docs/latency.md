@@ -309,6 +309,29 @@ only on the English sentence (1 rewrite, 5 characters per draft, first text up t
 got a draft at all (0-0.5 per line), not from the agreement. Translate calls are not changed by K: the agreement
 runs on the translation's result.
 
+## Minimum draft length (2026-10-02)
+
+The first draft of a line was usually one word ("from", "Key" for কী, "Day"), the stable prefix when the third
+partial arrived, on screen for about 1.3 s before the next draft replaced it. A draft is now sent only once the
+line's stable prefix has **3 words (CJK: 4 characters) or 40 % of the words heard so far in the line**, whichever
+comes first (`asr/draft.py` `draft_long_enough`, applied where the session marks the stable prefix;
+`SUBTITLE_ASR__DRAFT_MIN_WORDS` 3, `..._MIN_CJK_CHARS` 4, `..._MIN_FRACTION` 0.4). "Tokens" of the brief are
+read as the words of the newest partial (the recognizer's sub-word pieces are not what the viewer sees); the
+share rule means a one-word draft is still possible on a line of two words.
+
+Live clip, 3 browser runs each, K = 2 underneath (`backend/logs`' `draft` records: the first draft sent per line):
+
+| | run_ids | Lines with a draft | One-word first drafts | Words of the first drafts | First translated text p50 / max (s) | Drafts per line | Words per draft | Non-append revisions per line |
+|---|---|---|---|---|---|---|---|---|
+| Before (K = 2, no minimum) | `20261002T205856-64577f`, `20261002T205937-c337de`, `20261002T210019-128750` | 12 | **4 of 12** | 1, 1, 2, 2 / 1, 2, 2, 3 / 1, 2, 2, 3 | 2.07 / 2.39-2.40 | 0.80-1.20 | 1.67-2.00 | 0.80 |
+| (K = 1, no minimum) | `20261002T205149-8e975a`, `20261002T205231-e39749`, `20261002T205313-19b0cf` | 13 | 5 of 13 | 1, 1, 2, 2 / 1, 1, 2, 3, 3 / 1, 2, 2, 3 | 2.07 / 2.37-2.42 | 1.83-2.20 | 4.27-6.00 | 1.83-2.00 |
+| After (minimum) | `20261002T212823-a9c55a`, `20261002T212904-118671`, `20261002T212943-0de960` | 13 | **0 of 13** | 2, 3, 3, 6, 8 / 3, 6, 6, 8 / 5, 6, 6, 6 | 2.42-2.74 / 3.25-3.30 | 1.00-1.20 | 4.50-4.80 | 0.80-1.00 |
+
+The one-word first drafts are gone: 4 of the 12 lines that got a draft (K = 2; 5 of 13 without agreement) started
+with one word, none of 13 now, and the shortest first draft has two words. The first translated text comes 0.35-0.67 s later at p50 (2.07 -> 2.42-2.74 s) and up to 0.9 s later at
+the worst line: the one word it used to show carried nothing, and the first draft now has 2-8 words (4.5-4.8 words
+per draft against 1.7-2.0). Translate calls 0.8 -> 0.65-0.7 per second; non-append revisions 0.8-1.0 per line.
+
 ## A11 fixed: the first sentence without the harness's priming (2026-10-02)
 
 The extension now keeps the captured tab's audio output running itself (`lib/capture-prime.js`: an inaudible tone

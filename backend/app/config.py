@@ -268,6 +268,11 @@ class ASRConfig(BaseSettings):
     # shown (1 = every draft as it is); the first draft of a line is shown as it is. Measured on
     # the live clip and the samples in docs/latency.md (the batch "local agreement").
     draft_agree_k: int = Field(default=2)
+    # A draft only once the stable prefix has this many words (CJK: characters) or this share of
+    # the line heard so far, whichever comes first: no one-word first drafts.
+    draft_min_words: int = Field(default=3)
+    draft_min_cjk_chars: int = Field(default=4)
+    draft_min_fraction: float = Field(default=0.4)
     warmup_languages: List[str] = Field(default=["en", "zh", "bn"], description="Recognizers loaded at startup so auto-detect switches are instant")
 
     @field_validator("zh_model")

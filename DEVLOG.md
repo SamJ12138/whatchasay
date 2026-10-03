@@ -824,3 +824,14 @@ D4 cloud providers off by default, keys only in backend config.
   K = 3 gains nothing more on the live clip and shows fewer words. Found on the way: the first English-sample runs
   counted a Chinese draft as one word (`split()`); the metric now counts CJK characters and those rows were rerun.
   README: the config row and the draft limitation. Tallies: fast 339, slow 42, node 146.
+- Batch 4 (minimum draft length; commit "fix: minimum draft length"). `asr/draft.py` `draft_long_enough(stable, text,
+  min_words 3, min_cjk 4, min_fraction 0.4)`: a stable prefix is worth a draft once it has 3 words (CJK: 4
+  characters) or 40 % of the words of the newest partial, whichever comes first; applied in `session.py` where
+  `stable_text` is put on a partial, settings `asr.draft_min_words` / `draft_min_cjk_chars` / `draft_min_fraction`
+  (`SessionConfig` carries them; `.env.example` and the README rows). The brief's "tokens" read as the words the
+  viewer sees, not the recognizer's pieces; the share rule still allows a one-word draft on a two-word line. Live
+  clip, 3 browser runs (`docs/latency.md`, "Minimum draft length"): one-word first drafts 4 of 12 lines (K = 2) and
+  5 of 13 (K = 1) -> **0 of 13** (first drafts of 2-8 words); first translated text p50 2.07 -> 2.42-2.74 s (max
+  2.40 -> 3.25-3.30), words per draft 1.7-2.0 -> 4.5-4.8, translate calls 0.8 -> 0.65-0.7 per s, non-append
+  revisions 0.8-1.0. Tests: the rule's cases (words, share, CJK, its settings) and a scripted session where a
+  one-word prefix of a six-word line gets no draft. Tallies: fast 342, slow 42, node 146.

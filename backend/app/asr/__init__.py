@@ -100,6 +100,9 @@ def create_session(
         lid_retry_step_s=settings.asr.lid_retry_step_s,
         partial_interval_ms=settings.asr.partial_interval_ms,
         draft_stable_partials=settings.asr.draft_stable_partials,
+        draft_min_words=settings.asr.draft_min_words,
+        draft_min_cjk_chars=settings.asr.draft_min_cjk_chars,
+        draft_min_fraction=settings.asr.draft_min_fraction,
     )
     return StreamingASRSession(cfg, get_engines(), lid_identify=_lid_identify, restore_text=_restore_text)
 

@@ -12,7 +12,7 @@ from typing import List
 
 import pytest
 
-from app.asr.draft import DraftScheduler, LocalAgreement, stable_prefix
+from app.asr.draft import DraftScheduler, LocalAgreement, draft_long_enough, stable_prefix
 from app.asr.engine import AsrEvent, SAMPLE_RATE
 from app.asr.session import SessionConfig, StreamingASRSession
 from tests.fakes import pcm_frame
@@ -47,6 +47,28 @@ def test_chinese_characters_are_words_and_spaces_are_kept_as_written():
 
 def test_no_drafts_with_zero():
     assert stable_prefix(["one", "one two"], 0) == ""
+
+
+# ---------------------------------------------------------------- the minimum draft length
+
+
+def test_a_draft_needs_three_stable_words_or_forty_percent_of_the_line():
+    # the first drafts of a line were usually one word ("from", "Key"): not worth a translation
+    assert not draft_long_enough("from", "from the day after")
+    assert not draft_long_enough("from the", "from the day after tomorrow and")   # 2 of 6 words
+    assert draft_long_enough("from the day", "from the day after tomorrow and")    # three words
+    assert draft_long_enough("from the", "from the day after")                     # 2 of 5 words = 40 %
+    assert draft_long_enough("from", "from the")                                   # 1 of 2: half the line
+    assert not draft_long_enough("", "from the day")
+
+
+def test_the_minimum_counts_cjk_characters_and_its_own_settings():
+    assert not draft_long_enough("你把钥", "你把钥匙放在哪里了")                      # 3 of 9 characters
+    assert draft_long_enough("你把钥匙", "你把钥匙放在哪里了")                         # four characters
+    assert draft_long_enough("你把", "你把钥匙")                                     # 2 of 4: half the line
+    assert draft_long_enough("from", "from the day after", min_words=1)
+    assert not draft_long_enough("from the day", "from the day after tomorrow and the next", min_words=4, min_fraction=0.5)
+    assert not draft_long_enough("你把钥匙", "你把钥匙放在哪里了", min_cjk=5, min_fraction=0.5)
 
 
 # ---------------------------------------------------------------- local agreement on the draft translations
@@ -174,6 +196,26 @@ def test_partials_carry_the_stable_prefix_and_a_new_line_starts_from_nothing():
     assert [m.get("stable_text", "") for m in partials] == [
         "", "where", "where did", "where did you", "where did you put", "where did you put the", "", "i"]
     assert "stable_text" not in [m for m in msgs if m["type"] == "final"][0]
+
+
+def test_a_one_word_stable_prefix_of_a_longer_line_gets_no_draft():
+    # the recognizer wrote five words at once after the first: "from" is 1 of 6, under the minimum
+    script = [("partial", "from"), ("partial", "from the day after tomorrow and"),
+              ("partial", "from the day after tomorrow and the"), ("final", "from the day after tomorrow and the next")]
+    s = StreamingASRSession(SessionConfig(source_lang="en", partial_interval_ms=0, draft_stable_partials=2),
+                            {"sherpa-zipformer": ScriptedEngine(script)})
+    msgs = []
+    for _ in range(len(script)):
+        msgs.extend(s.feed(pcm_frame()))
+    partials = [m for m in msgs if m["type"] == "partial"]
+    assert [m.get("stable_text", "") for m in partials] == ["", "", "from the day after tomorrow and"]
+    # the share rule: with a lower minimum the one word of a two-word line is enough
+    s = StreamingASRSession(SessionConfig(source_lang="en", partial_interval_ms=0, draft_stable_partials=2, draft_min_fraction=0.1),
+                            {"sherpa-zipformer": ScriptedEngine(script)})
+    msgs = []
+    for _ in range(len(script)):
+        msgs.extend(s.feed(pcm_frame()))
+    assert [m.get("stable_text", "") for m in msgs if m["type"] == "partial"] == ["", "from", "from the day after tomorrow and"]
 
 
 def test_the_stable_prefix_is_restored_like_the_caption_is():
@@ -334,3 +376,4 @@ def test_draft_settings_defaults():
 
     cfg = ASRConfig()
     assert (cfg.draft_stable_partials, cfg.draft_debounce_ms, cfg.draft_agree_k) == (3, 1500, 2)
+    assert (cfg.draft_min_words, cfg.draft_min_cjk_chars, cfg.draft_min_fraction) == (3, 4, 0.4)

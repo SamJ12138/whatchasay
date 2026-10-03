@@ -5,6 +5,9 @@ stable_prefix()   the part of the open line that has stopped changing: its leadi
                   words that were the same in the last N partial results.
 DraftScheduler    re-translates that prefix, the newest one only, at most once per
                   debounce interval, and never after the line's final arrived.
+draft_long_enough() whether a stable prefix is worth a draft at all: at least a few
+                  words (CJK: characters) or a good part of the line heard so far, so
+                  a line's first draft is not one word.
 LocalAgreement    what of a draft translation is shown: the longest common prefix of
                   the line's last K draft translations (local agreement), so a draft
                   that rewrites the previous one does not reach the screen until the
@@ -61,6 +64,21 @@ def stable_prefix(history: List[str], n: int) -> str:
     if n == 1:
         k = len(newest)
     return history[-1][:newest[k - 1][1]].strip() if k else ""
+
+
+def draft_long_enough(stable: str, text: str, min_words: int = 3, min_cjk: int = 4, min_fraction: float = 0.4) -> bool:
+    """A stable prefix is worth a draft once it has `min_words` words (`min_cjk` characters
+    when it is CJK) or `min_fraction` of the words of the line heard so far (`text`, the
+    newest partial), whichever comes first. The first drafts of a line used to be one word
+    ("from", "Key"), on screen for a second before the next draft replaced them."""
+    units = _units(stable or "")
+    if not units:
+        return False
+    n, total = len(units), len(_units(text or ""))
+    cjk = all(len(w) == 1 and _is_cjk(w) for w, _ in units)
+    if n >= (min_cjk if cjk else min_words):
+        return True
+    return total > 0 and n >= min_fraction * total
 
 
 def word_count(text: str) -> int:

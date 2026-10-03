@@ -72,7 +72,7 @@ from typing import Callable, Dict, List, Optional
 
 import numpy as np
 
-from .draft import stable_prefix
+from .draft import draft_long_enough, stable_prefix
 from .engine import AsrEvent, AsrSession, SAMPLE_RATE, StreamingASREngine, pcm16_to_float32
 from .. import obs
 
@@ -92,6 +92,9 @@ class SessionConfig:
     lid_max_buffer_s: float = 12.0
     partial_interval_ms: int = 120
     draft_stable_partials: int = 3  # a word is stable after this many partials in a row; 0 = no drafts
+    draft_min_words: int = 3        # a draft only once the stable prefix has this many words...
+    draft_min_cjk_chars: int = 4    # ...(CJK: characters)...
+    draft_min_fraction: float = 0.4  # ...or this share of the line heard so far
 
 
 class StreamingASRSession:
@@ -452,7 +455,8 @@ class StreamingASRSession:
             msg["raw_text"] = ev.text
         if ev.kind == "partial" and self.config.draft_stable_partials > 0 and ev.utterance_id == self._history_utterance:
             stable = stable_prefix(self._partial_history, self.config.draft_stable_partials)
-            if stable:
+            if stable and draft_long_enough(stable, ev.text, self.config.draft_min_words, self.config.draft_min_cjk_chars,
+                                            self.config.draft_min_fraction):
                 msg["stable_text"] = self._restore(stable, ev.lang, False)
         return msg
 

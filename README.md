@@ -392,6 +392,9 @@ objects are JSON; relative paths are relative to `backend/`. Every setting:
 | `SUBTITLE_ASR__DRAFT_STABLE_PARTIALS` | `3` | Draft translation of a line that is still open: a word counts as stable after this many partial results in a row (0 = no drafts) |
 | `SUBTITLE_ASR__DRAFT_DEBOUNCE_MS` | `1500` | The stable part of an open line is re-translated at most once per this many ms (lower: earlier drafts, more rewriting on screen) |
 | `SUBTITLE_ASR__DRAFT_AGREE_K` | `2` | Local agreement: of a draft translation only the start that the line's last K drafts agree on is shown (1 = every draft as it is); halves the rewrites on screen (`docs/latency.md`) |
+| `SUBTITLE_ASR__DRAFT_MIN_WORDS` | `3` | A draft only once the stable part of the line has this many words (or the share below, whichever comes first): no one-word first drafts |
+| `SUBTITLE_ASR__DRAFT_MIN_CJK_CHARS` | `4` | The same minimum in characters for a line in Chinese, Japanese or Korean |
+| `SUBTITLE_ASR__DRAFT_MIN_FRACTION` | `0.4` | Or this share of the words heard so far in the line |
 | `SUBTITLE_ASR__WARMUP_LANGUAGES` | `["en", "zh", "bn"]` | Recognizers loaded at startup so a language switch is instant |
 
 **Cloud providers (off by default; text leaves this computer when on)**
