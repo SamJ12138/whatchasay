@@ -180,7 +180,8 @@ upper row and the current sentence's draft (then its final, briefly) on the lowe
 42 characters (22 for Chinese, Japanese and Korean); only one longer than two rows keeps its newest words, with "…"
 at the start. A
 finished translation stays at least 1.5 s, or its length at 15 characters per second, before the next one can push
-it off the upper row; if the next sentence finishes sooner, it waits on the lower row until then. Its font is
+it off the upper row; if the next sentence finishes sooner, it waits on the lower row until then. In fast dialogue
+that hold shortens toward a floor of 1.0 s as more lines queue up, instead of a line being dropped. Its font is
 4.5 % of the video's height
 (never under 14 px), each line in a rounded box behind the text; *Settings → Display* has the percentage, the
 minimum and the box's opacity, and the popup's **A+** / **A-** change the percentage. On a normal page the block

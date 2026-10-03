@@ -42,7 +42,7 @@ test('a line that finalises before the hold ends waits in row 2; row 1 moves on 
   const rows = R.createRows();
   rows.final('a', 45, 10.0);                         // held until 13.0
   rows.open('b', true, 10.5);
-  rows.final('b', 20, 11.0);                         // too soon: a is held
+  rows.final('b', 20, 11.0);                         // too soon: a is held; b is on screen in row 2, so a keeps its whole hold
   assert.deepEqual(view(rows), ['a', 'b:final']);
   assert.equal(rows.nextWake(), 13.0);
   assert.equal(rows.tick(12.9), false);
@@ -65,16 +65,64 @@ test('a draft of the next line waits while row 2 holds a final, and takes row 2 
   assert.deepEqual(view(rows), ['b', 'c:draft']);
 });
 
-test('fast speech: a third final inside the hold pushes the oldest out; the newest is always on screen', () => {
+test('fast speech: a third final makes the second wait unseen and shortens row 1\'s hold toward the floor', () => {
   const rows = R.createRows();
-  rows.final('a', 60, 10.0);                         // held until 14.0
-  rows.final('b', 20, 10.6);
-  rows.final('c', 20, 11.2);
-  assert.deepEqual(view(rows), ['b', 'c:final']);
-  // b appeared at 10.6, so it is held until 12.1; c moves up then
-  assert.equal(rows.nextWake(), 12.1);
-  rows.tick(12.1);
+  rows.final('a', 60, 10.0);                         // nominal 4.0 s: alone, held until 14.0
+  assert.equal(rows.nextWake(), null);
+  rows.final('b', 30, 10.6);                         // on screen in row 2: a keeps its hold
+  assert.deepEqual(view(rows), ['a', 'b:final']);
+  assert.equal(rows.nextWake(), 14.0);
+  rows.final('c', 20, 11.2);                         // before this batch: a pushed out here, after 1.2 s
+  assert.deepEqual(view(rows), ['a', 'c:final']);    // now: c is the newest on screen, b waits unseen...
+  assert.deepEqual(rows.view().waiting, ['b']);
+  assert.equal(rows.nextWake(), 12.5);               // ...and a's hold is half-way to the floor: 2.5 s
+  assert.equal(rows.drops(), 0);
+  rows.tick(12.5);
+  assert.deepEqual(view(rows), ['b', 'c:final']);    // b next, in order; its 0.6 s in row 2 count: nominal 2.0, until 13.9
+  assert.ok(Math.abs(rows.nextWake() - 13.9) < 1e-9, rows.nextWake());
+  rows.tick(13.9);
   assert.deepEqual(view(rows), ['c', null]);
+});
+
+test('two lines waiting unseen bring the hold to the floor, never under it; they take row 1 in order', () => {
+  const rows = R.createRows();
+  rows.final('a', 60, 10.0);
+  rows.final('b', 30, 10.3);
+  rows.final('c', 20, 10.6);                         // b unseen: a's hold 2.5 s
+  assert.equal(rows.nextWake(), 12.5);
+  rows.final('d', 20, 10.9);                         // b and c unseen: the floor; a has had 0.9 s, so it stays to 11.0
+  assert.deepEqual(view(rows), ['a', 'd:final']);
+  assert.deepEqual(rows.view().waiting, ['b', 'c']);
+  assert.equal(rows.nextWake(), 11.0);
+  rows.tick(11.0);
+  assert.deepEqual(view(rows), ['b', 'd:final']);    // b: one unseen (c): nominal 2.0 -> 1.5, of which 0.3 s in row 2 earlier: until 12.2
+  assert.ok(Math.abs(rows.nextWake() - 12.2) < 1e-9, rows.nextWake());
+  rows.tick(12.2);
+  assert.deepEqual(view(rows), ['c', 'd:final']);    // c: nothing unseen: nominal 1.5, 0.3 s of it earlier: until 13.4
+  assert.ok(Math.abs(rows.nextWake() - 13.4) < 1e-9, rows.nextWake());
+  rows.tick(13.4);
+  assert.deepEqual(view(rows), ['d', null]);
+  assert.equal(rows.drops(), 0);
+});
+
+test('a line is dropped only when the floor is reached and the backlog is full', () => {
+  const rows = R.createRows({ maxBacklog: 2 });
+  rows.final('a', 60, 10.0);
+  rows.final('b', 20, 10.2);
+  rows.final('c', 20, 10.4);
+  rows.final('d', 20, 10.6);                         // a still under the floor; b, c wait; d is the newest
+  assert.deepEqual(rows.view().waiting, ['b', 'c']);
+  rows.final('e', 20, 10.8);                         // a fourth: the backlog is full, the oldest waiting line goes
+  assert.deepEqual(rows.view().waiting, ['c', 'd']);
+  assert.deepEqual(view(rows), ['a', 'e:final']);
+  assert.equal(rows.drops(), 1);
+  assert.equal(R.createRows({ floorS: 0.5 }).minDisplay(10), 1.5);   // the floor caps the scaled hold, not the nominal one
+  assert.equal(rows.hold(30, 0), 2);                 // nominal: 30 chars / 15
+  assert.equal(rows.hold(30, 1), 1.5);               // one waiting: half-way to the floor
+  assert.equal(rows.hold(45, 1), 2);
+  assert.equal(rows.hold(45, 2), 1);                 // two waiting: the floor
+  assert.equal(rows.hold(45, 5), 1);
+  assert.equal(R.createRows({ floorS: 1.2 }).hold(45, 2), 1.2);
 });
 
 test('a revision of a final updates its length without moving it', () => {
@@ -118,36 +166,81 @@ test('removing the newest line clears both rows (silence); removing row 1 alone 
   assert.deepEqual(view(rows), [null, null]);
 });
 
-test('a scripted live sequence never shows a final in row 1 for less than its minimum', () => {
-  const rows = R.createRows();
-  const shown = {};   // cue -> [first, last] in row 1 or row 2 as a final
-  let t = 0;
+// The scripted fast-speech sequences: 12 lines, lengths 5-70 chars; a line opens at T, has draft
+// text at T+0.3, its final at T+1.0, and the next line opens after a gap: 0.6-2.4 s (the latency
+// tests' pace), 0.5 s, 0.2 s, and 0 s (a final every second). The clock ticks every 0.1 s. Before
+// the backlog rule (commit 81b940c) a third final inside a hold pushed the oldest line out, however
+// briefly it had been seen: drops per 12 lines were 0, 3, 5 and 6; lines shown for less than their
+// nominal minimum 0, 3, 5 and 5; none under 1.0 s on these sequences (shortest 1.4 s), but the rule
+// allowed it (three finals 0.6 s apart: the first out at 0.6 s). Now the hold moves toward the
+// floor with the lines waiting unseen behind row 2 (half-way with one, the floor with two) and a
+// line leaves only once it has had that hold: drops 0, 0, 0 and 0; lines under their nominal
+// minimum the same 0, 3, 5 and 5 (the shortened hold takes the place of the push-out, and those
+// lines had already had 1.4 s or more); none under the floor; a line may wait unseen for a few
+// tenths, and is dropped only when more than maxBacklog wait.
+function scripted(rows, gapOf) {
+  const shown = {};   // cue -> [first, last] seen as a final in row 1 or row 2
+  const chars = {};
+  const events = [];
+  let now = 0;
+  let T = 0;
+  for (let i = 0; i < 12; i++) {
+    const cue = 'l' + i;
+    chars[cue] = 5 + (i * 13) % 66;
+    events.push([T, () => rows.open(cue, false, now)], [T + 0.3, () => rows.open(cue, true, now)], [T + 1.0, () => rows.final(cue, chars[cue], now)]);
+    T += 1.0 + gapOf(i);
+  }
   const log = () => {
     const v = rows.view();
     for (const e of [v.row1, v.row2 && v.row2.kind === 'final' ? v.row2 : null]) {
       if (!e) continue;
-      shown[e.cueId] = shown[e.cueId] || [t, t];
-      shown[e.cueId][1] = t;
+      shown[e.cueId] = shown[e.cueId] || [now, now];
+      shown[e.cueId][1] = now;
     }
   };
-  const chars = {};
-  // 12 lines, a new one every 0.6-2.4 s, finals 1 s after the words start, lengths 5-70
-  const event = (fn) => { rows.tick(t); log(); fn(); log(); };   // what was up until the event, then after it
-  for (let i = 0; i < 12; i++) {
-    const cue = 'l' + i;
-    chars[cue] = 5 + (i * 13) % 66;
-    event(() => rows.open(cue, false, t));
-    t += 0.3; event(() => rows.open(cue, true, t));
-    t += 0.7; event(() => rows.final(cue, chars[cue], t));
-    const gap = 0.6 + (i % 4) * 0.6;
-    for (let s = 0.1; s <= gap; s += 0.1) { t += 0.1; event(() => {}); }   // the clock ticks between lines
+  for (let k = 0; now < T + 6; k++) {
+    now = Math.round(k * 100) / 1000;
+    rows.tick(now);
+    log();
+    for (const [due, fn] of events) if (Math.abs(due - now) < 1e-6) { fn(); log(); }
   }
-  for (let s = 0.1; s <= 6; s += 0.1) { t += 0.1; event(() => {}); }
-  const minimums = Object.entries(shown).map(([cue, [a, b]]) => ({ cue, shown: b - a, min: rows.minDisplay(chars[cue]) }));
-  const tooShort = minimums.filter((m) => m.shown + 0.11 < m.min);   // one tick of slack
-  // fast speech can push one line out early (three finals inside one hold); never more
-  assert.ok(tooShort.length <= 1, JSON.stringify(tooShort));
-  assert.ok(minimums.length === 12);
+  const slack = 0.11;   // one tick
+  const lines = Object.keys(chars).map((cue) => ({ cue, visible: shown[cue] ? shown[cue][1] - shown[cue][0] : 0, nominal: rows.minDisplay(chars[cue]) }));
+  return {
+    lines,
+    cutShort: lines.filter((l) => l.visible + slack < l.nominal).length,
+    underFloor: lines.filter((l) => l.visible + slack < 1.0).length,
+    neverShown: lines.filter((l) => !shown[l.cue]).length,
+    drops: rows.drops(),
+  };
+}
+
+// name, gap between lines, drops before this batch, lines under their nominal minimum before (and now)
+const SEQUENCES = [['gaps 0.6-2.4 s', (i) => 0.6 + (i % 4) * 0.6, 0, 0], ['gap 0.5 s', () => 0.5, 3, 3], ['gap 0.2 s', () => 0.2, 5, 5],
+                   ['gap 0 s', () => 0.0, 6, 5]];
+
+test('the scripted fast-speech sequences: no line is dropped or shown under the floor; no more are cut short than before', () => {
+  assert.equal(SEQUENCES.reduce((n, s) => n + s[2], 0), 14);   // the drops the old rule made on these sequences
+  for (const [name, gapOf, , shortBefore] of SEQUENCES) {
+    const r = scripted(R.createRows(), gapOf);
+    assert.equal(r.drops, 0, name);
+    assert.equal(r.underFloor, 0, `${name}: ${JSON.stringify(r.lines)}`);
+    assert.equal(r.neverShown, 0, name);
+    assert.equal(r.cutShort, shortBefore, `${name}: cut short ${r.cutShort}, before ${shortBefore}: ${JSON.stringify(r.lines)}`);
+    assert.equal(r.lines.length, 12);
+  }
+});
+
+test('a burst of three finals: the first keeps its shortened hold instead of leaving at 0.6 s', () => {
+  const rows = R.createRows();
+  rows.final('a', 60, 10.0);
+  rows.final('b', 20, 10.3);
+  rows.final('c', 20, 10.6);                         // before this batch: a was pushed out here, after 0.6 s
+  assert.deepEqual(view(rows), ['a', 'c:final']);
+  assert.equal(rows.tick(12.4), false);
+  assert.equal(rows.tick(12.5), true);               // half-way from 4.0 s to the 1.0 s floor
+  assert.deepEqual(view(rows), ['b', 'c:final']);
+  assert.equal(rows.drops(), 0);
 });
 
 // ---- the overlay draws the rows ----

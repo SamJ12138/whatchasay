@@ -905,3 +905,25 @@ D4 cloud providers off by default, keys only in backend config.
   after the last word against 0.8-0.9 s, first display 0.7-0.8 s against 0.3-0.4 s, from `docs/latency.md`);
   `tests/test_docs_media.py::test_a9_is_closed_as_a_model_limit_with_the_chunk_number` pins it. No code change.
   Tallies: fast 370, slow 44, node 159.
+- Batch 3 (fast speech; commit "fix: fast speech shortens holds before dropping lines"). `lib/overlay-rows.js`: when
+  finals arrive faster than the display rule allows, the hold of the line in row 1 moves from its nominal value
+  toward a floor (`minDisplayFloorS` 1.0, overlay setting next to `minDisplayS`; `createRows({floorS})`) in
+  proportion to the finals waiting *unseen* behind row 2 (a final on screen in row 2 does not count: nothing is lost
+  while it shows): half-way with one, the floor with two (`maxBacklog` 2), never under the floor
+  (`rows.hold(chars, backlog)`). A line leaves row 1 only once it has had that hold; a final that arrives before
+  then waits unseen (`waiting`, oldest first; the newest final is always on screen in row 2) and takes row 1 in
+  order, its time in row 2 counted (`visibleBefore` / `visibleSince`); a line is dropped only when more than
+  `maxBacklog` wait (`rows.drops()`); 1 ns tolerance on the hold comparison for float noise; a line moved into row
+  1 by `remove()` (no clock) counts as visible from the next tick. The overlay passes the floor and rebuilds the rows
+  when it changes. **Numbers**, scripted sequences of 12 lines (open at T, draft text T+0.3, final T+1.0, the clock
+  ticking every 0.1 s; `tests/overlay-rows.test.js`): drops per 12 lines before -> after: gaps 0.6-2.4 s 0 -> 0,
+  gap 0.5 s 3 -> 0, gap 0.2 s 5 -> 0, a final every second 6 -> 0; lines shown under their nominal minimum
+  unchanged (0, 3, 5, 5: the shortened hold replaces the push-out, each had already had 1.4 s or more); under the
+  1.0 s floor 0 -> 0 (the old rule allowed it: three finals 0.6 s apart took the first off after 0.6 s; it now stays
+  2.5 s); cost: a line can wait unseen a few tenths (gap 0.2 s: up to 0.7 s). Found on the way: the earlier scripted
+  test only ticked the clock between lines, so a line leaving exactly at its hold end was recorded 0.7 s short, and
+  float noise at that moment turned a clean advance into a push-out in the old code (the "1 drop" the first
+  measurement showed on the gentle sequence); the test's clock now ticks throughout. Two older row tests that pinned
+  the push-out were rewritten; the overlay test ("a final that comes too soon waits in row 2") holds as written.
+  `docs/overlay/README.md` "Fast speech" with the table; README overlay paragraph. Tallies: fast 370, slow 44,
+  node 162.

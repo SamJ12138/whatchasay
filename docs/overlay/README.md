@@ -145,7 +145,8 @@ finalised it moves to row 1 and row 2 clears for the next draft. A final stays a
 **max(1.5 s, characters / 15 per s)** (`minDisplayS`, `readCharsPerS`; characters = the row's text as drawn) before
 it can be pushed out of row 1; if the next line finalises sooner, row 1 is held and row 2 shows the newer final
 until the hold ends, and a draft of the line after that waits until row 2 is free. Fast speech (a third final
-inside one hold) pushes the oldest line out early: the newest line is always on screen. The source line, when on,
+inside one hold) pushed the oldest line out early in this version, so the newest line was always on screen; since
+the section "Fast speech" below the hold shortens instead and nothing is pushed out. The source line, when on,
 is a third dimmer row for the current line only (the words being recognised, else the current line's words).
 Each row is **one visual row** (`rowsPerLine` 1): a longer text keeps its newest words with an ellipsis at the
 start, so the block stays two rows of the translation font (line-height 1.2, padding 0.1 em) plus a 1.2 % margin
@@ -213,3 +214,34 @@ of the samples on the YouTube page (`test_overlay_browser.py`).
 `truncated`.
 
 ![Rolling rows on the YouTube page in fullscreen: the finished line above, the next line's draft below](../demo-youtube.gif)
+
+## Fast speech (commit after `81b940c`)
+
+When finals arrive faster than the display rule allows, the rolling rows used to push the oldest line out: a third
+final inside one hold took row 1 from a line however briefly it had been seen (three finals 0.6 s apart: the first
+gone after 0.6 s). Now the hold shrinks instead (`lib/overlay-rows.js`): the minimum display time of the line in
+row 1 moves from its nominal value toward a floor, **`minDisplayFloorS`, 1.0 s** (overlay setting, not in Options),
+in proportion to the lines waiting *unseen* behind row 2 (a final on screen in row 2 costs nothing, so it does not
+count): half-way with one line waiting, the floor with two (`maxBacklog`), never under the floor. A line leaves row 1
+only once it has had that hold; a final that arrives before then waits unseen (the newest is always on screen in
+row 2) and takes row 1 in order, the time it was visible in row 2 counted; a line is dropped only when more than
+`maxBacklog` wait (`rows.drops()` counts them).
+
+Measured on scripted sequences of 12 lines (lengths 5-70 characters, a line opens at T, its draft text at T+0.3,
+its final at T+1.0, the next line after a gap; the clock ticks every 0.1 s; `tests/overlay-rows.test.js`):
+
+| Gap between lines | Drops per 12 lines, before -> after | Lines shown under their nominal minimum, before -> after | Shortest time a line was on screen |
+|---|---|---|---|
+| 0.6-2.4 s (the latency tests' pace) | 0 -> 0 | 0 -> 0 | 1.6 s |
+| 0.5 s | 3 -> **0** | 3 -> 3 | 1.5 s |
+| 0.2 s | 5 -> **0** | 5 -> 5 | 1.4 s |
+| 0 s (a final every second) | 6 -> **0** | 5 -> 5 | 1.4 s |
+| three finals 0.6 s apart | the first out after 0.6 s -> stays 2.5 s (half-way from 4.0 s to the floor) | | |
+
+A drop is a line taken off the screen before the rule's hold. The lines shown for less than their nominal minimum
+are the same lines as before: they now leave by their shortened hold instead of being pushed out, and on these
+sequences each had already had 1.4 s or more; no line went under the floor on either side, but the old rule
+allowed it (the burst row). The cost: a line can wait unseen for a few tenths of a second (gap 0.2 s: up to 0.7 s)
+before it takes row 1.
+
+**Setting added:** `minDisplayFloorS` 1.0 (overlay setting, next to `minDisplayS` and `readCharsPerS`).

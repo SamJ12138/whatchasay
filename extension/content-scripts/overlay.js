@@ -40,6 +40,7 @@ class SubtitleOverlay {
       maxCharsCJK: 22,         // ...for zh / ja / ko
       minDisplayS: 1.5,        // a final translation stays at least this long...
       readCharsPerS: 15,       // ...or its length / this many characters per second
+      minDisplayFloorS: 1.0,   // ...shortened toward this floor when lines queue up behind it (fast speech)
       // Dynamic colors per language
       primaryColor: '#ffffff',
       secondaryColor: '#ffeb3b',
@@ -112,7 +113,7 @@ class SubtitleOverlay {
    */
   _newRows() {
     const R = globalThis.STOverlayRows;
-    if (R) return R.createRows({ minDisplayS: this.settings.minDisplayS, charsPerS: this.settings.readCharsPerS });
+    if (R) return R.createRows({ minDisplayS: this.settings.minDisplayS, charsPerS: this.settings.readCharsPerS, floorS: this.settings.minDisplayFloorS });
     // no module (an old injection): the newest line only
     let only = null;
     return { open(c) { only = { cueId: c, kind: 'draft' }; }, final(c) { only = { cueId: c, kind: 'final' }; },
@@ -546,7 +547,7 @@ class SubtitleOverlay {
    */
   updateSettings(newSettings) {
     Object.assign(this.settings, newSettings);
-    if ('minDisplayS' in newSettings || 'readCharsPerS' in newSettings) {
+    if ('minDisplayS' in newSettings || 'readCharsPerS' in newSettings || 'minDisplayFloorS' in newSettings) {
       const keep = this.rows.view();
       this.rows = this._newRows();
       if (keep.row1) this.rows.final(keep.row1.cueId, 0, this._now() - 1e6);
