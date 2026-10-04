@@ -184,8 +184,12 @@ class SpokenLanguageId:
 
     def identify(self, samples_f32, allowed: Optional[Iterable[str]] = None) -> Optional[str]:
         """Return an ISO-639-1 code (e.g. 'en', 'zh', 'bn') or None (undecided)."""
+        return self.identify_scored(samples_f32, allowed)[0]
+
+    def identify_scored(self, samples_f32, allowed: Optional[Iterable[str]] = None) -> Tuple[Optional[str], Optional[float]]:
+        """(code or None, the renormalised probability of the likeliest allowed language)."""
         if not self.available():
-            return None
+            return None, None
         probs = self.probabilities(samples_f32)
         allowed = list(allowed) if allowed is not None else list(probs)
         lang, info = choose_language(probs, allowed, self.min_confidence)
@@ -196,4 +200,4 @@ class SpokenLanguageId:
                     error_message=f"best allowed language below the confidence floor {self.min_confidence}")
         else:
             obs.log("lid_scores", "success", allowed=allowed, **info)
-        return lang
+        return lang, info["confidence"]

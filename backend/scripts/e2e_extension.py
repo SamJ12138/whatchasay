@@ -378,6 +378,37 @@ class LineCollector:
         return list(self._kept.values())
 
 
+def run_log_records(run_id: str | None, backend_dir: Path | None) -> list[dict]:
+    """The backend's run log (backend/logs/run_<run_id>.jsonl, the backend's and the service
+    worker's records; the page console carries only the content script's)."""
+    path = Path(os.environ.get("SUBTITLE_OBS_DIR") or (backend_dir or BACKEND) / "logs") / f"run_{run_id}.jsonl"
+    if not run_id or not path.exists():
+        return []
+    out = []
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        try:
+            out.append(json.loads(line))
+        except ValueError:
+            continue
+    return out
+
+
+def prior_summary(records: list[dict]) -> dict:
+    """The language prior of the run (docs/page-prior.md): what the extension sent (ext_prior: the
+    prior, its votes, whether the channel memory had an entry), the language the session started
+    with because of it (lid_prior), and what language ID confirmed: right means the favourite
+    was confirmed (None without a favourite)."""
+    def ctx(stage, event="success"):
+        return next(((r.get("context") or {}) for r in records if r.get("stage") == stage and r.get("event") == event
+                     and (r.get("context") or {}).get("action") is None), None)
+    ext, start, done = ctx("ext_prior"), ctx("lid_prior"), ctx("lid")
+    favoured = (start or {}).get("favoured")
+    return {"prior": (ext or {}).get("prior"), "votes": (ext or {}).get("votes") or [],
+            "remembered": (ext or {}).get("remembered"), "favoured": favoured,
+            "confirmed": (done or {}).get("lang"), "attempt": (done or {}).get("attempt"),
+            "switched": (done or {}).get("switched"), "right": (done or {}).get("prior_right") if favoured else None}
+
+
 def line_latency_summary(records: list[dict], play_t: float | None) -> dict:
     """Per-line latencies as the content script logged them (stage line_latency,
     docs/latency.md), in line order, and the first confirmed-language subtitle: seconds
@@ -1675,6 +1706,7 @@ def main() -> int:
                 page.wait_for_timeout(1500)  # let the other target's translation land too
                 summary["tm_rows_after"] = tm_rows(args.port)
                 summary["line_latency"] = line_latency_summary(records, play_t)
+                summary["language_prior"] = prior_summary(run_log_records(summary.get("run_id"), args.backend_dir))
                 summary["asr_models"] = asr_models(args.port)
                 summary["finals"] = [(r.get("context") or {}).get("text_len") for r in records
                                      if r.get("stage") == "ext_render" and (r.get("context") or {}).get("kind") == "final"][:5]

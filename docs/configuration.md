@@ -86,6 +86,8 @@ objects are JSON; relative paths are relative to `backend/`. Every setting:
 | `SUBTITLE_ASR__LID_FIRST_WINDOW_S` | `1.0` | First, early attempt after this many seconds of voiced audio; early, only another language than the first guess is accepted, twice in a row |
 | `SUBTITLE_ASR__LID_RETRY_STEP_S` | `0.5` | Audio between early attempts (seconds; voiced or not) |
 | `SUBTITLE_ASR__LID_MIN_CONFIDENCE` | `0.6` | Spoken-language ID answers only at or above this confidence among the spoken languages |
+| `SUBTITLE_ASR__LID_PRIOR_THRESHOLD` | `0.6` | The page's language prior (docs/page-prior.md): its favourite is the first recognizer at or above this, else English |
+| `SUBTITLE_ASR__LID_PRIOR_FLOOR_EN` | `0.97` | With a prior favouring English, one language-ID answer confirms it early only at or above this (whisper-tiny says English up to 0.97 on the first second of Mandarin and Bengali) |
 | `SUBTITLE_ASR__PARTIAL_INTERVAL_MS` | `120` | Minimum gap between partial captions (ms) |
 | `SUBTITLE_ASR__DRAFT_STABLE_PARTIALS` | `3` | Draft translation of a line that is still open: a word counts as stable after this many partial results in a row (0 = no drafts) |
 | `SUBTITLE_ASR__DRAFT_DEBOUNCE_MS` | `1500` | The stable part of an open line is re-translated at most once per this many ms (lower: earlier drafts, more rewriting on screen) |

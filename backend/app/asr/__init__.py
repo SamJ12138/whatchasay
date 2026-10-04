@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -78,17 +78,18 @@ def get_lid() -> SpokenLanguageId:
     return _lid
 
 
-def _lid_identify(audio: np.ndarray, allowed: List[str]) -> Optional[str]:
+def _lid_identify(audio: np.ndarray, allowed: List[str]) -> Tuple[Optional[str], Optional[float]]:
     lid = get_lid()
     if not lid.available():
-        return None
-    return lid.identify(audio, allowed)
+        return None, None
+    return lid.identify_scored(audio, allowed)
 
 
 def create_session(
     source_lang: str = "auto",
     target_langs: Optional[List[str]] = None,
     engine: str = "auto",
+    prior: Optional[Dict[str, float]] = None,
 ) -> StreamingASRSession:
     cfg = SessionConfig(
         source_lang=source_lang,
@@ -103,6 +104,9 @@ def create_session(
         draft_min_words=settings.asr.draft_min_words,
         draft_min_cjk_chars=settings.asr.draft_min_cjk_chars,
         draft_min_fraction=settings.asr.draft_min_fraction,
+        prior=dict(prior or {}),
+        lid_prior_threshold=settings.asr.lid_prior_threshold,
+        lid_prior_floor_en=settings.asr.lid_prior_floor_en,
     )
     return StreamingASRSession(cfg, get_engines(), lid_identify=_lid_identify, restore_text=_restore_text)
 

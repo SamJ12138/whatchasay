@@ -32,6 +32,17 @@ Language handling
                         floor is accepted; no answer at the last attempt ->
                         fallback.
 
+                        A language prior (config.prior, {lang: probability} from
+                        the page and the extension's channel memory; docs/page-prior.md)
+                        whose favourite reaches lid_prior_threshold makes that
+                        language the first recognizer instead. Confirming it then
+                        needs one attempt at or above the floor (English: at or
+                        above lid_prior_floor_en, whisper-tiny's "en" on the first
+                        second of Mandarin and Bengali reached 0.97); switching away
+                        from it needs two early attempts in a row, as above, and
+                        English only from the full window on (the same habit). No
+                        prior, or one under the threshold: as above, unchanged.
+
 Messages (JSON, sent by the WebSocket endpoint):
     {type:'partial', utterance_id, text, lang, lang_status, confirmed, t0, t1, w_first, w_last, w_session
                      [, stable_text]}   stable_text: the leading words of the open line that were the same
@@ -78,6 +89,25 @@ from .. import obs
 
 logger = logging.getLogger(__name__)
 
+# whisper-tiny answers "en" for noise and for the first second of Mandarin and Bengali speech
+# (docs/latency.md, docs/page-prior.md): with a prior, an early answer may not switch to it
+LATE_ONLY_LANGS = ("en",)
+
+
+def parse_prior(raw: Optional[str], allowed: List[str]) -> Dict[str, float]:
+    """The prior from the /ws/asr query, "en:0.1,zh:0.8,bn:0.1": languages outside `allowed`
+    and values that are not probabilities are dropped; a total over 1 (beyond rounding) drops it all."""
+    out: Dict[str, float] = {}
+    for part in (raw or "").split(","):
+        lang, sep, value = part.partition(":")
+        try:
+            p = float(value)
+        except ValueError:
+            continue
+        if sep and lang.strip() in allowed and 0.0 <= p <= 1.0:  # nan fails both comparisons
+            out[lang.strip()] = p
+    return out if sum(out.values()) <= 1.01 else {}  # the extension rounds each to 3 decimals
+
 
 @dataclass
 class SessionConfig:
@@ -95,6 +125,9 @@ class SessionConfig:
     draft_min_words: int = 3        # a draft only once the stable prefix has this many words...
     draft_min_cjk_chars: int = 4    # ...(CJK: characters)...
     draft_min_fraction: float = 0.4  # ...or this share of the line heard so far
+    prior: Dict[str, float] = field(default_factory=dict)  # {lang: probability} before any audio (page, memory)
+    lid_prior_threshold: float = 0.6  # the prior's favourite is the first recognizer at or above this
+    lid_prior_floor_en: float = 0.97  # one attempt confirms a favoured English only at or above this
 
 
 class StreamingASRSession:
@@ -127,6 +160,7 @@ class StreamingASRSession:
         self._lid_next_early: Optional[int] = None    # samples_received at which the next one runs
         self._lid_full_attempts = 0                   # attempts on the full window (at most 2)
         self._lid_early_answer: Optional[str] = None  # what the previous early attempt said
+        self._prior_lang: Optional[str] = None        # the prior's favourite, when it is the first recognizer
 
         self._last_partial_sent = 0.0
         self._pending_partial: Optional[AsrEvent] = None
@@ -151,10 +185,18 @@ class StreamingASRSession:
             self.lang_status = "manual"
             self._lid_done = True
         else:
-            provisional = self._provisional_language()
+            self._prior_lang = self._prior_favourite()
+            provisional = self._prior_lang or self._provisional_language()
             self._start_recognizer(provisional)
-            self._startup_msgs.append({"type": "lid", "lang": provisional, "source": "provisional", "confirmed": False,
-                                       "status": "provisional"})
+            msg = {"type": "lid", "lang": provisional, "source": "prior" if self._prior_lang else "provisional",
+                   "confirmed": False, "status": "provisional"}
+            if self._prior_lang:
+                msg["prior"] = round(config.prior[self._prior_lang], 3)
+            self._startup_msgs.append(msg)
+            if config.prior:
+                obs.log("lid_prior", "success" if self._prior_lang else "skip", prior=config.prior,
+                        favoured=self._prior_lang, provisional=provisional, threshold=config.lid_prior_threshold,
+                        error_message=None if self._prior_lang else "no language reaches the threshold")
 
     # ------------------------------------------------------------------ setup
 
@@ -166,6 +208,20 @@ class StreamingASRSession:
             except RuntimeError:
                 continue
         return self.config.allowed_langs[0]
+
+    def _prior_favourite(self) -> Optional[str]:
+        """The prior's likeliest language if it reaches the threshold and can be recognised."""
+        prior = {l: p for l, p in (self.config.prior or {}).items() if l in self.config.allowed_langs}
+        if not prior:
+            return None
+        lang = max(prior, key=prior.get)
+        if prior[lang] < self.config.lid_prior_threshold:
+            return None
+        try:
+            self._pick_engine(lang)
+        except RuntimeError:
+            return None
+        return lang
 
     def _pick_engine(self, lang: str) -> StreamingASREngine:
         wanted = self.config.engine
@@ -224,6 +280,7 @@ class StreamingASRSession:
             out.append({"type": "lid", "lang": self.lang, "source": "provisional", "confirmed": False, "status": "provisional"})
             return out
         self.config.source_lang = lang
+        self._prior_lang = None
         if self.asr is not None and lang == self.lang:
             self.lang_confirmed = True
             self.lang_status = "manual"
@@ -307,12 +364,15 @@ class StreamingASRSession:
             return []
         final_attempt = self._lid_full_attempts >= 2
 
-        lang = None
+        lang, confidence = None, None
         buffered_s = round(self._lid_buffer_samples / SAMPLE_RATE, 2)
         if self.lid_identify is not None:
             t0 = time.time()
             try:
+                # an answer, or (answer, confidence of the likeliest allowed language)
                 lang = self.lid_identify(np.concatenate(self._lid_buffer), self.config.allowed_langs)
+                if isinstance(lang, tuple):
+                    lang, confidence = lang
             except Exception as e:
                 logger.warning("LID failed: %s", e)
                 self._lid_errors.append(e)
@@ -323,12 +383,18 @@ class StreamingASRSession:
 
         if early and self.lid_identify is not None:
             # A short window is weak evidence. Accepted early: a language other than the provisional
-            # one that two attempts in a row agree on. The provisional language waits for the full window.
+            # one that two attempts in a row agree on. The provisional language waits for the full
+            # window, unless the prior favoured it: then one answer above the floor confirms it.
             agreed = lang is not None and lang != self.lang and lang == self._lid_early_answer
+            if self._prior_lang is not None and lang in LATE_ONLY_LANGS and lang != self._prior_lang:
+                agreed = False
+            favoured = (lang is not None and lang == self._prior_lang and lang == self.lang
+                        and (lang != "en" or confidence is None or confidence >= self.config.lid_prior_floor_en))
             self._lid_early_answer = lang
-            if not agreed:
+            if not (agreed or favoured):
                 obs.log("lid", "skip", duration_ms=self.stats["lid_ms"], attempt=self._lid_attempts, buffered_s=buffered_s,
-                        early=True, answer=lang, error_message="early attempt: not decided yet")
+                        early=True, answer=lang, confidence=confidence, prior=self._prior_lang,
+                        error_message="early attempt: not decided yet")
                 return []
 
         if lang is None:
@@ -363,7 +429,9 @@ class StreamingASRSession:
         self.lang_status = "confirmed"
         out: List[dict] = []
         obs.log("lid", "success", duration_ms=self.stats["lid_ms"], lang=lang, provisional=self.lang,
-                switched=lang != self.lang, attempt=self._lid_attempts, buffered_s=buffered_s, early=early)
+                switched=lang != self.lang, attempt=self._lid_attempts, buffered_s=buffered_s, early=early,
+                confidence=confidence, prior=self._prior_lang,
+                prior_right=None if self._prior_lang is None else lang == self._prior_lang)
         if lang != self.lang:
             # Wrong provisional guess: swap recognizer, tell UI to drop provisional captions,
             # and replay the buffered audio so the first words are not lost.
@@ -477,6 +545,7 @@ class StreamingASRSession:
             "lang": self.lang,
             "lang_confirmed": self.lang_confirmed,
             "lang_status": self.lang_status,
+            "prior": self._prior_lang,
             "engine": self.engine.name if self.engine else None,
             "target_langs": self.config.target_langs,
             "seconds_received": round(self.samples_received / SAMPLE_RATE, 1),

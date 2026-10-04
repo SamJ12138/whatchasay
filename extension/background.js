@@ -16,6 +16,7 @@ import './lib/caption-mode.js';
 import './lib/corrections.js';
 import './lib/glossary.js';
 import './lib/settings-migration.js';
+import './lib/language-prior.js';
 
 const obs = globalThis.STObs;
 obs.init({ context: 'background' });
@@ -264,7 +265,7 @@ function ensureContentScript(tabId) {
 // Live captions (ASR) orchestration
 // ---------------------------------------------------------------------------
 
-const asrState = { tabId: null, capturing: false, sourceLang: 'auto', targetLangs: [], lastStatus: null };
+const asrState = { tabId: null, capturing: false, sourceLang: 'auto', targetLangs: [], lastStatus: null, memoryKey: null };
 
 async function loadAsrState() {
   try {
@@ -289,6 +290,55 @@ async function ensureOffscreen() {
     reasons: ['USER_MEDIA'],
     justification: 'Capture tab audio for live subtitles and translation',
   });
+}
+
+// ---------------------------------------------------------------------------
+// Language prior (docs/page-prior.md): what the page and the channel memory say
+// about the spoken language, sent with the start so the first recognizer can be
+// the likely one. Language ID still decides; the memory learns what it decided.
+// ---------------------------------------------------------------------------
+
+const languagePrior = globalThis.STLanguagePrior;
+const MEMORY_STORE = 'languageMemory';
+
+/** {prior: {en, zh, bn} | null, key, votes}; never throws (no prior is today's start). */
+async function languagePriorFor(tabId, sessionId) {
+  const t0 = performance.now();
+  try {
+    // the page's own world: YouTube's player response is a page variable (activeTab gives access)
+    const [r] = await chrome.scripting.executeScript({
+      target: { tabId, frameIds: [0] }, world: 'MAIN', func: languagePrior.collectPageSignals,
+    });
+    const signals = (r && r.result) || null;
+    const key = languagePrior.memoryKey(signals);
+    const memory = (await chrome.storage.local.get(MEMORY_STORE))[MEMORY_STORE] || {};
+    const { prior, votes } = languagePrior.priorFrom(signals, key ? memory[key] : null);
+    // signal names and languages only: no titles, no channel ids in the logs
+    obs.log('ext_prior', prior ? 'success' : 'skip', { session_id: sessionId, duration_ms: performance.now() - t0, prior,
+      votes: votes.map((v) => `${v.signal}:${v.lang}`), remembered: !!(key && memory[key]) });
+    return { prior, key, votes };
+  } catch (e) {
+    obs.log('ext_prior', 'fail', { session_id: sessionId, duration_ms: performance.now() - t0, error_type: 'process',
+      error_message: e.message || String(e), degraded: 'no prior: the session starts as without one' });
+    return { prior: null, key: null, votes: [] };
+  }
+}
+
+/** Language ID confirmed a language on the captured tab: remember it for its channel / site. */
+async function rememberLanguage(lang) {
+  const key = asrState.memoryKey;
+  if (!key) return;
+  try {
+    const memory = (await chrome.storage.local.get(MEMORY_STORE))[MEMORY_STORE] || {};
+    const before = memory[key];
+    const next = languagePrior.remember(memory, key, lang, Date.now());
+    await chrome.storage.local.set({ [MEMORY_STORE]: next });
+    obs.log('ext_prior', 'success', { session_id: asrState.sessionId, action: 'remember', lang,
+      was: before ? before.lang : null, misses: next[key] ? next[key].misses : null });
+  } catch (e) {
+    obs.log('ext_prior', 'fail', { session_id: asrState.sessionId, action: 'remember', error_type: 'process',
+      error_message: e.message || String(e) });
+  }
 }
 
 function sendToOffscreen(msg) {
@@ -324,6 +374,9 @@ async function startAsr(tabId, overrides = {}) {
     await ensureOffscreen();
     const sourceLang = overrides.sourceLang || settings.asrSourceLang || 'auto';
     const targetLangs = overrides.targetLangs || settings.targetLanguages || ['en'];
+    // only Auto-detect uses a prior; a declared language needs none
+    step = 'prior';
+    const prior = sourceLang === 'auto' ? await languagePriorFor(tabId, sessionId) : { prior: null, key: null };
     step = 'ASR_START';
     const res = await sendToOffscreen({
       type: 'ASR_START',
@@ -335,11 +388,12 @@ async function startAsr(tabId, overrides = {}) {
       translationEngine: settings.translationEngine || 'auto',
       serverUrl: asrUrlFrom(settings.serverUrl),
       sessionId,
+      prior: languagePrior.encodePrior(prior.prior),
     });
     if (!res || !res.ok) {
       throw new Error((res && res.error) || 'Failed to start capture');
     }
-    Object.assign(asrState, { tabId, capturing: true, sourceLang, targetLangs, sessionId });
+    Object.assign(asrState, { tabId, capturing: true, sourceLang, targetLangs, sessionId, memoryKey: prior.key });
     await saveAsrState();
     // the content script answers once the tab's audio output is primed (A11: a video played
     // after this is captured from its first sample), so the start is reported after that;
@@ -370,7 +424,7 @@ async function stopAsr() {
     obs.log('ext_capture', 'skip', { session_id: sessionId, error_type: 'process', error_message: 'ASR_STOP not delivered: ' + (e.message || e) });
   }
   const tabId = asrState.tabId;
-  Object.assign(asrState, { tabId: null, capturing: false, sessionId: null });
+  Object.assign(asrState, { tabId: null, capturing: false, sessionId: null, memoryKey: null });
   await saveAsrState();
   if (tabId) chrome.tabs.sendMessage(tabId, { type: 'ASR_STATE', capturing: false }, { frameId: 0 })
     .catch((e) => logRelayFail('ext_relay', e, { session_id: sessionId, msg_type: 'ASR_STATE' }));
@@ -495,6 +549,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       // from the offscreen document -> the captured tab's top frame
       const tabId = message.tabId || asrState.tabId;
       if (message.event && message.event.type === 'status') asrState.lastStatus = message.event;
+      // language ID (not the user, not the prior) confirmed the language: the channel memory learns it
+      if (message.event && message.event.type === 'lid' && message.event.status === 'confirmed' && message.event.source === 'auto') {
+        rememberLanguage(message.event.lang);
+      }
       if (tabId) {
         chrome.tabs.sendMessage(tabId, { type: 'ASR_CAPTION', event: message.event }, { frameId: 0 })
           .catch((e) => logRelayFail('ext_relay', e, { session_id: asrState.sessionId, msg_type: message.event && message.event.type, hop: 'sw->tab' }));

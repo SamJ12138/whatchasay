@@ -336,3 +336,28 @@ def test_glossary_flag_posts_each_term_to_the_running_backend(app_env):
     finally:
         server.should_exit = True
         t.join(timeout=10)
+
+
+def test_prior_summary_reads_the_prior_and_whether_it_was_right():
+    recs = [
+        {"stage": "ext_prior", "event": "success", "context": {"prior": {"en": 0.075, "zh": 0.075, "bn": 0.85},
+                                                               "votes": ["pageScript:bn"], "remembered": False}},
+        {"stage": "lid_prior", "event": "success", "context": {"favoured": "bn", "provisional": "bn"}},
+        {"stage": "lid", "event": "skip", "context": {"attempt": 1}},
+        {"stage": "lid", "event": "success", "context": {"lang": "bn", "attempt": 2, "early": True, "switched": False,
+                                                         "prior": "bn", "prior_right": True, "buffered_s": 1.52}},
+    ]
+    assert h.prior_summary(recs) == {"prior": {"en": 0.075, "zh": 0.075, "bn": 0.85}, "votes": ["pageScript:bn"],
+                                     "remembered": False, "favoured": "bn", "confirmed": "bn", "attempt": 2,
+                                     "switched": False, "right": True}
+    assert h.prior_summary([]) == {"prior": None, "votes": [], "remembered": None, "favoured": None,
+                                   "confirmed": None, "attempt": None, "switched": None, "right": None}
+
+
+def test_run_log_records_reads_the_backend_run_log(tmp_path, monkeypatch):
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    (logs / "run_R1.jsonl").write_text('{"stage": "lid_prior", "event": "success"}\nnot json\n', encoding="utf-8")
+    monkeypatch.delenv("SUBTITLE_OBS_DIR", raising=False)
+    assert h.run_log_records("R1", tmp_path) == [{"stage": "lid_prior", "event": "success"}]
+    assert h.run_log_records("R2", tmp_path) == [] and h.run_log_records(None, tmp_path) == []

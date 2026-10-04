@@ -99,6 +99,7 @@ path runs with caption mode off.
 | Data | Where | How long |
 |---|---|---|
 | Settings, enabled tabs | Chrome (`storage.local`, `storage.session`) | until changed / the browser session ends |
+| The language language ID confirmed per YouTube channel id (elsewhere: per site origin), with how often it was wrong (`languageMemory`, `lib/language-prior.js`; at most 500 keys) | Chrome (`storage.local`) | until *Clear translation memory* in Settings, or the oldest are dropped; nothing of it reaches the backend but the prior it gives (three numbers) |
 | Live-caption (audio) text and translations | an in-memory cache owned by the `/ws/asr` connection (`pipeline.audio_session_policy`) | until the session ends; never in the process-wide cache, the refiner context or the TM |
 | Page-subtitle (caption mode) translations | translation memory (`backend/data/translation_memory.db`) + process-wide memory cache | TM rows deleted at startup when unused for `tm.retention_days` (30) |
 | User corrections | translation memory (`corrections` table + user-corrected rows) | until cleared |

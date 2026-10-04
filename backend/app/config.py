@@ -259,6 +259,12 @@ class ASRConfig(BaseSettings):
     # Spoken-language ID picks the likeliest of `languages` (renormalised over them); below this
     # it stays undecided (provisional language kept). docs/observations.md A7
     lid_min_confidence: float = Field(default=0.6)
+    # Language prior from the page and the extension's channel memory (docs/page-prior.md): its
+    # favourite is the first recognizer at or above lid_prior_threshold, and one attempt confirms
+    # it (English: only at or above lid_prior_floor_en; whisper-tiny's "en" on the first second of
+    # Mandarin and Bengali reached 0.97).
+    lid_prior_threshold: float = Field(default=0.6)
+    lid_prior_floor_en: float = Field(default=0.97)
     partial_interval_ms: int = Field(default=120)
     # Incremental translation (asr/draft.py): the stable prefix of a line that is still open is
     # translated and shown as a draft. A word is stable after this many partials in a row (0 = no

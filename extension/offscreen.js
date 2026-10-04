@@ -4,7 +4,8 @@
  * service worker may be suspended meanwhile; this page is not).
  *
  * Messages from the service worker (all have target: 'offscreen'):
- *   ASR_START  {streamId, tabId, sourceLang, targetLangs, serverUrl, engine, translationEngine}
+ *   ASR_START  {streamId, tabId, sourceLang, targetLangs, serverUrl, engine, translationEngine, prior}
+ *              prior: "en:0.1,zh:0.8,bn:0.1" or '' (lib/language-prior.js), sent in the /ws/asr handshake
  *   ASR_STOP   {tabId}
  *   ASR_CONFIG {tabId, sourceLang?, targetLangs?}
  *   ASR_STATUS {}
@@ -25,6 +26,7 @@ const state = {
   sourceLang: 'auto',
   targetLangs: ['en'],
   translationEngine: 'auto', // auto | chrome | backend
+  prior: '',
   capturing: false,
   framesSent: 0,
   silentFrames: 0,
@@ -74,6 +76,7 @@ async function startCapture(msg) {
   state.sourceLang = msg.sourceLang || 'auto';
   state.targetLangs = (msg.targetLangs && msg.targetLangs.length) ? msg.targetLangs : ['en'];
   state.translationEngine = msg.translationEngine || 'auto';
+  state.prior = msg.prior || '';
   state.framesSent = 0;
   state.silentFrames = 0;
   state.silenceWarned = false;
@@ -193,7 +196,8 @@ function connectWs() {
   return new Promise((resolve, reject) => {
     const sid = obs.getSession();
     const url = `${state.serverUrl}?source_lang=${encodeURIComponent(state.sourceLang)}&target_langs=${encodeURIComponent(state.targetLangs.join(','))}` +
-      (sid ? `&session_id=${encodeURIComponent(sid)}` : '');
+      (sid ? `&session_id=${encodeURIComponent(sid)}` : '') +
+      (state.prior ? `&prior=${encodeURIComponent(state.prior)}` : '');
     const t0 = performance.now();
     const ws = new WebSocket(url);
     ws.binaryType = 'arraybuffer';

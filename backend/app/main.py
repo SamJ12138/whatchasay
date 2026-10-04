@@ -31,6 +31,7 @@ from .translation.glossary import store as glossary_store
 from .translation.pipeline import clear_memory_caches
 from . import asr as asr_pkg
 from .asr.draft import DraftScheduler, LocalAgreement, word_count
+from .asr.session import parse_prior
 from . import obs
 from .security import OriginGuard, allowed_origins, origin_allowed
 
@@ -203,6 +204,8 @@ async def ws_asr(websocket: WebSocket):
                       little-endian float64 capture timestamp (seconds, from the
                       extension's audio clock) when the frame length is odd*2+8;
                       the simple form is raw PCM only.
+      query         : source_lang, target_langs, engine, session_id, prior ("en:0.1,zh:0.8,bn:0.1": what
+                      the page and the extension's channel memory say before any audio; docs/page-prior.md)
       text (JSON)   : {type:'config', source_lang, target_langs, engine}   (cloud_keys: ignored, D4)
                       {type:'stop'}   -> flush pending audio, keep connection
                       {type:'ping'}
@@ -233,9 +236,10 @@ async def ws_asr(websocket: WebSocket):
     source_lang = q.get("source_lang", "auto")
     target_langs = _parse_query_list(q.get("target_langs"), settings.translation.target_languages)
     engine = q.get("engine", "auto")
+    prior = parse_prior(q.get("prior"), list(settings.asr.languages))
 
     try:
-        session = asr_pkg.create_session(source_lang=source_lang, target_langs=target_langs, engine=engine)
+        session = asr_pkg.create_session(source_lang=source_lang, target_langs=target_langs, engine=engine, prior=prior)
     except Exception as e:
         obs.log_exc("ws_connection", e, path="/ws/asr", source_lang=source_lang, phase="create_session")
         raise
@@ -245,6 +249,7 @@ async def ws_asr(websocket: WebSocket):
     memory = audio_session_policy()
     logger.info("ASR WebSocket connected (source=%s targets=%s engine=%s)", source_lang, target_langs, engine)
     obs.log("ws_connection", "start", path="/ws/asr", source_lang=source_lang, target_langs=target_langs, engine=engine,
+            prior=prior or None,
             session_id_from="client" if q.get("session_id") else "backend")
     recv_summary = obs.Summary("ws_receive", path="/ws/asr")
     asr_summary = obs.Summary("asr_chunk")

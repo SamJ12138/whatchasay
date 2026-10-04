@@ -711,7 +711,7 @@ async function dismissCloudNotice() {
  * Clear the backend's translation memory (POST /tm/clear), after a confirmation.
  */
 async function clearMemory() {
-  if (!confirm('Delete everything in the translation memory (translations, your corrections, glossary)? This cannot be undone.')) {
+  if (!confirm('Delete everything in the translation memory (translations, your corrections, glossary) and the languages remembered per channel? This cannot be undone.')) {
     return;
   }
   const host = elements.serverHost?.value || 'localhost';
@@ -723,6 +723,7 @@ async function clearMemory() {
     const n = (data.removed && data.removed.translations) || 0;
     const c = (data.removed && data.removed.corrections) || 0;
     obs.log('ext_http', 'success', { path: '/tm/clear', removed_translations: n, removed_corrections: c });
+    await chrome.storage.local.remove('languageMemory');  // the channel memory of the language prior
     showStatus(`Translation memory cleared (${n} translations, ${c} corrections)`, 'success');
     checkConnection(host, port);
   } catch (error) {
