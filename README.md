@@ -277,9 +277,19 @@ same in three partial results in a row count as stable; once they are three word
 stable part is translated (at most once every 1.5 s), and of the result only the start the last two drafts agree
 on is shown as a draft (local agreement); the final translation replaces it when the line ends. From the moment
 captions start, the extension keeps the tab's audio output running with an inaudible tone, so a video played
-afterwards is captured from its first sample. With *Auto-detect*, language ID
-first runs after one second of speech and switches the recognizer as soon as two attempts in a row agree on
-Mandarin or Bengali; the audio heard until then is replayed into the new recognizer.
+afterwards is captured from its first sample.
+
+**Language detection.** With *Auto-detect*, the page gives the first guess: when you start captions the extension
+reads the title, channel name and description (Han or Bengali script, or Latin), YouTube's own caption language
+and default audio track, and the language detected on the same channel before, and the backend starts the
+recognizer of the likeliest language when the page makes it 60 % likely (else English). All three recognizers
+listen until spoken-language ID (whisper-tiny) confirms one: one answer after the first second of speech confirms
+the page's guess (English only when whisper is 97 % sure, because it says English on the first second of Mandarin
+and Bengali too), two agreeing answers switch to another language, and the confirmed recognizer's text is then
+already on screen, nothing replayed. On the benchmark clips' own pages the first subtitle in a confirmed language
+came 1.3-2.3 s after play where the page was right (median per clip; 1.9-3.7 s before); where it was wrong, 3.1 s
+on one clip (2.4 s before) and 1.9 s on another (3.0 s before). Under one second was the goal and is not reached:
+the first answer needs a second of speech. Evaluation and numbers: `docs/page-prior.md`, `docs/latency.md`.
 
 **Measured latency**, per subtitle line: before the streaming work, after it, and now, with the draft follow-ups
 (Windows 11, i9-13900H, everything on the CPU; three runs per clip in Chromium with the real extension,
@@ -397,9 +407,11 @@ The five a first-time user meets soonest; the full list is in [docs/limitations.
 - Tested end to end on Windows 11 only. Linux runs the fast and extension tests in CI; macOS is untested.
 - Speech recognition covers English, Mandarin and Bengali only. Bengali recognition is the weakest of the three (the
   Bengali model's word error rate is about 18-21 %), and Bengali names come out misspelled.
-- With *Auto-detect*, the first seconds (about 2 for Mandarin or Bengali speech, 4 for English) are recognised as
-  English until detection has heard enough. That text is dimmed under *Detecting language…* and thrown away if the
-  language turns out to be another one; choosing the spoken language avoids the wait.
+- With *Auto-detect*, the first second or two (1.3-2.3 s on the benchmark pages when the page's title or YouTube's
+  caption language points to the spoken language; 1.8-4.5 s when it points elsewhere, e.g. an English title on
+  Bengali speech) are recognised in the page's language, or in English, until detection has heard enough. That text
+  is dimmed under *Detecting language…* and replaced if the language turns out to be another one; choosing the
+  spoken language avoids the wait.
 - A draft translation is the translation of the part of a sentence heard so far. Only the start that the last two
   drafts agree on is shown, so it grows rather than changes under your eyes, but it is short (about two words on
   the live clip) and the final translation still replaces it, which rewrites the line 0.8 times per line on the

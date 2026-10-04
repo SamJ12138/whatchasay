@@ -12,16 +12,20 @@
   are not restored.
 - A line ends at a pause (0.5-0.6 s) and is at most 6 seconds of speech: a longer sentence is cut at its widest
   pause and its parts are translated separately, which can split a clause from its verb.
-- With *Auto-detect*, the first seconds (about 2 for Mandarin or Bengali speech, 4 for English) are recognised as
-  English until detection has heard enough. That text is dimmed under *Detecting language…* and thrown away if the
-  language turns out to be another one; choosing the spoken language avoids the wait.
+- With *Auto-detect*, the first second or two (1.3-2.3 s on the benchmark pages when the page's title or YouTube's
+  caption language points to the spoken language; 1.8-4.5 s when it points elsewhere, e.g. an English title on
+  Bengali speech) are recognised in the page's language, or in English, until detection has heard enough. That text
+  is dimmed under *Detecting language…* and replaced if the language turns out to be another one; choosing the
+  spoken language avoids the wait.
 - While live captions are on, the extension plays an inaudible tone on the tab (-94 dB, Web Audio) so that a video
   started afterwards is captured from its first sample (`docs/observations.md`, A11). On a page you have not
   clicked or typed on yet, Chrome's autoplay policy holds the tone back until your first click or key there: start
   the video by clicking it and the first words may still be lost that once.
 - Spoken-language detection (whisper-tiny) is unreliable on Bengali: on its own it often takes Bengali for Hindi or
   Nepali. The backend now picks the likeliest of English, Mandarin and Bengali, and stays on its first guess when
-  that is not clear enough: the captions then stay dimmed under *Language not detected, assuming English*. Set the
+  that is not clear enough: the captions then stay dimmed under *Language not detected, assuming English* (or the
+  language the page pointed to, `docs/page-prior.md`). On a Bengali drama whisper-tiny's own top three were
+  Telugu, Malayalam and Hindi, and the choice among the three came out English at 0.93-0.96. Set the
   spoken language under *Live Captions* in the popup instead of *Auto-detect*.
 - The glossary replaces a term's heard-as spellings on the recognised line and carries the term through
   translation as a placeholder the engine copies. OPUS-MT keeps no placeholder in every direction, so the result is

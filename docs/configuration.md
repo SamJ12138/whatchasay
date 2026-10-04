@@ -83,7 +83,7 @@ objects are JSON; relative paths are relative to `backend/`. Every setting:
 | `SUBTITLE_ASR__MAX_SEGMENT_S` | `6.0` | Longest line in seconds of speech: past it the line is cut at its widest gap between words (0 = no limit) |
 | `SUBTITLE_ASR__MAX_SEGMENT_TOKENS` | `48` | Longest line in recognizer tokens, cut the same way (0 = no limit) |
 | `SUBTITLE_ASR__LID_WINDOW_S` | `2.5` | Spoken-language ID, full window: seconds of voiced audio at which any answer above the floor is accepted (and the first-guess language confirmed) |
-| `SUBTITLE_ASR__LID_FIRST_WINDOW_S` | `1.0` | First, early attempt after this many seconds of voiced audio; early, only another language than the first guess is accepted, twice in a row |
+| `SUBTITLE_ASR__LID_FIRST_WINDOW_S` | `1.0` | First, early attempt after this many seconds of voiced audio; early, only another language than the first guess is accepted, twice in a row (with a page prior, one answer confirms the page's language: `LID_PRIOR_*`) |
 | `SUBTITLE_ASR__LID_RETRY_STEP_S` | `0.5` | Audio between early attempts (seconds; voiced or not) |
 | `SUBTITLE_ASR__LID_MIN_CONFIDENCE` | `0.6` | Spoken-language ID answers only at or above this confidence among the spoken languages |
 | `SUBTITLE_ASR__LID_PRIOR_THRESHOLD` | `0.6` | The page's language prior (docs/page-prior.md): its favourite is the first recognizer at or above this, else English |

@@ -984,3 +984,51 @@ D4 cloud providers off by default, keys only in backend config.
   the URL and run id; new `test_readme_points_at_the_moved_sections_and_keeps_short_captions`. Two
   cross-references updated (`docs/asr-input-quality.md`, `docs/test-inventory.md`). Tallies: fast 374, slow 44,
   node 162.
+
+### 2026-10-04 — Language prior from the page and channel memory; parallel recognizers
+- Goal of the brief: first confirmed-language subtitle under 1 s for all three languages (was Mandarin 2.2-2.3 s,
+  Bengali 1.9-2.3 s, English 2.7-3.7 s after play on the clips' own pages). **Not reached**: 1.3-2.3 s (median per
+  clip) where the page points right; the first language-ID answer needs 1.0 s of speech, and shorter windows were
+  measured unsafe. Four commits: `7ee03b6` (Batch 0), `9c710c5` (Batch 1), `b4c9614` (Batch 2), Batch 3 docs.
+- Batch 0 `docs/page-prior.md`, `backend/scripts/page_prior_eval.py`, `docs/page-prior-pages.tsv`: 23 pages (7 clip
+  source pages, 16 YouTube videos, 7 of them titled in another language on purpose). Spoken language of every
+  YouTube page checked by running its audio through the presumed language's recognizer (run ids in the doc):
+  the "ENG SUB" drama `ij4eTi79Ajo` is dubbed into English; on the Bengali drama `1W-eMwOEZVI` YouTube's caption
+  language and our own LID both say English (whisper's own top 3 there: te, ml, hi); Mandarin Corner and the VOA
+  Bangla stream gave the test browser no audio (replaced). Right when present: page script as one vote 18/23
+  (non-Latin 12/14, Latin 6/9), YouTube caption language 8/10, default audio track 2/2, <html lang> 8/23 (the
+  interface language), og:locale and defaultAudioLanguage on no page. Weights = those rates (naive Bayes, 0.6
+  threshold): prior used on 21/23, right on 19.
+- Offline whisper-tiny sequences (7 clips + 3 samples x 7 start offsets) contradicted two of the brief's rules:
+  "one attempt above the floor confirms the prior" would lock English on 7 of 46 Mandarin/Bengali starts (first
+  attempt says en 0.71-0.97) -> English needs 0.97 (`asr.lid_prior_floor_en`); "switch away on two agreeing
+  attempts as today" would switch to English on 5 starts (today an early English answer is never accepted) ->
+  English only from the full window when a prior is in play. Without a prior (or under the threshold) the session
+  is message-for-message today's (tests compare the streams).
+- Batch 1: `extension/lib/language-prior.js` (signals read in the page's MAIN world at Start, YouTube player
+  response; channel memory `languageMemory` in chrome.storage.local, 0.9 halved per miss, 500 keys, cleared by
+  Clear translation memory), `/ws/asr?prior=en:p,zh:p,bn:p`, `parse_prior` (allows a 1.01 total: the extension's
+  rounding made 1.001 and the first English browser check silently had no prior), `lid.identify_scored`, run-log
+  `lid_prior` / `prior_right`, harness `language_prior` summary from the run log.
+- Batch 2: parallel recognizers for at most `asr.parallel_window_s` (5 s); at confirmation the open line is re-sent
+  confirmed (the metric and the undim happen then, not at the next partial), or the other recognizer takes over
+  with its finals + open partial, no replay. **CPU finding**: with `asr.num_threads` 2 onnxruntime's pools spin
+  between 40 ms frames: one recognizer stream 1.5 cores at real time, three 6.1, LID 1.6 (a caption session was
+  already ~3 cores); with 1: 0.06 / 0.19 / 0.09 for +3-4 ms per decode chunk and +10 ms per LID call. Default is
+  now 1; the parallel window costs 0.18-0.24 of one core (bound 0.5), +14 MB.
+- Batch 3 (`docs/latency.md` "Language prior and parallel recognizers"): every clip on its source page (harness
+  `--click a.mw-tmh-play` for Wikimedia Commons, whose `<video>` is a sourceless placeholder until the play button
+  builds the player; page video = the first with a source), 3 runs per side (6 for the wrong-prior clips), before =
+  export of `8d1abdb`. First confirmed subtitle, median: NASA 3.71 -> 1.90, Helix 2.81 -> 2.29, Norway 2.31 -> 1.73,
+  Taiwan 2.26 -> 1.59, Maasranga 2.06 -> 1.50, live clip 1.86 -> 1.29; Wikitongues (wrong English prior from the
+  file name) 2.40 -> 3.08 (slower; same rule on both sides, the early answers fell differently; right 6/6 vs 5/6);
+  cold case Durga Pujo vlog (wrong English prior) 2.97 -> 1.86, wrong Mandarin confirmed 3/6 -> 1/6. Subtitle on
+  screen 0.00-0.08 s after the decision. GIF not re-recorded (local page, English title: same first guess).
+- Slow suite: `test_first_confirmed_subtitle_is_the_first_undimmed_one` now runs with `--show-source` (with the
+  translation-only overlay English is confirmed before its first draft, so nothing dimmed was drawn; its bn case
+  also failed on `8d1abdb`, same reason). Still failing, and failing on `8d1abdb` too (44 there, 42-43 now, with
+  either thread count): `test_the_block_holds_still_across_50_partial_updates` (the looping sample gives fewer
+  than 50 partial updates in 50 s); not touched. README "How it works" paragraph "Language detection", the
+  Auto-detect limitation (README + docs/limitations.md), configuration rows for the three settings and the thread
+  count, architecture-notes D3 row for the channel memory. Tallies: fast 451, slow 43 (1 failing, pre-existing),
+  node 178.

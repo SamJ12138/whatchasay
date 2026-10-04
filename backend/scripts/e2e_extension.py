@@ -479,7 +479,11 @@ def harness_tm_path(path: Path) -> Path:
     return resolved
 
 
-PAGE_VIDEO_JS = "(document.querySelector('video.html5-main-video') || document.querySelector('video'))"
+# YouTube's player; else the first video with a source (Wikimedia Commons keeps a sourceless
+# placeholder <video> in front of the player its play button builds); else the first video
+PAGE_VIDEO_JS = ("(document.querySelector('video.html5-main-video')"
+                 " || Array.from(document.querySelectorAll('video')).find(v => v.currentSrc)"
+                 " || document.querySelector('video'))")
 PAGE_VIDEO_STATE_JS = ("(() => { const v = " + PAGE_VIDEO_JS + "; return v ? {ready: v.readyState,"
                        " ad: !!document.querySelector('.ad-showing')} : null; })()")
 
@@ -1376,6 +1380,8 @@ def main() -> int:
     ap.add_argument("--url", help="audio path: live-caption the first <video> of this real page (the test copy is granted "
                                   "its origin, standing in for the toolbar click); exit 2 on a consent wall or bot check")
     ap.add_argument("--start-at", type=float, default=0.0, help="--url: seek the video here (s) before capture starts")
+    ap.add_argument("--click", help="--url: click this selector first, as a viewer starting the player would "
+                                    "(Wikimedia Commons: a.mw-tmh-play)")
     ap.add_argument("--backend-dir", type=Path,
                     help="--start-backend: run the backend code in this folder (another checkout's backend/) with this "
                          "checkout's venv, for before / after comparisons; pair it with --extension")
@@ -1514,6 +1520,9 @@ def main() -> int:
             page.on("console", on_console)
             if args.url:
                 page.goto(args.url)
+                if args.click:  # the viewer's click on a player that builds its video on play
+                    page.click(args.click, timeout=30000)
+                    summary["clicked"] = args.click
                 if not wait_for_page_video(page, summary):
                     return 2 if summary.get("blocked") else 1
                 page.evaluate(f"(t) => {{ const v = {PAGE_VIDEO_JS}; v.pause(); v.currentTime = t; }}", args.start_at)

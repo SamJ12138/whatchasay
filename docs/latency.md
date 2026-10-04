@@ -496,3 +496,100 @@ Taiwan is ready to host a powerful typhoon."; NASA, "在卫星和空间站领域
 Wikitongues, "My name is Sanjay." / "Ami" / "Calcutta" / "I was born in Kolkata and": one short line per
 pause, and a one-word line where he paused inside a sentence ("Ami" is the word আমি, "I", which OPUS-MT left as
 it was: a one-word line is the price of cutting at every pause).
+
+## Language prior and parallel recognizers (2026-10-04)
+
+Until now Auto-detect always started with the English recognizer, and a switch to Mandarin or Bengali needed two
+agreeing language-ID attempts (after 1.0 and 1.5 s of speech), so a Mandarin or Bengali viewer waited 2.0-2.6 s
+for the first subtitle in a confirmed language, and English, confirmed on the full 2.5 s window only, 2.7-3.7 s.
+Three changes (`docs/page-prior.md` has the evaluation behind the first):
+
+- **A prior from the page and from memory.** On Start the extension reads the page (`lib/language-prior.js`): the
+  script of the title, channel name and description as one vote, YouTube's own caption language and default audio
+  track, and the language that language ID last confirmed on the same YouTube channel (elsewhere: the same site),
+  and sends `{en, zh, bn}` probabilities in the `/ws/asr` handshake. The first recognizer is the prior's favourite
+  when it reaches 0.6 (`SUBTITLE_ASR__LID_PRIOR_THRESHOLD`), else English as before.
+- **Rules for language ID with a prior.** One attempt above the floor confirms the favourite (English: at 0.97 or
+  more, `SUBTITLE_ASR__LID_PRIOR_FLOOR_EN`); switching away from it needs two agreeing early attempts as before, and
+  English is a switch target only from the full window on, as before. Both exceptions come from whisper-tiny's habit
+  of answering English, at up to 0.97, on the first second of Mandarin and Bengali (`docs/page-prior.md`).
+- **Parallel recognizers.** Until the language is confirmed every recognizer hears the audio (at most 5 s,
+  `SUBTITLE_ASR__PARALLEL_WINDOW_S`): at confirmation the confirmed one's line is already there and is sent again,
+  confirmed (the overlay undims it at that moment instead of at the next partial), or the confirmed one takes over
+  with what it wrote, without replaying the buffered audio. This needed one thread per recognizer
+  (`SUBTITLE_ASR__NUM_THREADS` 2 -> 1), see "CPU" below.
+
+**How it was measured.** Every clip played on its source page, so that the page prior is the real one: the six
+benchmark clips on their Wikimedia Commons file pages (the harness clicks the page's play button, `--click
+a.mw-tmh-play`; NASA from 0:09 as in the benchmark) and the film scene on YouTube; plus a cold case, a YouTube
+channel never seen with a title in the wrong language (the Durga Pujo vlog of `docs/page-prior.md`: romanised
+Bengali title, YouTube's caption language English, Bengali speech, from 0:30). Three browser runs per clip and side
+(six for the two clips whose prior is wrong), no priming by the harness, a fresh browser profile every run (so the
+channel memory is empty: only the page counts), Auto-detect, target English (Chinese for English speech).
+**Before** is the code of commit `8d1abdb`, run from an export of it with `--backend-dir` / `--extension` and the
+same harness. "First confirmed subtitle" counts from the video starting to play; "decided at attempt" is the
+language-ID attempt that confirmed (1 = after 1.0 s of speech, 4 = the full window, 5 = the one after it).
+
+| Clip (page) | Prior (votes) | Prior right? | First confirmed subtitle before (s) | After (s) | After: decided at attempt | Detected before / after | run_ids before | run_ids after |
+|---|---|---|---|---|---|---|---|---|
+| English, NASA | en 0.65 (pageScript:en) | yes | 3.71, 3.73, 3.70 (median 3.71) | 1.91, 1.90, 1.87 (median 1.90) | 1, 1, 1 | en, en, en / en, en, en | `20261004T004830-d28d66`, `20261004T004900-bf22df`, `20261004T004931-a46d0b` | `20261004T004658-37dd78`, `20261004T004729-5794a7`, `20261004T004759-3b61c8` |
+| English, VOA Helix | en 0.65 (pageScript:en) | yes | 2.76, 2.83, 2.81 (median 2.81) | 2.74, 1.71, 2.29 (median 2.29) | 4, 2, 3 | en, en, en / en, en, en | `20261004T005131-2c0e87`, `20261004T005200-2a6b28`, `20261004T005231-24ed00` | `20261004T005003-93b71c`, `20261004T005033-047df4`, `20261004T005100-339184` |
+| Mandarin, VOA Norway | zh 0.85 (pageScript:zh) | yes | 2.30, 2.31, 2.32 (median 2.31) | 1.73, 1.68, 2.18 (median 1.73) | 1, 1, 2 | zh, zh, zh / zh, zh, zh | `20261004T005440-b95459`, `20261004T005513-c46cfe`, `20261004T005544-77a67a` | `20261004T005302-1bb530`, `20261004T005335-e980f1`, `20261004T005407-72dfe5` |
+| Mandarin, VOA Taiwan | zh 0.85 (pageScript:zh) | yes | 2.23, 2.28, 2.26 (median 2.26) | 1.62, 1.59, 1.57 (median 1.59) | 1, 1, 1 | zh, zh, zh / zh, zh, zh | `20261004T005751-cefe3f`, `20261004T005821-967eaf`, `20261004T005853-723890` | `20261004T005615-20a409`, `20261004T005647-562964`, `20261004T005718-261a81` |
+| Bengali, Maasranga | bn 0.85 (pageScript:bn) | yes | 2.08, 2.05, 2.06 (median 2.06) | 1.50, 1.48, 1.51 (median 1.50) | 1, 1, 1 | bn, bn, bn / bn, bn, bn | `20261004T010054-402a84`, `20261004T010126-2fe13a`, `20261004T010158-5d63a2` | `20261004T005925-cbd5a9`, `20261004T005953-440c44`, `20261004T010023-d7c7f7` |
+| Bengali, Wikitongues | en 0.65 (pageScript:en) | no | 2.11, 2.44, 2.01, 3.16, 4.71, 2.36 (median 2.40) | 3.07, 3.12, 4.53, 2.02, 3.08, 2.97 (median 3.08) | 4, 4, 5, 2, 4, 4 | bn, en, bn, bn, bn, bn / bn, bn, bn, bn, bn, bn | `20261004T010357-e12978`, `20261004T010424-e924a3`, `20261004T010453-59094c`, `20261004T011323-3f8b6b`, `20261004T011350-f0febf`, `20261004T011419-431480` | `20261004T010229-0a0f0a`, `20261004T010300-0fc800`, `20261004T010327-168cba`, `20261004T011203-79d95d`, `20261004T011230-fe319b`, `20261004T011258-07a54b` |
+| Bengali film scene (live clip) | bn 0.98 (captionAsr:bn, pageScript:bn) | yes | 1.86, 1.86, 2.34 (median 1.86) | 1.29, 1.28, 1.32 (median 1.29) | 1, 1, 1 | bn, bn, bn / bn, bn, bn | `20261004T010641-edfba5`, `20261004T010707-e6eb90`, `20261004T010733-17615e` | `20261004T010519-3c1d44`, `20261004T010546-08a3c7`, `20261004T010614-2db63a` |
+| Cold case: Durga Pujo vlog (Bengali, romanised title) | en 0.94 (captionAsr:en, pageScript:en) | no | 4.69, 1.88, 1.24, 2.98, 2.96, 4.65 (median 2.97) | 2.82, 1.82, 4.01, 1.85, 1.83, 1.88 (median 1.86) | 4, 2, 5, 2, 2, 2 | zh, bn, zh, bn, bn, zh / bn, bn, zh, bn, bn, bn | `20261004T010941-20e9ec`, `20261004T011022-1ad95a`, `20261004T011049-42bd78`, `20261004T011621-38d1ce`, `20261004T011653-d01c00`, `20261004T011724-e89241` | `20261004T010801-c1c000`, `20261004T010836-f9c19f`, `20261004T010909-b45e5d`, `20261004T011446-20707c`, `20261004T011517-ba2686`, `20261004T011549-55b1c2` |
+
+**What moved.**
+
+- **Prior right (6 of the 7 benchmark pages, every run):** the first confirmed subtitle came 0.5-1.8 s earlier
+  (median against median).
+  Mandarin 2.23-2.32 -> 1.57-2.18 s, Bengali 1.86-2.34 -> 1.28-1.51 s, English 3.70-3.73 -> 1.87-1.91 s (NASA) and
+  2.76-2.83 -> 1.71-2.74 s (VOA Helix). Language ID decided at its first attempt in 14 of the 18 runs; the others
+  are VOA Helix, where whisper-tiny's first answer on the field report's noise was undecided or under the 0.97
+  floor in all three runs (0.57 undecided, English 0.74, English 0.88 then 0.96), and one Norway run whose first
+  attempt was undecided.
+- **Under 1 s: not reached.** The best is the live clip at 1.28-1.32 s. With a right prior the subtitle is on screen
+  0.00-0.08 s after the decision (the session's audio at the decision against the first confirmed subtitle's time
+  since the session's first frame, every run), and the decision is at the first attempt, after 1.0 s of speech;
+  what remains is where the speech starts in the clip (NASA's narrator starts about a second in) and the capture's
+  start. A shorter first window would trade that second against
+  wrong decisions: at 0.5-0.75 s of speech whisper-tiny said English at 0.97 or more on 10 of 46 Mandarin and
+  Bengali starts (`docs/page-prior.md`). It is not built.
+- **Prior wrong (Wikitongues: an English file name on Bengali speech).** The first recognizer is English, as
+  before, and the rules for this case are the ones before; still, over six runs a side it was slower: median 2.40
+  -> 3.08 s. Two early answers in a row agreed on Bengali in 2 of 6 runs before and 1 of 6 after; the other runs
+  waited for the full window on both sides, and their windows fell later after (the full window at 2.97-3.12 s
+  against 2.36-3.16 s, the same rule on the same page). The clip is a hard one: the speaker mixes English words
+  into Bengali and pauses every other second. The language was right in 6 of 6 runs after, 5 of 6 before (one
+  confirmed English).
+- **Cold case (wrong English prior from the title and YouTube's caption language):** median 2.97 -> 1.86 s, and the
+  wrong language (Mandarin) confirmed in 1 of 6 runs after against 3 of 6 before. Not a regression; most of the
+  difference is run-to-run luck in whisper-tiny's answers on this clip, both sides use the same switch rule.
+- **Parallel recognizers** were stopped at the decision in every run (`asr_parallel` record, reason `confirmed`);
+  all 12 language switches after (the two wrong-prior clips) were a parallel recognizer taking over, none replayed
+  any audio.
+
+**CPU and memory of the parallel window** (the live clip through the real session offline, real recognizers and
+language ID, one 40 ms frame every 40 ms; process CPU time over wall time, so 1.0 = one core):
+
+| | `NUM_THREADS` 2 (before) | `NUM_THREADS` 1 (now) |
+|---|---|---|
+| one recognizer stream | 1.53 | 0.06 |
+| two streams | 3.83 | 0.15 |
+| three streams | 6.07 | 0.19 |
+| language ID every 0.5 s | 1.57 | 0.09 |
+| the whole session during the parallel window (three streams + language ID) | about 6 | **0.18-0.24** |
+| the whole session, one recognizer (no parallel window) | about 2.9 | 0.07-0.09 |
+| one decode chunk, feed() p95 | 16.5-21.4 ms | 19.5-24.2 ms |
+| one language-ID call | 19-20 ms | 29 ms |
+
+With two threads, onnxruntime's thread pools spin between the 40 ms frames: most of the CPU time was waiting, not
+decoding, and a single caption session already cost about three cores of the i9 before this work. One thread
+costs 3-4 ms per decode chunk and 10 ms per language-ID call; the window costs 0.18-0.24 of one core (the bound
+was 0.5). The two extra streams add up to 14 MB to a backend of about 730 MB. The feed() that switches language
+takes 27-38 ms with the parallel recognizer against 73-166 ms for the replay.
+
+The headline GIF is not re-recorded: it plays the clip on a local page whose title is English, so its first guess
+is English as before, and the confirmation it shows would look the same.

@@ -81,7 +81,12 @@ def test_first_confirmed_subtitle_is_the_first_undimmed_one(lang, target):
     dimmed above a "Detecting language…" label, and nothing is undimmed before the content
     script has the confirmed language. en: the provisional language was right, its text is
     undimmed in place. bn: detection switches, the English guesses are discarded and the
-    first undimmed line is Bengali. The overlay is read through CDP every 250 ms."""
+    first undimmed line is Bengali. The overlay is read through CDP every 250 ms.
+
+    The source line is on (--show-source): the provisional recognizer's text is its partial
+    results. With the translation-only default the provisional phase shows only draft
+    translations, and since the page prior (docs/page-prior.md) English is confirmed before its
+    first draft exists (1.7-1.9 s against about 2.5 s), so there would be nothing dimmed to see."""
     if not has_zipformer(lang):
         pytest.skip(f"{lang} model not downloaded")
     if not (MODELS_DIR / "sherpa-onnx-whisper-tiny" / "tiny-encoder.int8.onnx").exists():
@@ -89,7 +94,7 @@ def test_first_confirmed_subtitle_is_the_first_undimmed_one(lang, target):
     wav = zipformer_dir(lang) / "test_wavs" / "0.wav"
     # --video: the clip starts from its first word once capture runs (and does not loop)
     summary, proc = run_harness("--path", "audio", "--video", str(wav), "--source", "auto", "--targets", target,
-                                "--lines", "1", "--hold", "4")
+                                "--lines", "1", "--hold", "4", "--show-source")
     assert summary.get("detected_lang") == lang, (summary, proc.stderr[-2000:])
     d = summary["dimming"]
     assert d["violations"] == [], d

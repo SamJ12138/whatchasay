@@ -361,3 +361,4 @@ def test_run_log_records_reads_the_backend_run_log(tmp_path, monkeypatch):
     monkeypatch.delenv("SUBTITLE_OBS_DIR", raising=False)
     assert h.run_log_records("R1", tmp_path) == [{"stage": "lid_prior", "event": "success"}]
     assert h.run_log_records("R2", tmp_path) == [] and h.run_log_records(None, tmp_path) == []
+
