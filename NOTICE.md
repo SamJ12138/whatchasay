@@ -118,3 +118,25 @@ repository's MIT License and this project is not endorsed by them or by YouTube.
 demonstrate the software; the subtitles drawn over it are this project's own output. Its audio is not in the
 repository.
 
+### Clips of the latency benchmark (`docs/latency.md`, 2026-10-03)
+
+Six clips, two per spoken language, each from a Wikimedia Commons file page whose license was read there on
+2026-10-03 (the license template on the page; for the two YouTube imports also the "Creative Commons Attribution
+license (reuse allowed)" mark on the YouTube page). None of the clips is in the repository; the harness played
+local copies. SHA-256 is of the Commons file as downloaded. Only the fastest clip's picture appears here, as
+`docs/demo-fastest.gif`; the subtitles drawn over it are this project's own output, and the people and
+organisations in these clips have nothing to do with this project and do not endorse it.
+
+| Clip | Source | Author / channel | License (on the file page) | Excerpt used |
+|---|---|---|---|---|
+| English, NASA ScienceCasts | [ScienceCasts: The Zero Gravity Coffee Cup](https://commons.wikimedia.org/wiki/File:ScienceCasts-_The_Zero_Gravity_Coffee_Cup.webm) (12 July 2013; SHA-256 `6f36a182…e00a76`) | ScienceAtNASA (NASA) | `{{PD-NASA}}`: public domain in the United States, solely created by NASA. NASA's logo is not covered (see above) | 0:09-0:39.5 (30.5 s) |
+| English, VOA Helix report | [VOA's Matt Dibble reports on Helix electric aircraft – VOA News](https://commons.wikimedia.org/wiki/File:VOA%E2%80%99s_Matt_Dibble_reports_on_Helix_electric_aircraft_%E2%80%93_VOA_News.webm) (5 July 2024; SHA-256 `3c945f9a…7a7515`) | Voice of America | `{{PD-USGov-VOA}}`: a work of the U.S. federal government (Voice of America), public domain in the United States | whole file (89.2 s) |
+| Mandarin, VOA Norway news | [2011-07-26 美国之音新闻: 挪威部长称警方反应精彩](https://commons.wikimedia.org/wiki/File:2011-07-26_%E7%BE%8E%E5%9B%BD%E4%B9%8B%E9%9F%B3%E6%96%B0%E9%97%BB-_%E6%8C%AA%E5%A8%81%E9%83%A8%E9%95%BF%E7%A7%B0%E8%AD%A6%E6%96%B9%E5%8F%8D%E5%BA%94%E7%B2%BE%E5%BD%A9.webm) (26 July 2011; SHA-256 `46d7da78…b6196`) | 美国之音中文网 (Voice of America, Mandarin service) | `{{PD-USGov-VOA}}`, as above | whole file (72.0 s) |
+| Mandarin, VOA Taiwan typhoon | [台湾准备迎战强台风](https://commons.wikimedia.org/wiki/File:%E5%8F%B0%E6%B9%BE%E5%87%86%E5%A4%87%E8%BF%8E%E6%88%98%E5%BC%BA%E5%8F%B0%E9%A3%8E.webm) (12 July 2013; SHA-256 `e474f72c…d93ca1`) | 美国之音中文网 (Voice of America, Mandarin service) | `{{PD-USGov-VOA}}`, as above; license reviewed on Commons 2019-01-14 | whole file (40.1 s) |
+| Bengali, Maasranga News | [চিকিৎসার জন্য ঢাকায় তরিকুল](https://commons.wikimedia.org/wiki/File:%E0%A6%9A%E0%A6%BF%E0%A6%95%E0%A6%BF%E0%A7%8E%E0%A6%B8%E0%A6%BE%E0%A6%B0_%E0%A6%9C%E0%A6%A8%E0%A7%8D%E0%A6%AF_%E0%A6%A2%E0%A6%BE%E0%A6%95%E0%A6%BE%E0%A6%AF%E0%A6%BC_%E0%A6%A4%E0%A6%B0%E0%A6%BF%E0%A6%95%E0%A7%81%E0%A6%B2.webm) (9 July 2018, from https://www.youtube.com/watch?v=DP7BoVgOJXI; SHA-256 `dccb6bc4…240375`) | Maasranga News (Maasranga Television, Bangladesh) | **CC BY 3.0** ([license](https://creativecommons.org/licenses/by/3.0/)): `{{YouTube CC-BY|Maasranga News}}` on the file page and the Creative Commons Attribution mark on the YouTube video | 0:00-1:00 (60 s) |
+| Bengali, Wikitongues Sanjoy | [WIKITONGUES: Sanjoy speaking Bengali](https://commons.wikimedia.org/wiki/File:WIKITONGUES-_Sanjoy_speaking_Bengali.webm) (13 May 2016, from https://www.youtube.com/watch?v=5bYNuCOdd_Q; SHA-256 `aaca51ea…95e60a`) | Wikitongues | **CC BY 3.0** ([license](https://creativecommons.org/licenses/by/3.0/)): `{{YouTube CC-BY|Wikitongues}}`, license reviewed on Commons 2016-06-24 | 0:00-1:15 (75 s) |
+
+Attribution for the two CC BY 3.0 clips: "চিকিৎসার জন্য ঢাকায় তরিকুল" by Maasranga News and "WIKITONGUES: Sanjoy
+speaking Bengali" by Wikitongues, both licensed under CC BY 3.0; used as excerpts, transcoded to 16 kHz mono
+audio for the measurement, no other change; the subtitles over them are this project's output.
+

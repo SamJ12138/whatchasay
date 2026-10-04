@@ -11,16 +11,17 @@ the same moment instead of one person explaining the joke to the other afterward
 It runs entirely on your own machine, and nothing you watch leaves your laptop unless
 you decide it should.
 
-![Demo: Bengali dialogue in a film scene on YouTube is captioned live and translated into English over the video](docs/demo-youtube.gif)
+![Demo: a Mandarin news reader on Voice of America is captioned live and translated into English over the video](docs/demo-fastest.gif)
 
-*The first 9.5 seconds of "10,000 রাজভোগের Order | Ora Char Jon | Movie Scene | Prosenjit | Abhishek Chatterjee |
-Debashree" from the YouTube channel Bengali Movies with English Subtitle
-(<https://www.youtube.com/watch?v=-tpVpbIxFmI>), the player in fullscreen, run on CPU: Bengali is detected
-2 seconds in, a first translation of each line appears in italics on the lower row while it is still being spoken
-(ending in …), and the finished line moves to the upper row while the next one starts below it; a long line wraps
-once. Recorded by the
-browser harness during a live test (`docs/live-test-youtube.md`, run `20261002T214030-e46964`), not by hand; the
-translations are as they came out, mistakes included.*
+*The first 9.5 seconds of a Voice of America Mandarin news item, "挪威部长称警方反应精彩" (美国之音, 26 July 2011,
+public domain as a work of the U.S. government; from Wikimedia Commons:
+<https://commons.wikimedia.org/wiki/File:2011-07-26_%E7%BE%8E%E5%9B%BD%E4%B9%8B%E9%9F%B3%E6%96%B0%E9%97%BB-_%E6%8C%AA%E5%A8%81%E9%83%A8%E9%95%BF%E7%A7%B0%E8%AD%A6%E6%96%B9%E5%8F%8D%E5%BA%94%E7%B2%BE%E5%BD%A9.webm>),
+run on CPU with the spoken language on Auto-detect: Mandarin is detected 2.2 seconds in, a first translation of
+each line appears in italics on the lower row while it is still being spoken (ending in …), and the finished
+line moves to the upper row while the next one starts below it. It is the fastest of the six public clips in the
+latency benchmark ([the table](docs/latency.md#benchmark-across-public-clips-2026-10-03): first translated text
+1.4 s after a line's first word, 3 of 3 runs). Recorded by the browser harness (run `20261003T222146-78982f`), not
+by hand; the translations are as they came out, mistakes included.*
 
 It is for videos and live streams that have no subtitles, lectures, and meetings held in a browser tab in a language
 you do not speak. A Chrome extension captures the tab's sound, a local Python program turns English, Mandarin or
@@ -170,6 +171,16 @@ case from `docs/live-test-youtube.md`: in a Bengali film scene the sweet রা�
 glossary cannot do is mend the rest of a badly heard line. Terms are kept in `backend/data/translation_memory.db`
 with your corrections.
 
+![Demo: Bengali dialogue in a film scene on YouTube is captioned live and translated into English over the video](docs/demo-youtube.gif)
+
+*The scene the rajbhog case comes from: the first 9.5 seconds of "10,000 রাজভোগের Order | Ora Char Jon | Movie Scene |
+Prosenjit | Abhishek Chatterjee | Debashree" from the YouTube channel Bengali Movies with English Subtitle
+(<https://www.youtube.com/watch?v=-tpVpbIxFmI>), the player in fullscreen, run on CPU: Bengali is detected
+2 seconds in, a first translation of each line appears in italics on the lower row while it is still being spoken
+(ending in …), and the finished line moves to the upper row while the next one starts below it; a long line wraps
+once. Recorded by the browser harness during a live test (`docs/live-test-youtube.md`, run `20261002T214030-e46964`),
+not by hand, before the glossary was taught; the translations are as they came out, mistakes included.*
+
 **What is remembered.** Live-caption text and its translations are kept in memory only until the session ends.
 Page subtitles from caption mode and your corrections are kept in `backend/data/translation_memory.db`; machine
 translations are deleted 30 days after their last use. *Settings → Data Management → Clear translation memory*
@@ -307,6 +318,14 @@ viewer gets it. The live clip's lines used to be closed by a 10-second cut, whic
 looks slower than before: it waits for a real pause. Translation calls are 0.45-0.7 per second of speech; one
 call takes 17-49 ms (p50) and 25-62 ms (p95) on the CPU. Speech recognition takes about 2 ms per 40 ms frame and
 one language-ID attempt 15-45 ms.
+
+The same measurement over six public clips, two per spoken language (public domain or CC BY, credited in
+`NOTICE.md`; the benchmark table in `docs/latency.md`): first translated text 1.4 s after a line's first word on
+two Mandarin news readers (the headline GIF is the faster of them), 1.4-1.6 s on English narration, 2.1 s on a
+Bengali speaker who pauses at every clause and 2.7-2.9 s on a Bengali news report. The speaker's rate and pauses
+explain most of the spread: a draft needs three stable words, so a fast reader gets one sooner, and a pause closes
+the line, so a slow speaker's final translation arrives before any draft would (0.2 rewrites per line). The rest
+is the Bengali model's 0.64 s decode chunk.
 
 Two findings from building it:
 
@@ -526,9 +545,12 @@ error type, per-stage p50/p95, per-session totals, and per subtitle line the lat
 its draft translation was rewritten (`docs/latency.md`). The stage names are in `docs/pipeline-stages.md`; known
 swallowed and degraded paths are in `docs/observations.md`.
 
-**Other scripts:** `backend/scripts/make_demo_gif.py` (the demo GIF and screenshot above, from a recorded live
-run), `backend/scripts/line_latency_table.py` (the latency table above: N browser runs per clip;
-`--backend-dir` / `--extension` measure another checkout's code the same way), `backend/scripts/latency_report.py`
+**Other scripts:** `backend/scripts/make_demo_gif.py` (the demo GIFs and the screenshot above, from a recorded live
+run; `--clip FILE --source --targets` for another clip, as for `docs/demo-fastest.gif`),
+`backend/scripts/line_latency_table.py` (the latency tables: N browser runs per clip;
+`--backend-dir` / `--extension` measure another checkout's code the same way),
+`backend/scripts/clip_speech_stats.py` (how fast a clip's speaker talks and pauses, from the recognizer's token
+times: the speech-rate columns of the benchmark table in `docs/latency.md`), `backend/scripts/latency_report.py`
 (lags of a clip streamed straight to the backend, no browser), `backend/scripts/opus_quality.py`
 (OPUS-MT output and speed over the six en/zh/bn directions), `backend/scripts/asr_input_quality.py`
 (`docs/asr-input-quality.md`), `backend/scripts/clean_install_check.py` (fresh venv from the requirements files, then

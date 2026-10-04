@@ -932,3 +932,40 @@ D4 cloud providers off by default, keys only in backend config.
   characters after `case 'toggle-edit'` must reach `cue.translations`) read the file as checked out, CRLF on the
   Windows runner, so the window held fewer characters of code and the glossary batch's comment pushed the match out
   of it. The six tests' `read()` normalise CRLF to LF before slicing (checked on a CRLF copy of main.js).
+
+### 2026-10-03 — Latency benchmark across public clips, fastest clip as the headline GIF
+- Clips (commit "docs: latency benchmark over six public clips; fastest clip as the headline GIF"): two per
+  spoken language from Wikimedia Commons, license read on the file page (and, for the two YouTube imports, the
+  Creative Commons mark on the YouTube page): English NASA "Zero Gravity Coffee Cup" (PD-NASA, 0:09-0:39.5, the
+  existing clip) and VOA "Helix electric aircraft" report (PD-USGov-VOA, 89 s); Mandarin VOA Chinese news
+  "挪威部长称警方反应精彩" (72 s) and "台湾准备迎战强台风" (40 s), both PD-USGov-VOA; Bengali Maasranga News
+  "চিকিৎসার জন্য ঢাকায় তরিকুল" (CC BY 3.0, first 60 s) and Wikitongues "Sanjoy speaking Bengali" (CC BY 3.0, first
+  75 s). All six credited in `NOTICE.md` (source, author, license template, excerpt, SHA-256). Rejected after an
+  offline recognizer pass: three Kolkata Wikimedia event videos (hall reverb; one with no recognisable speech), a
+  VOA Africa health report (poor recognition), a Bengali screencast (no speech found); CC BY-SA material was not
+  needed. Clips are not in the repository (`scratchpad/clips`, `bench/`).
+- Measurement: `line_latency_table.py`, defaults (no `--prime-audio`), 3 browser runs per clip, 18 run_ids in
+  `docs/latency.md` "Benchmark across public clips". Per clip, first translated text p50: Mandarin VOA Norway
+  **1.40-1.41 s** (3 of 3; the winner), Mandarin Taiwan 1.40-1.71, English NASA 1.44-1.48, English Helix 1.46-1.62,
+  Bengali Wikitongues 2.07-2.08, Bengali Maasranga 2.73-2.88; final after the last word 0.82-1.49 s; non-append
+  revisions 0.75-1.21 per line except Wikitongues 0.17-0.21; every clip confirmed in its language in 3 of 3
+  (zh 2.2 s, bn 2.0-2.6 s, en 2.7-3.7 s after play). The speech-rate columns (words / min, pauses) come from the new
+  `backend/scripts/clip_speech_stats.py` (the clip's recognizer offline, token timestamps; a pause = a gap of
+  0.3 s or more between tokens): Mandarin readers 275-277 characters / min with no pause over 0.8 s (drafts at
+  1.4 s: four stable characters come fast); Wikitongues 72 words / min, median pause 0.92 s, 61 % of the time
+  paused (28-29 short lines, 0.24-0.32 drafts per line: the final arrives before a draft would, hence 2.07 s and
+  almost no rewrites); the Bengali news report 127 words / min on the 0.64 s chunk (three partials = 1.9 s) 2.7-2.9 s.
+  The machine ran out of memory after the first Bengali run (Claude Code stopped the matrix; five harness runs
+  failed to start) and the five missing Bengali runs were made 40 minutes later; said so in the doc.
+- GIF: `docs/demo-fastest.gif` (1,993,077 bytes, 9.5 s, 640 px, 6 fps) from run `20261003T222146-78982f` of the
+  Norway item with its picture (`make_demo_gif.py --clip ... --source auto --targets auto`, then `--recording
+  --start 1.3` to cut from play, because the harness's first-translation stamp under Auto-detect is late and the
+  automatic window missed detection and the first line): Chinese confirmed 2.18 s after play, 6 lines in 22 s.
+  README: it is the headline under the opening with a caption naming the clip, its license, CPU, "fastest of the
+  six public clips" and a link to the table; the Bengali film-scene GIF moved to "Using it" after the glossary
+  paragraph (the rajbhog scene), with its credit; the "Measured latency" part gained a paragraph on the six
+  clips. `NOTICE.md` has the clips section. Scripts: `make_demo_gif.py --clip/--clip-start/--clip-len/--source/
+  --targets/--hold` (summary carries `run_id` and `recording`); `line_latency_table.py` gained the "Detected"
+  column. Tests (`test_docs_media.py`): the fastest GIF under the opening with its caption parts and within 5 MB /
+  5-10 s, the YouTube GIF in "Using it" between the glossary and "What is remembered", the benchmark section with
+  18 run_ids, the speech-rate columns and every clip in NOTICE.md. Tallies: fast 373, slow 44, node 162.

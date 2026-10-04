@@ -9,7 +9,7 @@ running, see --prime-audio) and collects, per run:
   first display      audio of a line's first word -> first text of the line on screen
   final              audio of its last word -> final translation on screen
   first translation  audio of its first word -> first translated text on screen
-  first confirmed    video start -> first subtitle in the confirmed language
+  first confirmed    video start -> first subtitle in the confirmed language (and which language)
   flicker            per line, the changes of its displayed translation that are not a pure append
                      (a draft or the final rewriting what was shown), and its draft count
   segments           length of each final (s), from the backend's run log
@@ -108,12 +108,12 @@ def markdown(rows: list[dict]) -> str:
     def s(ms):
         return "-" if ms is None else f"{ms / 1000:.2f}"
 
-    out = ["| Clip | run_id | Lines | First display p50 / max (s) | First translation p50 / max (s) | Final p50 / max (s) "
+    out = ["| Clip | run_id | Detected | Lines | First display p50 / max (s) | First translation p50 / max (s) | Final p50 / max (s) "
            "| First confirmed subtitle (s) | Segments (s) | Translate calls (per s) | Translate p50 / p95 (ms) | Drafts per line | Words per draft | Non-append revisions per line |",
-           "|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
+           "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
     for r in rows:
         segs = ", ".join(f"{x:g}" for x in (r.get("segments_s") or [])) or "-"
-        out.append(f"| {r['clip']} | `{r['run_id']}` | {r['lines']} | {s(r['first_display_p50_ms'])} / {s(r['first_display_max_ms'])} "
+        out.append(f"| {r['clip']} | `{r['run_id']}` | {f(r.get('detected'))} | {r['lines']} | {s(r['first_display_p50_ms'])} / {s(r['first_display_max_ms'])} "
                    f"| {s(r['first_translation_p50_ms'])} / {s(r['first_translation_max_ms'])} "
                    f"| {s(r['final_p50_ms'])} / {s(r['final_max_ms'])} | {f(r['first_confirmed_s'])} | {segs} "
                    f"| {f(r['translate_calls'])} ({f(r['translate_calls_per_s'])}) "

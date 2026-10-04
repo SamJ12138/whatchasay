@@ -75,14 +75,40 @@ def test_readme_opens_with_the_owner_paragraph_verbatim():
 
 
 YT_GIF = REPO / "docs" / "demo-youtube.gif"
+FASTEST_GIF = REPO / "docs" / "demo-fastest.gif"
 
 
-def test_youtube_gif_sits_right_under_the_opening_with_its_credit():
+def test_fastest_gif_sits_right_under_the_opening_with_its_caption():
+    """The headline GIF is the fastest clip of the public-clip benchmark (docs/latency.md): its
+    caption names the clip and its license, says it ran on CPU, that it is the fastest of the
+    clips in the table, and links the table."""
     blocks = [" ".join(b.split()) for b in re.split(r"\n\s*\n", README) if b.strip()]
     i = blocks.index(OPENING)
-    assert re.fullmatch(r"!\[[^\]]+\]\(docs/demo-youtube\.gif\)", blocks[i + 1]), blocks[i + 1]
+    assert re.fullmatch(r"!\[[^\]]+\]\(docs/demo-fastest\.gif\)", blocks[i + 1]), blocks[i + 1]
     caption = blocks[i + 2]
-    for part in ("Ora Char Jon", "Bengali Movies with English Subtitle", "https://www.youtube.com/watch?v=-tpVpbIxFmI",
+    for part in ("CPU", "fastest of the six", "docs/latency.md", "commons.wikimedia.org", "run `2026"):
+        assert part in caption, (part, caption)
+    assert "public domain" in caption or "CC BY" in caption, caption
+
+
+def test_fastest_gif_size_and_length():
+    data = FASTEST_GIF.read_bytes()
+    assert data[:6] in (b"GIF87a", b"GIF89a")
+    assert len(data) <= 5 * 1024 * 1024, len(data)
+    assert 5.0 <= gif_seconds(data) <= 10.0, gif_seconds(data)
+
+
+def test_youtube_gif_moved_to_using_it_with_the_rajbhog_case():
+    """The Bengali film-scene GIF sits in "Using it", right after the glossary paragraph whose
+    rajbhog example comes from that scene, with its credit."""
+    using = README[README.index("## Using it"):README.index("## Optional extras")]
+    glossary = using.index("**The glossary.**")
+    remembered = using.index("**What is remembered.**")
+    gif = using.index("](docs/demo-youtube.gif)")
+    assert glossary < gif < remembered
+    assert README.count("docs/demo-youtube.gif") == 1
+    caption = " ".join(using[gif:remembered].split())
+    for part in ("rajbhog", "Ora Char Jon", "Bengali Movies with English Subtitle", "https://www.youtube.com/watch?v=-tpVpbIxFmI",
                  "run on CPU"):
         assert part in caption, (part, caption)
 
@@ -158,6 +184,21 @@ def test_latency_doc_has_the_baseline_the_before_after_tables_and_the_flicker_nu
         assert part in doc, part
     after = doc[doc.index("## Before and after"):]
     assert len(set(re.findall(r"`(\d{8}T\d{6}-[0-9a-f]{6})`", after))) >= 24      # 4 clips x 3 runs x before / after
+
+
+def test_latency_doc_benchmark_has_six_public_clips_three_runs_each_with_speech_rate():
+    """The public-clip benchmark: two licensed clips per spoken language, three browser runs
+    each with their run_ids, the clips' speech rate and pauses next to the latencies, every
+    clip credited in NOTICE.md, and the fastest clip named (the headline GIF)."""
+    doc = (REPO / "docs" / "latency.md").read_text(encoding="utf-8")
+    bench = doc[doc.index("## Benchmark across public clips"):]
+    assert len(set(re.findall(r"`(\d{8}T\d{6}-[0-9a-f]{6})`", bench))) >= 18      # 6 clips x 3 runs
+    for part in ("Words (zh: characters) / min", "Median pause", "Non-append revisions per line", "NOTICE.md", "demo-fastest.gif",
+                 "Detected", "First translation p50"):
+        assert part in bench, part
+    notice = (REPO / "NOTICE.md").read_text(encoding="utf-8")
+    for clip in ("Zero Gravity Coffee Cup", "Helix", "挪威", "台风", "তরিকুল", "Sanjoy"):
+        assert clip in notice, clip
 
 
 def test_a9_is_closed_as_a_model_limit_with_the_chunk_number():

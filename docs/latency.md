@@ -382,3 +382,117 @@ came late), 1.6-1.8 s on the Mandarin sample and 3.3 s on the Bengali sample (un
 per line 0.8-1.0 on the live clip (was 1.5), 2 on the English sentence (was 3), 0-0.25 and 1 on the samples;
 first confirmed subtitle 2.1-2.2 s on the live clip without any priming by the harness (was 2.1-2.2 s with it,
 3.6-3.7 s without); first display and the final translation after the last word as before (0.3-0.8 s; 0.8-1.4 s).
+
+## Benchmark across public clips (2026-10-03)
+
+The tables above measure the project's own sample WAVs and one film scene. This one measures six public clips,
+two per spoken language, chosen for clear speech and a license that allows the use (public domain, or CC BY 3.0;
+read on each Wikimedia Commons file page; every clip is credited in `NOTICE.md`). Nothing in the pipeline changed
+since "Where the numbers stand" (code of commit `a346a9b`; this commit adds only scripts and documents).
+
+**The clips.** Each was taken from Wikimedia Commons as published, transcoded to 16 kHz mono WAV (an excerpt where
+the file is longer than 90 s) and played by the harness as before. The speech-rate columns come from
+`backend/scripts/clip_speech_stats.py`: the clip's own recognizer run offline over the WAV, its token timestamps
+kept; a word is a token that starts one (Mandarin: every character), a pause is a gap of at least 0.3 s between
+consecutive tokens, and "pauses >= 0.5 s" are the ones at which the pause rule closes a line
+(`SUBTITLE_ASR__SPLIT_GAP_S`).
+
+| Clip | What it is | License | Used | Words (zh: characters) / min over the speech | ...while speaking | Pauses >= 0.3 s | Median pause (s) | Longest pause (s) | Share of the time paused | Pauses >= 0.5 s |
+|---|---|---|---|---|---|---|---|---|---|---|
+| English, NASA | NASA ScienceCasts "The Zero Gravity Coffee Cup" (2013): one narrator, read prose over animation; the clip of the README's GIF and screenshot | public domain (PD-NASA) | 0:09-0:39.5, 30.5 s | 162 | 230 | 16 | 0.46 | 1.0 | 30 % | 6 |
+| English, VOA Helix | Voice of America, "Matt Dibble reports on Helix electric aircraft" (2024): a field news report, narration with street interviews, a parade in the background | public domain (PD-USGov-VOA) | whole, 89.2 s | 137 | 226 | 45 | 0.36 | 10.1 | 40 % | 15 |
+| Mandarin, VOA Norway | 美国之音 (VOA Chinese) news, "挪威部长称警方反应精彩" (2011): one studio news reader, continuous | public domain (PD-USGov-VOA) | whole, 72.0 s | 277 | 392 | 45 | 0.40 | 0.76 | 29 % | 13 |
+| Mandarin, VOA Taiwan | 美国之音 (VOA Chinese) news, "台湾准备迎战强台风" (2013): one studio news reader, continuous | public domain (PD-USGov-VOA) | whole, 40.1 s | 275 | 430 | 32 | 0.42 | 0.68 | 36 % | 7 |
+| Bengali, Maasranga | Maasranga News (Bangladesh), "চিকিৎসার জন্য ঢাকায় তরিকুল" (2018): a TV news report, anchor then reporter | CC BY 3.0 | 0:00-1:00, 60 s | 127 | 165 | 19 | 0.40 | 2.5 | 23 % | 8 |
+| Bengali, Wikitongues | Wikitongues, "Sanjoy speaking Bengali" (2016): one speaker talking about his childhood to the camera, unhurried, with pauses to think | CC BY 3.0 | 0:00-1:15, 75 s | 72 | 184 | 45 | 0.92 | 2.5 | 61 % | 34 |
+
+**How it was run.** `backend/scripts/line_latency_table.py`, defaults: 3 browser runs per clip, the real extension
+in Chromium, a backend started per run, spoken language Auto-detect, one target (English; Chinese for English
+speech), translation on the CPU, no `--prime-audio` (the extension primes the capture itself since A11), the clip
+played after captions are started. Windows 11, Intel i9-13900H, CPU only. Columns as defined at the top; a run's
+own numbers are in `backend/logs/run_<run_id>.jsonl`. The runs were made in two batches: the first was cut short
+by the machine running out of memory after the first Bengali run (the five runs that failed to start are not in
+the table; nothing was retried selectively), and the five missing Bengali runs were made 40 minutes later.
+
+| Clip | run_id | Detected | Lines | First display p50 / max (s) | First translation p50 / max (s) | Final p50 / max (s) | First confirmed subtitle (s) | Segments (s) | Translate calls (per s) | Translate p50 / p95 (ms) | Drafts per line | Words per draft | Non-append revisions per line |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| English, NASA | `20261003T210630-84e65c` | en | 7 | 0.46 / 0.50 | 1.44 / 3.37 | 1.03 / 2.88 | 3.69 | 3.76, 3.36, 2.88, 6.72, 2.68, 3.92, 5.76 | 24 (0.79) | 25.3 / 62.1 | 1.29 | 5.11 | 0.86 |
+| English, NASA | `20261003T210731-0cb6c2` | en | 7 | 0.46 / 0.47 | 1.48 / 3.50 | 1.05 / 2.89 | 3.69 | 3.72, 3.48, 2.88, 6.72, 2.64, 3.96, 5.76 | 24 (0.79) | 25.1 / 50.9 | 1.29 | 5.56 | 0.86 |
+| English, NASA | `20261003T210830-15c6b8` | en | 7 | 0.47 / 0.48 | 1.46 / 3.49 | 1.05 / 2.87 | 3.69 | 3.72, 3.48, 2.88, 6.72, 2.64, 3.96, 5.76 | 24 (0.79) | 25.3 / 61.6 | 1.29 | 5.56 | 0.86 |
+| English, VOA Helix | `20261003T210928-a53dbb` | en | 20 | 0.46 / 0.49 | 1.46 / 4.99 | 1.03 / 4.33 | 2.71 | 5.12, 3.52, 2.56, 1.72, 2.32, 4.96, 3.92, 5.8, 1.28, 4.64, 4, 3.84, 3.2, 3.36, 4, 1.6, 4.36, 6, 3.84, 4.48 | 60 (0.67) | 29.9 / 51.2 | 1.25 | 4.72 | 0.75 |
+| English, VOA Helix | `20261003T211123-ff49d7` | en | 19 | 0.46 / 0.50 | 1.62 / 4.99 | 1.02 / 4.34 | 2.75 | 5.92, 5.92, 1.72, 2.32, 4.96, 4.28, 5.48, 1.28, 5.12, 3.84, 3.84, 3.2, 3.36, 4, 1.6, 4.32, 5.2, 4.48, 4.16 | 58 (0.65) | 27.9 / 62.2 | 1.26 | 4.67 | 0.95 |
+| English, VOA Helix | `20261003T211318-52b199` | en | 19 | 0.46 / 0.48 | 1.46 / 4.98 | 1.02 / 4.34 | 2.74 | 5.12, 3.52, 2.56, 1.72, 2.32, 4.96, 3.92, 5.8, 1.28, 4.64, 4, 3.84, 3.2, 3.36, 4, 4.68, 6, 3.84, 4.48 | 59 (0.66) | 30.5 / 63 | 1.26 | 4.83 | 0.84 |
+| Mandarin, VOA Norway | `20261003T211513-dddec5` | zh | 17 | 0.41 / 1.59 | 1.41 / 3.30 | 0.84 / 2.80 | 2.23 | 6.88, 1.36, 2.24, 3.56, 4.4, 3.24, 6.08, 6.08, 5.12, 4.16, 6.72, 3.84, 3.28, 5.12, 2.24, 2.24, 5.44 | 58 (0.81) | 33.9 / 70.9 | 1.47 | 2.6 | 1.18 |
+| Mandarin, VOA Norway | `20261003T211653-13966f` | zh | 17 | 0.41 / 1.59 | 1.40 / 4.14 | 0.86 / 4.01 | 2.25 | 5.92, 2.28, 2.24, 3.56, 4.44, 2.64, 6.36, 6.08, 5.12, 4.16, 6.72, 3.84, 3.28, 5.12, 2.24, 2.24, 5.44 | 58 (0.81) | 36.2 / 65.2 | 1.53 | 2.96 | 1.18 |
+| Mandarin, VOA Norway | `20261003T211833-3b72c7` | zh | 16 | 0.38 / 1.56 | 1.40 / 3.46 | 0.87 / 3.07 | 2.24 | 5.92, 4.52, 3.56, 4.44, 5.48, 3.56, 6.08, 5.12, 4.16, 6.72, 3.8, 3.28, 5.12, 2.24, 2.24, 5.44 | 56 (0.78) | 35.9 / 63.4 | 1.62 | 2.88 | 1.12 |
+| Mandarin, VOA Taiwan | `20261003T212013-087857` | zh | 9 | 0.39 / 1.61 | 1.71 / 4.85 | 0.85 / 4.12 | 2.26 | 7.08, 2.32, 4.88, 4.8, 4.56, 3.88, 3.32, 2.84, 5.44 | 34 (0.85) | 39.1 / 67.2 | 1.67 | 4.2 | 1.11 |
+| Mandarin, VOA Taiwan | `20261003T212121-7e3d61` | zh | 9 | 0.42 / 1.59 | 1.71 / 4.60 | 0.85 / 4.41 | 2.28 | 7.04, 3.36, 3.88, 2.56, 2.2, 4.6, 3.88, 6.52, 5.44 | 33 (0.82) | 37.2 / 70.4 | 1.56 | 4 | 0.89 |
+| Mandarin, VOA Taiwan | `20261003T212229-39991a` | zh | 10 | 0.38 / 1.57 | 1.40 / 3.80 | 0.82 / 3.08 | 2.23 | 7.08, 3.36, 3.88, 2.56, 4.04, 2.6, 3.88, 3.32, 2.84, 5.44 | 33 (0.82) | 33.3 / 58.8 | 1.6 | 3.31 | 1 |
+| Bengali, Maasranga | `20261003T212337-0d52ba` | bn | 14 | 0.78 / 1.72 | 2.73 / 4.51 | 1.49 / 3.51 | 2.06 | 4.88, 3.36, 5.16, 4.64, 4.68, 4.28, 3.92, 4.04, 2.64, 4.48, 4.6, 2.76, 3.6, 2.08 | 42 (0.7) | 33.1 / 66 | 1.29 | 4.33 | 1.21 |
+| Bengali, Maasranga | `20261003T221202-5a4559` | bn | 14 | 0.78 / 1.68 | 2.88 / 4.70 | 1.48 / 3.70 | 2.02 | 4.88, 2.76, 5.32, 4.64, 5.68, 2.96, 3.92, 4.04, 3.68, 3.36, 2.88, 2.84, 2.8, 5.92 | 40 (0.67) | 28.8 / 55.2 | 1.07 | 5.2 | 1 |
+| Bengali, Maasranga | `20261003T221330-91a181` | bn | 14 | 0.78 / 1.69 | 2.74 / 5.29 | 1.45 / 4.34 | 2.02 | 4.88, 2.76, 5.32, 4.64, 5.68, 2.96, 3.92, 2.84, 4.92, 3.36, 2.88, 2.88, 2.8, 5.92 | 39 (0.65) | 29.7 / 63.4 | 1.07 | 5.53 | 1.07 |
+| Bengali, Wikitongues | `20261003T221456-832e9e` | bn | 29 | 0.71 / 1.64 | 2.07 / 2.96 | 1.11 / 1.43 | 2.63 | 1.92, 1.28, 1.92, 3.2, 3.36, 2, 2.56, 1.92, 3, 1.56, 2.56, 3.2, 1.92, 1.28, 2.56, 4.48, 2.56, 3.84, 3.2, 1.28, 3.2, 1.28, 2.56, 3.84, 1.92, 3.84, 1.92, 2.56, 2.56 | 38 (0.51) | 17.4 / 31.9 | 0.28 | 2.5 | 0.21 |
+| Bengali, Wikitongues | `20261003T221635-e7645e` | bn | 28 | 0.78 / 1.81 | 2.08 / 2.96 | 1.11 / 1.43 | 2.14 | 4.64, 1.92, 3.2, 3.4, 1.88, 2.56, 1.92, 3.04, 1.56, 1.28, 3.2, 1.92, 1.28, 2.56, 4.48, 2.56, 3.84, 3.2, 1.28, 1.92, 1.28, 2.56, 3.84, 4.48, 1.28, 1.92, 2.56, 2.56 | 38 (0.51) | 17.9 / 34.1 | 0.32 | 2.56 | 0.21 |
+| Bengali, Wikitongues | `20261003T221813-7ad340` | bn | 29 | 0.70 / 1.02 | 2.07 / 2.96 | 1.12 / 1.43 | 2.09 | 1.92, 1.28, 1.92, 3.2, 3.36, 2, 2.56, 1.92, 3, 1.56, 2.56, 3.2, 1.92, 1.28, 2.56, 4.48, 2.56, 3.84, 3.2, 1.28, 3.2, 1.28, 2.56, 3.84, 1.92, 3.84, 1.92, 2.56, 2.56 | 37 (0.49) | 18.6 / 32.7 | 0.24 | 2.57 | 0.17 |
+
+
+
+Per clip, the range over its three runs (p50 of the clip's lines in each run):
+
+| Clip | Detected | Lines | First translated text p50 (s) | Final translation p50 (s) | Non-append revisions per line | Drafts per line | First confirmed subtitle (s) | Speech: words (zh: characters) / min, median pause |
+|---|---|---|---|---|---|---|---|---|
+| **Mandarin, VOA Norway** | zh, 3 of 3 | 16-17 | **1.40-1.41** | 0.84-0.87 | 1.12-1.18 | 1.47-1.62 | 2.23-2.25 | 277, 0.40 s |
+| Mandarin, VOA Taiwan | zh, 3 of 3 | 9-10 | 1.40-1.71 | 0.82-0.85 | 0.89-1.11 | 1.56-1.67 | 2.23-2.28 | 275, 0.42 s |
+| English, NASA | en, 3 of 3 | 7 | 1.44-1.48 | 1.03-1.05 | 0.86 | 1.29 | 3.69 | 162, 0.46 s |
+| English, VOA Helix | en, 3 of 3 | 19-20 | 1.46-1.62 | 1.02-1.03 | 0.75-0.95 | 1.25-1.26 | 2.71-2.75 | 137, 0.36 s |
+| Bengali, Wikitongues | bn, 3 of 3 | 28-29 | 2.07-2.08 | 1.11-1.12 | 0.17-0.21 | 0.24-0.32 | 2.09-2.63 | 72, 0.92 s |
+| Bengali, Maasranga | bn, 3 of 3 | 14 | 2.73-2.88 | 1.45-1.49 | 1.00-1.21 | 1.07-1.29 | 2.02-2.06 | 127, 0.40 s |
+
+**The fastest clip is the Mandarin VOA Norway news item**: first translated text 1.40-1.41 s after a line's first
+word in 3 of 3 runs (the Taiwan item ties in one run and is 1.71 s in two). `docs/demo-fastest.gif` in the README
+is a recorded run of it (run `20261003T222146-78982f`, the whole file with its picture, `make_demo_gif.py --clip`,
+Auto-detect, target English: Chinese confirmed 2.18 s after play, first translated text p50 2.0 s over its 6
+lines in 22 s; one run with the video decoded in the browser as well).
+
+**Speech rate and pauses explain much of the difference between clips:**
+
+- **A draft needs a stable prefix of three words (four characters in Mandarin), and the faster the speaker, the
+  sooner it is there.** The two VOA news readers speak 275-277 characters a minute (390-430 while speaking) with
+  no pause longer than 0.8 s: four characters are in the air within a second, the third partial that confirms them
+  follows at the recognizer's 0.32 s chunk, and the first draft is on screen 1.4 s after the line began. The
+  English narrators (137-162 words a minute) reach three stable words a little later: 1.44-1.62 s. The same rule
+  cuts the other way on the Bengali news report (127 words a minute, but the Bengali recognizer decodes in 0.64 s
+  chunks, so three partials in a row take 1.9 s): 2.7-2.9 s.
+- **Long pauses close lines, and a closed line's final translation comes sooner than a draft would.** The
+  Wikitongues speaker pauses every other second (45 pauses in 75 s, median 0.92 s, 61 % of the time; 34 of them at
+  or over the 0.5 s that ends a line), so his 75 s are 28-29 short lines (1.3-4.5 s) and most of them end before
+  the three-partial rule has anything to show: 0.24-0.32 drafts per line, and the "first translated text" is in
+  most lines the final translation itself, 2.07 s after the first word. That is faster than the Bengali news
+  report's drafts (2.7-2.9 s) and nearly free of rewrites: 0.17-0.21 non-append revisions per line against
+  1.0-1.2 everywhere else. Slow, paused speech is the easy case for this design; the final translation after the
+  last word (1.11 s) is also the fastest Bengali number in the table.
+- **Continuous speech runs into the 6 s cut.** The news readers' lines are closed by the length rule as often as
+  by a pause (Norway: lines of 5.1-6.9 s in every run; Taiwan: a 7.1 s first line), and a line cut by the length
+  rule gets its final only once it has run past 6 s: that is the 2.8-4.4 s "final max" of the news clips against
+  1.4 s on the Wikitongues clip. The pause rule needs 0.5 s between words; a news reader rarely gives it.
+- **The language's chunk size sits under everything.** First display of a line's source text is 0.38-0.47 s for
+  English and Mandarin and 0.70-0.78 s for Bengali (0.32 against 0.64 s decode chunks), the final after the last
+  word 0.82-1.05 s against 1.11-1.49 s. Within a language the clips differ by speech rate and pauses; between
+  languages by the chunk (observations A9).
+- **Noise costs recognition, not latency.** The Helix report's parade and street interviews gave the recognizer
+  the clip's worst text ("SAUCILLATO CALIFORNIA" for Sausalito), but its latencies sit with the NASA narration
+  (1.46-1.62 s), and its 10 s stretch without recognised words is a gap in the table's lines, not a slow line.
+
+**Auto-detect.** Every clip was confirmed in its language in 3 of 3 runs: Mandarin 2.23-2.28 s after play,
+Bengali 2.02-2.63 s, English 2.71-2.75 s (Helix) and 3.69 s (NASA, whose first words are slower; English is
+confirmed on the full window only). Translation calls 0.49-0.85 per second of clip, p50 17-39 ms, p95 32-71 ms on
+the CPU.
+
+**What came out** (run 1 of each, the first lines, errors included; the full lines are not kept, the run logs hold
+lengths only): Norway, "…commended the police for last Friday's shooting bombing, which killed 76 people." /
+"On Tuesday, the Norwegian Minister of Justice, Mr. Krutstobogait, said:"; Taiwan, "Let's continue and see if
+Taiwan is ready to host a powerful typhoon."; NASA, "在卫星和空间站领域" / "中午的天空和晚上一样黑"; Helix,
+"有行军乐队和多彩的浮标,但也有" / "飞车"; Maasranga, "Tobikul Islam was brought to Dhaka for better treatment";
+Wikitongues, "My name is Sanjay." / "Ami" / "Calcutta" / "I was born in Kolkata and": one short line per
+pause, and a one-word line where he paused inside a sentence ("Ami" is the word আমি, "I", which OPUS-MT left as
+it was: a one-word line is the price of cutting at every pause).
