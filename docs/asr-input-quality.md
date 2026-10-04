@@ -97,4 +97,4 @@ Bengali punctuation model in sherpa-onnx either.
 - Utterances over 10 s are still cut by the endpoint rule (en/1.wav: "...to connect her" / "parent for ever..."),
   and each piece is translated alone.
 - These are six short read-speech clips; they show the size of the casing effect, not translation quality in
-  general. Per-direction quality notes are in the README's limitations.
+  general. Per-direction quality notes are in `docs/limitations.md`.

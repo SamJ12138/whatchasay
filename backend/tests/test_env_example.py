@@ -78,18 +78,20 @@ def test_the_real_env_file_is_ignored_and_the_example_is_not():
 
 
 def test_every_setting_has_its_own_description_line():
-    """The README's configuration table is generated from these comments: one per key."""
+    """The configuration table (docs/configuration.md) is generated from these comments: one per key."""
     lines = EXAMPLE.read_text(encoding="utf-8").splitlines()
     for i, line in enumerate(lines):
         if LINE.match(line):
             above = lines[i - 1]
             assert above.startswith("# ") and not LINE.match(above) and not above.startswith("# ----"), \
                 f"{line.split('=')[0][2:]} has no description line of its own"
-            assert "|" not in above, f"'|' would break the README table: {above}"
+            assert "|" not in above, f"'|' would break the configuration table: {above}"
 
 
-def test_the_readme_lists_every_setting_with_its_default():
-    readme = (EXAMPLE.parents[1] / "README.md").read_text(encoding="utf-8")
+def test_the_configuration_doc_lists_every_setting_and_the_readme_points_at_it():
+    doc = (EXAMPLE.parents[1] / "docs" / "configuration.md").read_text(encoding="utf-8")
     for key, value in documented().items():
-        assert f"| `{key}` |" in readme, f"README configuration table lacks {key}"
+        assert f"| `{key}` |" in doc, f"docs/configuration.md lacks {key}"
+    readme = (EXAMPLE.parents[1] / "README.md").read_text(encoding="utf-8")
+    assert "](docs/configuration.md)" in readme and "| `SUBTITLE_" not in readme
 

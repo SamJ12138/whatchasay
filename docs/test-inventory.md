@@ -115,7 +115,7 @@ ran without the server's real engines except `test_pipeline`.
 | `test_env_example` (4) | every setting documented once in `backend/.env.example` and nothing else; the fully uncommented file loads to the defaults; key fields empty, cloud off; `backend/.env` ignored, the example not | fast |
 | `test_security` :: `test_harness_derives_extension_ids_like_the_backend` | the harness's copy of the extension-id derivation equals `app.security`'s | fast |
 | `test_dead_code` (+7) | seven settings nothing read are gone | fast |
-| `test_env_example` (+2) | every setting has its own description line (no pipe character), and the README's configuration table lists every setting | fast |
+| `test_env_example` (+2) | every setting has its own description line (no pipe character), and the configuration table (`docs/configuration.md`) lists every setting | fast |
 | `test_app_inprocess` :: `test_health_reports_engines` (extended) | `/health/json` names this process's `run_id` | fast |
 | `extension/tests/options-asr.test.js` (2) | the ASR engine select offers only auto / sherpa-zipformer; no extension source mentions Whisper | node |
 | `extension/tests/options-shortcuts.test.js` (+1) | the popup's shortcut list shows exactly the bound keys | node |

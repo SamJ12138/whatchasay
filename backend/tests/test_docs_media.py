@@ -81,12 +81,13 @@ FASTEST_GIF = REPO / "docs" / "demo-fastest.gif"
 def test_fastest_gif_sits_right_under_the_opening_with_its_caption():
     """The headline GIF is the fastest clip of the public-clip benchmark (docs/latency.md): its
     caption names the clip and its license, says it ran on CPU, that it is the fastest of the
-    clips in the table, and links the table."""
+    clips in the table, and links the table (the run and the source are in docs/latency.md
+    and NOTICE.md)."""
     blocks = [" ".join(b.split()) for b in re.split(r"\n\s*\n", README) if b.strip()]
     i = blocks.index(OPENING)
     assert re.fullmatch(r"!\[[^\]]+\]\(docs/demo-fastest\.gif\)", blocks[i + 1]), blocks[i + 1]
     caption = blocks[i + 2]
-    for part in ("CPU", "fastest of the six", "docs/latency.md", "commons.wikimedia.org", "run `2026"):
+    for part in ("CPU", "fastest of the six", "docs/latency.md", "NOTICE.md"):
         assert part in caption, (part, caption)
     assert "public domain" in caption or "CC BY" in caption, caption
 
@@ -206,7 +207,7 @@ def test_a9_is_closed_as_a_model_limit_with_the_chunk_number():
     boundary and sherpa-onnx offers no smaller-chunk export of that model (one Bengali
     streaming model in its catalogue, one ONNX export, no checkpoint). The README's
     limitations and observations A9 say so, with the number, and A9 is closed."""
-    limits = README[README.index("## Status and limitations"):README.index("## License")]
+    limits = (REPO / "docs" / "limitations.md").read_text(encoding="utf-8")
     bengali = [b for b in limits.split("\n- ") if "0.64" in b]
     assert len(bengali) == 1, bengali
     for part in ("0.64", "0.32", "decode", "no smaller-chunk export"):
@@ -215,3 +216,21 @@ def test_a9_is_closed_as_a_model_limit_with_the_chunk_number():
     a9 = next(line for line in obs.splitlines() if line.startswith("| A9 |"))
     assert "closed" in a9 and "model limit" in a9 and "0.64" in a9 and "alphacep/vosk-model-small-streaming-bn" in a9, a9
     assert "Fast dialogue with pauses under half a second still runs two sentences into one line" not in README
+
+
+def test_readme_points_at_the_moved_sections_and_keeps_short_captions():
+    """The configuration tables and the full limitations list live in docs/; the README has
+    one pointer to each, five limitations, and GIF captions of at most two lines."""
+    for doc in ("configuration.md", "limitations.md"):
+        assert (REPO / "docs" / doc).exists() and f"](docs/{doc})" in README, doc
+    limits = README[README.index("## Status and limitations"):README.index("## License")]
+    assert len(re.findall(r"^- ", limits, re.M)) == 5, limits
+    full = (REPO / "docs" / "limitations.md").read_text(encoding="utf-8")
+    assert len(re.findall(r"^- ", full, re.M)) > 15
+    for bullet in re.findall(r"^- (.{40})", limits, re.M):
+        assert bullet in full, bullet
+    blocks = [b.strip() for b in re.split(r"\n\s*\n", README) if b.strip()]
+    for i, block in enumerate(blocks):
+        if re.fullmatch(r"!\[[^\]]+\]\(docs/[\w-]+\.gif\)", block):
+            caption = blocks[i + 1]
+            assert caption.startswith("*") and caption.endswith("*") and len(caption.splitlines()) <= 2, caption

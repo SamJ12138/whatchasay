@@ -969,3 +969,18 @@ D4 cloud providers off by default, keys only in backend config.
   column. Tests (`test_docs_media.py`): the fastest GIF under the opening with its caption parts and within 5 MB /
   5-10 s, the YouTube GIF in "Using it" between the glossary and "What is remembered", the benchmark section with
   18 run_ids, the speech-rate columns and every clip in NOTICE.md. Tallies: fast 373, slow 44, node 162.
+
+### 2026-10-03 — README shortened: configuration and limitations moved to docs
+- Commit "docs: configuration tables and limitations list move out of the README". The README's Configuration
+  section (the two intro paragraphs and all nine tables) is now `docs/configuration.md` and the full "Status and
+  limitations" list `docs/limitations.md`, both verbatim; the README keeps a one-line pointer to each and five
+  limitations, verbatim, chosen as the ones a first-time user meets soonest (Windows-only testing, three spoken
+  languages with Bengali the weakest, the dimmed first seconds under Auto-detect, drafts replaced by the final,
+  DRM sites giving silence). The three GIF captions are two lines each (headline: clip, public domain, CPU,
+  fastest of the six, link to the table; the run id, the Commons source and the timings stay in `docs/latency.md`
+  and `NOTICE.md`; the film scene's run in `docs/live-test-youtube.md`). README 629 -> 415 lines. Tests retargeted:
+  `test_env_example` reads `docs/configuration.md` (and the README must point at it and hold no setting rows),
+  the A9 limitation check reads `docs/limitations.md`, the headline caption check asks for `NOTICE.md` instead of
+  the URL and run id; new `test_readme_points_at_the_moved_sections_and_keeps_short_captions`. Two
+  cross-references updated (`docs/asr-input-quality.md`, `docs/test-inventory.md`). Tallies: fast 374, slow 44,
+  node 162.
