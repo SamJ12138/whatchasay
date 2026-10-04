@@ -115,7 +115,9 @@ def test_auto_mode_confirms_without_reset_when_guess_is_right():
     for _ in range(40):
         msgs.extend(s.feed(loud_frame()))
     assert "reset" not in [m["type"] for m in msgs]
-    assert s.lang == "en" and s.lang_confirmed and len(eng.sessions) == 1
+    # the first recognizer stays (the parallel ones, Mandarin and Bengali, are stopped)
+    assert s.lang == "en" and s.lang_confirmed and s.asr is eng.sessions[0] and not eng.sessions[0].closed
+    assert all(x.closed for x in eng.sessions[1:])
 
 
 def test_manual_override_restarts_recognizer():
@@ -123,7 +125,8 @@ def test_manual_override_restarts_recognizer():
     s = StreamingASRSession(SessionConfig(source_lang="auto"), {"sherpa-zipformer": eng}, lid_identify=lambda a, b: None)
     out = s.set_language("zh")
     assert out[-1] == {"type": "lid", "lang": "zh", "source": "manual", "confirmed": True, "status": "manual"}
-    assert s.lang == "zh" and len(eng.sessions) == 2
+    assert s.lang == "zh" and s.asr is eng.sessions[-1] and eng.sessions[-1].lang == "zh"
+    assert all(x.closed for x in eng.sessions[:-1])     # the first and the parallel recognizers
 
 
 @pytest.mark.slow
@@ -254,7 +257,8 @@ def test_the_detection_buffer_is_replayed_in_40_ms_frames_and_no_frame_twice():
     triggered detection is part of the buffer: it must not be fed again after the replay."""
     eng = SizeRecordingEngine()
     s = StreamingASRSession(
-        SessionConfig(source_lang="auto", allowed_langs=["en", "zh", "bn"], lid_window_s=1.0, lid_min_rms=0.001, partial_interval_ms=0),
+        SessionConfig(source_lang="auto", allowed_langs=["en", "zh", "bn"], lid_window_s=1.0, lid_min_rms=0.001, partial_interval_ms=0,
+                      parallel_window_s=0),  # the replay path (a switch after the parallel window)
         {"sherpa-zipformer": eng}, lid_identify=lambda audio, allowed: "bn")
     frames = 0
     while s.lang != "bn":
@@ -326,7 +330,7 @@ def test_one_early_answer_is_not_enough_to_switch():
     """A second of audio is weak evidence: the early answer has to come twice in a row."""
     s, eng, calls = _early(lambda secs: "zh" if secs < 1.2 else "en")
     msgs, decided_at = _feed_until_decided(s)
-    assert s.lang == "en" and s.lang_status == "confirmed" and len(eng.sessions) == 1
+    assert s.lang == "en" and s.lang_status == "confirmed" and s.asr is eng.sessions[0]
     assert "reset" not in [m["type"] for m in msgs]
     assert decided_at == 2.52
 

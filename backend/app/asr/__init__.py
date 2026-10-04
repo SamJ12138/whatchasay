@@ -107,6 +107,7 @@ def create_session(
         prior=dict(prior or {}),
         lid_prior_threshold=settings.asr.lid_prior_threshold,
         lid_prior_floor_en=settings.asr.lid_prior_floor_en,
+        parallel_window_s=settings.asr.parallel_window_s,
     )
     return StreamingASRSession(cfg, get_engines(), lid_identify=_lid_identify, restore_text=_restore_text)
 

@@ -73,7 +73,7 @@ objects are JSON; relative paths are relative to `backend/`. Every setting:
 | `SUBTITLE_ASR__PUNCTUATION` | `true` | Restore casing and punctuation of English speech before translation |
 | `SUBTITLE_ASR__PUNCT_DIR` | `data/models/punct` | Where the punctuation model lives |
 | `SUBTITLE_ASR__LANGUAGES` | `["en", "zh", "bn"]` | Spoken languages with streaming models (auto-detect chooses among these) |
-| `SUBTITLE_ASR__NUM_THREADS` | `2` | CPU threads per recognizer |
+| `SUBTITLE_ASR__NUM_THREADS` | `1` | CPU threads per recognizer and for language ID. 1: onnxruntime's thread pools spin between 40 ms frames, so 2 cost 1.5 cores per recognizer at real time against 0.06 with 1, for 3-4 ms per decode chunk |
 | `SUBTITLE_ASR__RULE1_MIN_TRAILING_SILENCE` | `1.2` | Endpointing (seconds): reset after this much silence when no word was recognised yet |
 | `SUBTITLE_ASR__RULE2_MIN_TRAILING_SILENCE` | `0.6` | The silence threshold: end a line after this much silence following speech (seconds) |
 | `SUBTITLE_ASR__RULE3_MIN_UTTERANCE_LENGTH` | `30.0` | The recognizer's own hard reset after this many seconds without an endpoint; it can cut inside a word and is only a backstop behind MAX_SEGMENT_S |
@@ -88,6 +88,7 @@ objects are JSON; relative paths are relative to `backend/`. Every setting:
 | `SUBTITLE_ASR__LID_MIN_CONFIDENCE` | `0.6` | Spoken-language ID answers only at or above this confidence among the spoken languages |
 | `SUBTITLE_ASR__LID_PRIOR_THRESHOLD` | `0.6` | The page's language prior (docs/page-prior.md): its favourite is the first recognizer at or above this, else English |
 | `SUBTITLE_ASR__LID_PRIOR_FLOOR_EN` | `0.97` | With a prior favouring English, one language-ID answer confirms it early only at or above this (whisper-tiny says English up to 0.97 on the first second of Mandarin and Bengali) |
+| `SUBTITLE_ASR__PARALLEL_WINDOW_S` | `5.0` | Until the language is confirmed, every spoken language's recognizer hears the audio for at most this many seconds; the confirmed one's text is ready at once, nothing replayed (0 = off) |
 | `SUBTITLE_ASR__PARTIAL_INTERVAL_MS` | `120` | Minimum gap between partial captions (ms) |
 | `SUBTITLE_ASR__DRAFT_STABLE_PARTIALS` | `3` | Draft translation of a line that is still open: a word counts as stable after this many partial results in a row (0 = no drafts) |
 | `SUBTITLE_ASR__DRAFT_DEBOUNCE_MS` | `1500` | The stable part of an open line is re-translated at most once per this many ms (lower: earlier drafts, more rewriting on screen) |

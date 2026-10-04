@@ -43,6 +43,17 @@ Language handling
                         English only from the full window on (the same habit). No
                         prior, or one under the threshold: as above, unchanged.
 
+                        Parallel recognizers: until the language is confirmed, every
+                        frame also goes to the other languages' recognizers (at most
+                        parallel_window_s of audio). Only the first recognizer's text
+                        is sent. At confirmation the confirmed one's text is already
+                        there: the same recognizer's open line is sent again,
+                        confirmed (the overlay undims it); another recognizer takes
+                        over with the finals it wrote so far and its open line, and
+                        no audio is replayed or decoded twice; the others stop.
+                        After the window only the first recognizer runs, and a later
+                        switch replays the buffered audio as before.
+
 Messages (JSON, sent by the WebSocket endpoint):
     {type:'partial', utterance_id, text, lang, lang_status, confirmed, t0, t1, w_first, w_last, w_session
                      [, stable_text]}   stable_text: the leading words of the open line that were the same
@@ -128,6 +139,7 @@ class SessionConfig:
     prior: Dict[str, float] = field(default_factory=dict)  # {lang: probability} before any audio (page, memory)
     lid_prior_threshold: float = 0.6  # the prior's favourite is the first recognizer at or above this
     lid_prior_floor_en: float = 0.97  # one attempt confirms a favoured English only at or above this
+    parallel_window_s: float = 5.0    # all languages' recognizers hear the audio for at most this long (0 = off)
 
 
 class StreamingASRSession:
@@ -161,6 +173,13 @@ class StreamingASRSession:
         self._lid_full_attempts = 0                   # attempts on the full window (at most 2)
         self._lid_early_answer: Optional[str] = None  # what the previous early attempt said
         self._prior_lang: Optional[str] = None        # the prior's favourite, when it is the first recognizer
+        # the other languages' recognizers while the language is not confirmed: lang -> (engine, session),
+        # what each wrote (finals, and the partials of its open line), and where their audio clock starts
+        self._parallel: Dict[str, tuple] = {}
+        self._parallel_finals: Dict[str, List[AsrEvent]] = {}
+        self._parallel_open: Dict[str, List[AsrEvent]] = {}
+        self._parallel_origin = 0
+        self._open_partial: Optional[AsrEvent] = None  # the first recognizer's newest partial of its open line
 
         self._last_partial_sent = 0.0
         self._pending_partial: Optional[AsrEvent] = None
@@ -193,6 +212,7 @@ class StreamingASRSession:
             if self._prior_lang:
                 msg["prior"] = round(config.prior[self._prior_lang], 3)
             self._startup_msgs.append(msg)
+            self._start_parallel()
             if config.prior:
                 obs.log("lid_prior", "success" if self._prior_lang else "skip", prior=config.prior,
                         favoured=self._prior_lang, provisional=provisional, threshold=config.lid_prior_threshold,
@@ -208,6 +228,90 @@ class StreamingASRSession:
             except RuntimeError:
                 continue
         return self.config.allowed_langs[0]
+
+    def _start_parallel(self) -> None:
+        """The other allowed languages' recognizers, fed from now on (only with language ID)."""
+        self._stop_parallel(None)
+        if self.config.parallel_window_s <= 0 or self.lid_identify is None:
+            return
+        for lang in self.config.allowed_langs:
+            if lang == self.lang or lang in self._parallel:
+                continue
+            try:
+                eng = self._pick_engine(lang)
+            except RuntimeError:
+                continue
+            self._parallel[lang] = (eng, eng.start_session(lang))
+            self._parallel_finals[lang], self._parallel_open[lang] = [], []
+        self._parallel_origin = self.samples_received
+
+    def _stop_parallel(self, reason: Optional[str], keep: Optional[str] = None) -> None:
+        """Close the parallel recognizers (but `keep`)."""
+        if not self._parallel:
+            return
+        stopped = [l for l in self._parallel if l != keep]
+        for lang in stopped:
+            self._parallel.pop(lang)[1].close()
+            self._parallel_finals.pop(lang, None)
+            self._parallel_open.pop(lang, None)
+        if reason:
+            obs.log("asr_parallel", "success", reason=reason, stopped=stopped, kept=keep,
+                    audio_s=round((self.samples_received - self._parallel_origin) / SAMPLE_RATE, 2))
+
+    def _feed_parallel(self, pcm16: bytes) -> None:
+        for lang, (_, sess) in self._parallel.items():
+            finals, open_line = self._parallel_finals[lang], self._parallel_open[lang]
+            for ev in sess.feed(pcm16):
+                if ev.kind == "final":
+                    finals.append(ev)
+                    open_line.clear()
+                else:
+                    if open_line and open_line[-1].utterance_id != ev.utterance_id:
+                        open_line.clear()
+                    open_line.append(ev)
+                    del open_line[:-8]
+        window = int(SAMPLE_RATE * self.config.parallel_window_s)
+        if self.samples_received - self._parallel_origin >= window:
+            self._stop_parallel("window")
+
+    def _take_parallel(self, lang: str) -> List[AsrEvent]:
+        """Make `lang`'s parallel recognizer the session's; stop the others. Returns what it wrote."""
+        eng, sess = self._parallel[lang]
+        backlog = self._parallel_finals[lang] + self._parallel_open[lang]
+        self._stop_parallel("confirmed", keep=lang)
+        self._parallel.clear()
+        self._parallel_finals.clear()
+        self._parallel_open.clear()
+        if self.asr is not None:
+            self.asr.close()
+        self.lang, self.engine, self.asr = lang, eng, sess
+        self._asr_origin = self._parallel_origin
+        self._last_partial_sent = 0.0
+        self._pending_partial = None
+        self._open_partial = None
+        self._partial_history = []
+        self._history_utterance = None
+        logger.info("ASR session: lang=%s engine=%s (parallel recognizer)", lang, eng.name)
+        return backlog
+
+    def _emit_backlog(self, events: List[AsrEvent]) -> List[dict]:
+        """A taken-over recognizer's text: every final, and the newest partial of its open line."""
+        out: List[dict] = []
+        last_partial = None
+        for ev in events:
+            self._note_for_stability(ev)
+            if ev.kind == "final":
+                self.stats["finals"] += 1
+                out.append(self._event_msg(ev))
+                last_partial = None
+            else:
+                last_partial = ev
+        if last_partial is not None:
+            self.stats["partials"] += 1
+            self._last_partial_sent = time.time()
+            self._open_partial = last_partial
+            out.append(self._event_msg(last_partial))
+        return out
 
     def _prior_favourite(self) -> Optional[str]:
         """The prior's likeliest language if it reaches the threshold and can be recognised."""
@@ -241,6 +345,7 @@ class StreamingASRSession:
         self._asr_origin = self.samples_received
         self._last_partial_sent = 0.0
         self._pending_partial = None
+        self._open_partial = None
         self._partial_history = []
         self._history_utterance = None
         logger.info("ASR session: lang=%s engine=%s", lang, self.engine.name)
@@ -277,10 +382,12 @@ class StreamingASRSession:
             self._lid_full_attempts = 0
             self._lid_early_answer = None
             self._reset_lid_buffer()
+            self._start_parallel()
             out.append({"type": "lid", "lang": self.lang, "source": "provisional", "confirmed": False, "status": "provisional"})
             return out
         self.config.source_lang = lang
         self._prior_lang = None
+        self._stop_parallel("manual")
         if self.asr is not None and lang == self.lang:
             self.lang_confirmed = True
             self.lang_status = "manual"
@@ -311,6 +418,8 @@ class StreamingASRSession:
         out: List[dict] = self.startup_messages()
 
         self._frame_replayed = False
+        if self._parallel:  # before language ID: a recognizer taken over at this frame has heard it
+            self._feed_parallel(pcm16)
         if not self._lid_done:
             out.extend(self._collect_for_lid(pcm16))
 
@@ -432,7 +541,18 @@ class StreamingASRSession:
                 switched=lang != self.lang, attempt=self._lid_attempts, buffered_s=buffered_s, early=early,
                 confidence=confidence, prior=self._prior_lang,
                 prior_right=None if self._prior_lang is None else lang == self._prior_lang)
-        if lang != self.lang:
+        if lang != self.lang and lang in self._parallel:
+            # Wrong provisional guess, but the right recognizer has been listening all along:
+            # it takes over with what it wrote, nothing is replayed
+            logger.info("LID switched language %s -> %s (parallel recognizer, no replay)", self.lang, lang)
+            self.stats["lid_switches"] += 1
+            backlog = self._take_parallel(lang)
+            out.append({"type": "reset"})
+            out.append({"type": "lid", "lang": lang, "source": "auto", "confirmed": True, "status": "confirmed",
+                        "lid_ms": self.stats["lid_ms"], "switched": True, "parallel": True})
+            out.extend(self._emit_backlog(backlog))
+            self._frame_replayed = True  # it was fed this frame before language ID ran
+        elif lang != self.lang:
             # Wrong provisional guess: swap recognizer, tell UI to drop provisional captions,
             # and replay the buffered audio so the first words are not lost.
             logger.info("LID switched language %s -> %s (replaying %.1fs)", self.lang, lang, self._lid_buffer_samples / SAMPLE_RATE)
@@ -454,8 +574,12 @@ class StreamingASRSession:
             out.extend(self._emit(events, None))
             self._frame_replayed = True  # the buffer ends with the frame that is being fed
         else:
+            self._stop_parallel("confirmed", keep=None)
             out.append({"type": "lid", "lang": lang, "source": "auto", "confirmed": True, "status": "confirmed",
                         "lid_ms": self.stats["lid_ms"]})
+            # the open line is on screen, dimmed: send it again, confirmed
+            if self._open_partial is not None:
+                out.append(self._event_msg(self._open_partial))
         self._reset_lid_buffer()
         return out
 
@@ -464,6 +588,7 @@ class StreamingASRSession:
         now = time.time()
         for ev in events:
             self._note_for_stability(ev)
+            self._open_partial = ev if ev.kind == "partial" else None
             if ev.kind == "partial":
                 if (now - self._last_partial_sent) * 1000 < self.config.partial_interval_ms:
                     self._pending_partial = ev
@@ -536,6 +661,7 @@ class StreamingASRSession:
         return [self._event_msg(ev) for ev in self.asr.flush()]
 
     def close(self) -> None:
+        self._stop_parallel(None)
         if self.asr is not None:
             self.asr.close()
             self.asr = None
@@ -546,6 +672,7 @@ class StreamingASRSession:
             "lang_confirmed": self.lang_confirmed,
             "lang_status": self.lang_status,
             "prior": self._prior_lang,
+            "parallel": sorted(self._parallel),
             "engine": self.engine.name if self.engine else None,
             "target_langs": self.config.target_langs,
             "seconds_received": round(self.samples_received / SAMPLE_RATE, 1),

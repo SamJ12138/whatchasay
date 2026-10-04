@@ -129,7 +129,8 @@ def test_after_a_language_switch_word_times_point_at_the_original_arrival_not_th
     clock = Clock()
     eng = WordTimeEngine()
     s = StreamingASRSession(
-        SessionConfig(source_lang="auto", allowed_langs=["en", "zh", "bn"], lid_window_s=0.4, lid_min_rms=0.001, partial_interval_ms=0),
+        SessionConfig(source_lang="auto", allowed_langs=["en", "zh", "bn"], lid_window_s=0.4, lid_min_rms=0.001, partial_interval_ms=0,
+                      parallel_window_s=0),  # the replay path; the parallel one: tests/test_parallel_recognizers.py
         {"sherpa-zipformer": eng}, lid_identify=lambda audio, allowed: "bn")
     s._now = clock
     msgs = run(s, clock, 60)

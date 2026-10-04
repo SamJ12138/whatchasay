@@ -233,7 +233,9 @@ class ASRConfig(BaseSettings):
     punctuation: bool = Field(default=True)
     punct_dir: Path = Field(default=Path("data/models/punct"))
     languages: List[str] = Field(default=["en", "zh", "bn"], description="Languages with streaming models")
-    num_threads: int = Field(default=2)
+    # One thread: with two, onnxruntime's thread pools spin between the 40 ms frames and a recognizer
+    # stream costs 1.5 cores at real time (0.06 with one), for 3-4 ms per decode chunk (docs/latency.md)
+    num_threads: int = Field(default=1)
     # Where a line ends. The recognizer's endpoint rules (seconds): silence with no word yet /
     # silence after speech (the silence threshold) / its hard reset, which can cut inside a word
     # and is only a backstop behind max_segment_s.
@@ -265,6 +267,9 @@ class ASRConfig(BaseSettings):
     # Mandarin and Bengali reached 0.97).
     lid_prior_threshold: float = Field(default=0.6)
     lid_prior_floor_en: float = Field(default=0.97)
+    # Until the language is confirmed, every allowed language's recognizer hears the audio, for at
+    # most this many seconds (0 = off): the confirmed one's text is ready at once, nothing replayed.
+    parallel_window_s: float = Field(default=5.0)
     partial_interval_ms: int = Field(default=120)
     # Incremental translation (asr/draft.py): the stable prefix of a line that is still open is
     # translated and shown as a draft. A word is stable after this many partials in a row (0 = no

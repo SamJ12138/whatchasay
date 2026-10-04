@@ -84,7 +84,7 @@ def test_prior_right_is_confirmed_at_the_first_attempt(lang):
     s, eng, calls = _session(lambda t: lang, prior={lang: 0.8, "en": 0.2})
     msgs, decided = _run(s)
     assert calls == [1.0] and decided == 1.0                       # today: 1.52 (two attempts)
-    assert s.lang == lang and s.lang_status == "confirmed" and len(eng.sessions) == 1
+    assert s.lang == lang and s.lang_status == "confirmed" and s.asr is eng.sessions[0]
     assert "reset" not in _types(msgs)
     confirmed = [m for m in msgs if m["type"] == "lid" and m.get("confirmed")]
     assert confirmed[0]["lang"] == lang and not confirmed[0].get("switched")
