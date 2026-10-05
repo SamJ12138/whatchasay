@@ -1067,3 +1067,18 @@ D4 cloud providers off by default, keys only in backend config.
   >= 0.97" does not match the code: those 7 are at 0.71-0.97, under the floor; at 1.0 s tiny misfires on 0 of 65.
   README "Language detection" paragraph and docs/limitations.md (the vlog channel) updated. Tallies: fast 458,
   slow 46 (3 new browser tests behind ST_YOUTUBE_CHANNEL_TESTS), node 180.
+
+### 2026-10-05 — Full slow suite; opt-in tests documented; 50-partial-updates test fixed
+
+- Full slow suite with `ST_YOUTUBE_CHANNEL_TESTS=1` and `ST_LID_CLIP_WAV` set (no `ST_YOUTUBE_URL`): 40 passed,
+  1 failed, 5 skipped (2 HY-MT without CUDA/GGUF, 3 YouTube overlay cases), 12 min 23 s. The three channel-memory
+  tests passed. Red: `test_the_block_holds_still_across_50_partial_updates` (failing since before 8d1abdb), 39
+  partial updates seen in its fixed 50 s hold. The block itself held still (0 height and position changes). The
+  looping English sample gives about one in-progress text change a second as the harness samples it (39 and 48 in
+  two runs); the rate had been 50+ at e4f1710 and was not traced further. Fix: `hold_can_end`, so `--partial-updates
+  N` alone ends the hold at the Nth update, and `--hold` is a cap (120 s in the test); unit test first (red), slow
+  test green in 71 s.
+- README Development: "Opt-in slow tests" (`ST_YOUTUBE_CHANNEL_TESTS` and its three tests, plus `ST_YOUTUBE_URL`
+  and `ST_LID_CLIP_WAV`), harness `--profile` / `--memory`, slow suite time ~12 min. Tallies: fast 459, slow 46,
+  node 180.
+

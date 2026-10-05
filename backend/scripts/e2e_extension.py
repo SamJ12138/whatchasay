@@ -409,6 +409,13 @@ def prior_summary(records: list[dict]) -> dict:
             "switched": (done or {}).get("switched"), "right": (done or {}).get("prior_right") if favoured else None}
 
 
+def hold_can_end(partial_updates: int, display_times: bool, lines: int, seen: int) -> bool:
+    """With --partial-updates N and nothing else that wants the whole --hold, the hold ends at
+    the Nth partial update seen (--hold is then the cap): the rate is the clip's and the
+    harness's, not a promise (about one a second on the looping English sample)."""
+    return bool(partial_updates) and not display_times and not lines and seen >= partial_updates
+
+
 def read_language_memory(sw) -> dict | None:
     """The extension's channel memory after the run, per key: the entry, its confidence, and the
     prior it gives on its own (a page with nothing to go on), from the extension's own code."""
@@ -1757,6 +1764,9 @@ def main() -> int:
             if got and args.hold:
                 end = time.time() + args.hold
                 while time.time() < end:
+                    if geometry is not None and hold_can_end(args.partial_updates, args.display_times, args.lines,
+                                                             len(geometry.updates)):
+                        break
                     tick()
                     if geometry is not None and (args.display_times or (args.partial_updates and len(geometry.updates) < args.partial_updates)):
                         # between ticks: fast samples so consecutive partial updates are each seen

@@ -384,6 +384,17 @@ def test_memory_seed_takes_entries_in_the_three_languages_only():
             h.memory_seed(bad)
 
 
+def test_the_hold_ends_once_the_partial_updates_asked_for_were_seen():
+    """--partial-updates N alone: --hold is a cap, the run ends at the Nth update (the looping
+    sample gives about one a second, so a fixed hold of N seconds came up short)."""
+    assert h.hold_can_end(partial_updates=50, display_times=False, lines=0, seen=50)
+    assert not h.hold_can_end(partial_updates=50, display_times=False, lines=0, seen=49)
+    # something else wants the whole hold
+    assert not h.hold_can_end(partial_updates=50, display_times=True, lines=0, seen=50)
+    assert not h.hold_can_end(partial_updates=50, display_times=False, lines=5, seen=50)
+    assert not h.hold_can_end(partial_updates=0, display_times=False, lines=0, seen=0)
+
+
 def test_run_log_records_reads_the_backend_run_log(tmp_path, monkeypatch):
     logs = tmp_path / "logs"
     logs.mkdir()

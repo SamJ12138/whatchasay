@@ -353,7 +353,7 @@ Tests, from `backend/` (install the test tools once: `venv\Scripts\python -m pip
 | Suite | Command (PowerShell; bash: `venv/bin/python`) | What it needs | Time |
 |---|---|---|---|
 | Fast | `venv\Scripts\python -m pytest` | nothing: fake MT and ASR engines (`tests/fakes.py`), a fake llama-server (`tests/fake_llama_server.py`), the real app in-process, scratch data paths | ~30 s |
-| Slow | `venv\Scripts\python -m pytest -m slow` | the downloaded models, and for the browser tests a Python with Playwright (`pip install playwright`, `playwright install chromium`) named in `ST_PLAYWRIGHT_PYTHON` | ~4 min |
+| Slow | `venv\Scripts\python -m pytest -m slow` | the downloaded models, and for the browser tests a Python with Playwright (`pip install playwright`, `playwright install chromium`) named in `ST_PLAYWRIGHT_PYTHON` | ~12 min with the opt-in tests below |
 | Extension | `cd ..\extension` then `node --test` | Node 22 | ~1 s |
 
 **Pre-commit hook.** Run `python scripts/install-hooks.py` once per clone. From then on every `git commit` runs
@@ -363,6 +363,22 @@ Node on PATH.
 
 The fast suite never touches `backend/data/`; the slow tests read models from `backend/data/models` or from
 `ST_MODELS_ROOT`.
+
+**Opt-in slow tests.** Some slow tests skip unless a variable is set, because they need the network and a visible
+browser. With `ST_YOUTUBE_CHANNEL_TESTS=1`, `backend/tests/test_channel_memory_browser.py` plays one YouTube video
+of a Bengali vlog channel through the real extension. The page alone points to English: a romanised title, and
+YouTube's caption language is English. The three tests (about 2-3 minutes together) check the channel memory
+(`docs/latency.md`, "Channel memory on a second visit"):
+
+| Test | What it checks |
+|---|---|
+| `test_the_remembered_language_wins_on_a_second_visit` | two visits in one browser profile: after the first confirms Bengali, the second starts in the remembered Bengali, confirms it without a switch, and shows the first confirmed subtitle within 2.74 s of play (the slowest run on pages whose prior is right); skipped when language ID confirms another language on the first visit, which whisper-tiny does on this video in some runs |
+| `test_a_second_visit_after_one_right_confirmation` | the second visit alone, with the memory written as a right first visit leaves it: same checks |
+| `test_a_memory_wrong_once_drops_under_the_threshold` | a memory of English on a Bengali video: language ID's answer replaces it, the miss is counted, and the memory on its own no longer reaches the prior's threshold |
+
+`ST_YOUTUBE_URL` (a YouTube URL; `test_overlay_browser.py`'s YouTube cases) and `ST_LID_CLIP_WAV` (a 16 kHz mono WAV of the live
+test's clip's first 20 s, not in the repository; its cases in `test_lid_real.py`, `test_segmentation_real.py` and
+`test_glossary_live.py`) are opt-in the same way.
 
 **Browser harness.** `backend/scripts/e2e_extension.py` loads the unpacked extension into Chromium with
 Playwright and drives one path end to end: `--path audio` (a page plays a sample and live captions must deliver a
@@ -380,6 +396,9 @@ placement, `--partial-updates N` the block's box at N partial-text changes), `--
 screenshots three moments, `--layout page|fill` chooses the harness page (a player in a page column, or the video
 filling the viewport), `--fullscreen` puts a `--url` page's player into fullscreen, `--show-source` turns the spoken
 words on, `--hover-controls` keeps the mouse over the player so its control bar shows (`docs/overlay/README.md`).
+`--profile DIR` keeps the browser profile and the extension's test copy between runs, so a second run is a second
+visit with the same channel memory (an absolute path; never under `backend/data`). `--memory JSON` writes
+channel-memory entries before the run.
 
 **Run logs and the failure report.** Every backend run writes one JSON line per event to
 `backend/logs/run_<run_id>.jsonl` (stage, event, duration, error type; the extension's events arrive through

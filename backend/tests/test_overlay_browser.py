@@ -82,9 +82,11 @@ def test_on_the_youtube_page(fullscreen):
 
 
 def partial_updates_run(*args, n=50, at_least=50):
-    """The block's box at the first n partial-text changes (fast polling between ticks)."""
+    """The block's box at the first n partial-text changes (fast polling between ticks). The
+    hold ends at the nth change, 120 s at most: the looping sample gives about one a second
+    (39-48 in a fixed 50 s hold, which is what this test used to allow)."""
     summary, proc = run_harness("--path", "audio", "--source", "en", "--targets", "zh", "--size", "960x540",
-                                "--show-source", "--hold", "50", "--partial-updates", str(n), *args)
+                                "--show-source", "--hold", "120", "--partial-updates", str(n), *args)
     assert summary["ok"], (summary, proc.stderr[-2000:])
     pu = summary["overlay"]["partial_updates"]
     assert pu["count"] >= at_least, pu   # enough consecutive updates were seen
