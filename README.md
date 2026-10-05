@@ -289,7 +289,10 @@ and Bengali too), two agreeing answers switch to another language, and the confi
 already on screen, nothing replayed. On the benchmark clips' own pages the first subtitle in a confirmed language
 came 1.3-2.3 s after play where the page was right (median per clip; 1.9-3.7 s before); where it was wrong, 3.1 s
 on one clip (2.4 s before) and 1.9 s on another (3.0 s before). Under one second was the goal and is not reached:
-the first answer needs a second of speech. Evaluation and numbers: `docs/page-prior.md`, `docs/latency.md`.
+the first answer needs a second of speech, and none of the faster language-ID options measured decides earlier
+without more mistakes (`docs/lid-alternatives.md`). On a second video of a channel the language confirmed there
+before counts too: on a page whose title and YouTube caption language both said English, the remembered Bengali
+was confirmed 1.3 s after play (median). Evaluation and numbers: `docs/page-prior.md`, `docs/latency.md`.
 
 **Measured latency**, per subtitle line: before the streaming work, after it, and now, with the draft follow-ups
 (Windows 11, i9-13900H, everything on the CPU; three runs per clip in Chromium with the real extension,

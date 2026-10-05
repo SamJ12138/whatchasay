@@ -25,7 +25,9 @@
   Nepali. The backend now picks the likeliest of English, Mandarin and Bengali, and stays on its first guess when
   that is not clear enough: the captions then stay dimmed under *Language not detected, assuming English* (or the
   language the page pointed to, `docs/page-prior.md`). On a Bengali drama whisper-tiny's own top three were
-  Telugu, Malayalam and Hindi, and the choice among the three came out English at 0.93-0.96. Set the
+  Telugu, Malayalam and Hindi, and the choice among the three came out English at 0.93-0.96. On a Bengali vlog
+  channel (talk over music, English words in Bengali sentences) it confirmed English or Mandarin on 9 of 10
+  stretches, and the channel memory then remembers the wrong language for one visit (`docs/page-prior.md`). Set the
   spoken language under *Live Captions* in the popup instead of *Auto-detect*.
 - The glossary replaces a term's heard-as spellings on the recognised line and carries the term through
   translation as a placeholder the engine copies. OPUS-MT keeps no placeholder in every direction, so the result is

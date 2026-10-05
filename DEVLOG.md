@@ -1053,3 +1053,17 @@ D4 cloud providers off by default, keys only in backend config.
   the memory often learns a wrong language there (pairs 1-2: wrong zh memory -> switch to bn, 2.15 / 3.02 s).
   The browser tests' bound is the slowest right-prior run (2.74 s), not "attempt 1": one seeded run waited for the
   third attempt (bn 0.57 under the floor, zh 0.71, bn 0.93).
+- Batch 2 (`docs/lid-alternatives.md`, `backend/scripts/lid_alternatives.py`, unit test `test_lid_alternatives.py`):
+  65 starts (46 zh/bn, 19 en; the starts of docs/page-prior.md), windows 0.5 / 0.75 / 1.0 s of voiced audio.
+  Accepted at today's floors / misfires: whisper-tiny 32/6, 44/1, **51/0**; whisper-base 35/3, 41/3, 51/1;
+  whisper-small 42/3, **46/0**, 49/1 (124 ms per call, p95 296, 357 MB); sherpa-onnx SpokenLanguageIdentification
+  (unconstrained, no probabilities; tiny said Bengali on 6 of 78 Bengali windows, 4-5x slower than lid.py);
+  recognizer agreement (ys_probs exposed; real-word share from FrequencyWords 50k lists) has almost no output by
+  0.5 s (English recognizer: a token on 0 of 65 starts) and keeps 3 right answers at 0.75 s under a zero-misfire
+  floor. 3D-Speaker LID is zh/en only and not a sherpa-onnx model; sherpa-onnx ships whisper SLID only.
+- Batch 3 NOT run: nothing beats whisper-tiny at 0.5 or 0.75 s. Closest: whisper-small at 0.75 s ties tiny's top-1
+  (47/65 each), +2 accepted (their 14 disagreements split 8-6) and its inference (0.87 s median / 1.05 s p95
+  decision) cancels the earlier window against tiny at 1.0 s (1.02 / 1.05). Brief's premise "7 of 46 misfires at
+  >= 0.97" does not match the code: those 7 are at 0.71-0.97, under the floor; at 1.0 s tiny misfires on 0 of 65.
+  README "Language detection" paragraph and docs/limitations.md (the vlog channel) updated. Tallies: fast 458,
+  slow 46 (3 new browser tests behind ST_YOUTUBE_CHANNEL_TESTS), node 180.
