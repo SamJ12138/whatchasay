@@ -354,6 +354,36 @@ def test_prior_summary_reads_the_prior_and_whether_it_was_right():
                                    "confirmed": None, "attempt": None, "switched": None, "right": None}
 
 
+def test_a_kept_profile_is_never_under_backend_data(tmp_path):
+    """--profile: the browser profile (and its channel memory) kept between runs, so a second
+    run is a second visit; like --tm, never inside backend/data."""
+    assert h.harness_profile_path(tmp_path / "p") == (tmp_path / "p").resolve()
+    with pytest.raises(ValueError):
+        h.harness_profile_path(h.BACKEND / "data" / "profile")
+
+
+def test_the_extension_copy_in_a_kept_profile_keeps_its_path_and_id(tmp_path):
+    """The extension's id comes from its folder's path, and its storage (the channel memory)
+    from the id: a second run into the same profile must reuse the same folder."""
+    ext = tmp_path / "ext"
+    ext.mkdir()
+    (ext / "manifest.json").write_text(json.dumps({"name": "x", "permissions": ["storage"]}), encoding="utf-8")
+    first = h.test_extension_copy(ext, tmp_path / "kept", ["https://www.youtube.com/*"])
+    (ext / "new.js").write_text("// changed between the runs", encoding="utf-8")
+    second = h.test_extension_copy(ext, tmp_path / "kept", ["https://www.youtube.com/*"])
+    assert first == second and h.extension_id_for_path(str(first)) == h.extension_id_for_path(str(second))
+    assert (second / "new.js").exists()  # the copy is fresh
+
+
+def test_memory_seed_takes_entries_in_the_three_languages_only():
+    """--memory: a channel memory from an earlier visit, written before the run."""
+    seed = h.memory_seed('{"yt:UC1": {"lang": "en", "misses": 0, "hits": 3}}')
+    assert seed == {"yt:UC1": {"lang": "en", "misses": 0, "hits": 3, "ts": 1}}
+    for bad in ('[]', '{"yt:UC1": {"lang": "ja"}}', '{"yt:UC1": "en"}', 'not json'):
+        with pytest.raises(ValueError):
+            h.memory_seed(bad)
+
+
 def test_run_log_records_reads_the_backend_run_log(tmp_path, monkeypatch):
     logs = tmp_path / "logs"
     logs.mkdir()

@@ -1032,3 +1032,24 @@ D4 cloud providers off by default, keys only in backend config.
   Auto-detect limitation (README + docs/limitations.md), configuration rows for the three settings and the thread
   count, architecture-notes D3 row for the channel memory. Tallies: fast 451, slow 43 (1 failing, pre-existing),
   node 178.
+
+### 2026-10-05 — Channel memory tested on a second visit; earlier language decision measured
+
+- Batch 1 (`docs/latency.md` "Channel memory on a second visit", `docs/page-prior.md` "Channel memory: why 0.97"):
+  browser test `backend/tests/test_channel_memory_browser.py` (slow, `ST_YOUTUBE_CHANNEL_TESTS=1`, headful):
+  the cold case (Durga Pujo vlog, romanised title + YouTube caption language en -> page prior en 0.94, Bengali
+  speech, from 0:30) opened twice in one profile; a second visit with the memory a right first visit leaves; and
+  decay (a seeded wrong memory "en" -> language ID confirms bn -> entry bn, misses 1, 0.485 alone < 0.6). Harness:
+  `--profile DIR` (profile + the extension's test copy kept between runs: same path, same id, same storage; refused
+  under backend/data), `--memory JSON` (seed `languageMemory`), summary `language_memory` (entry, confidence, the
+  prior it gives alone, from the extension's own code). **Conflict with the code:** the remembered language did NOT
+  win: memory 0.9 against `captionAsr:en` + `pageScript:en` gave en 0.61 / bn 0.37 (red in node and in the
+  browser, both before the change). Memory weight 0.9 -> **0.97** (needs >= 0.959; bn 0.678 now); trade-off: a
+  wrong memory now pulls a right two-signal page under the threshold (bn 0.58 -> English first, as before any
+  prior), for one session (the miss replaces the language and halves the weight). Second open with a right memory:
+  1.25, 1.26, 1.29, 1.42, 2.31 s (median 1.29; first visits that day 1.77-1.80; cold case 2026-10-04 median 1.86).
+  Found: on the cold case's channel whisper-tiny confirmed en or zh on 9 of 10 stretches of six other videos (right
+  bn prior or not), and on the cold case itself zh in 3 of 6 first visits on 2026-10-05 (bn 5/6 on 2026-10-04), so
+  the memory often learns a wrong language there (pairs 1-2: wrong zh memory -> switch to bn, 2.15 / 3.02 s).
+  The browser tests' bound is the slowest right-prior run (2.74 s), not "attempt 1": one seeded run waited for the
+  third attempt (bn 0.57 under the floor, zh 0.71, bn 0.93).

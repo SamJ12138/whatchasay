@@ -409,6 +409,24 @@ def prior_summary(records: list[dict]) -> dict:
             "switched": (done or {}).get("switched"), "right": (done or {}).get("prior_right") if favoured else None}
 
 
+def read_language_memory(sw) -> dict | None:
+    """The extension's channel memory after the run, per key: the entry, its confidence, and the
+    prior it gives on its own (a page with nothing to go on), from the extension's own code."""
+    try:
+        return sw.evaluate("""async () => {
+            const P = globalThis.STLanguagePrior;
+            const mem = (await chrome.storage.local.get('languageMemory')).languageMemory || {};
+            const out = {};
+            for (const [k, e] of Object.entries(mem)) {
+                out[k] = {lang: e.lang, misses: e.misses || 0, hits: e.hits || 0, confidence: P.memoryConfidence(e),
+                          alone: P.priorFrom({origin: null, title: null, description: null, youtube: null}, e).prior};
+            }
+            return out;
+        }""")
+    except Exception as e:
+        return {"error": str(e).splitlines()[0][:200]}
+
+
 def line_latency_summary(records: list[dict], play_t: float | None) -> dict:
     """Per-line latencies as the content script logged them (stage line_latency,
     docs/latency.md), in line order, and the first confirmed-language subtitle: seconds
@@ -477,6 +495,35 @@ def harness_tm_path(path: Path) -> Path:
     if resolved == data or data in resolved.parents:
         raise ValueError(f"--tm must not be inside {data} (the real translation memory lives there)")
     return resolved
+
+
+def harness_profile_path(path: Path) -> Path:
+    """--profile: the browser profile and the test copy of the extension kept between runs (a
+    second run is a second visit: same extension id, same chrome.storage, so the same channel
+    memory). Never under backend/data."""
+    resolved = Path(path).resolve()
+    data = (BACKEND / "data").resolve()
+    if resolved == data or data in resolved.parents:
+        raise ValueError(f"--profile must not be inside {data}")
+    return resolved
+
+
+def memory_seed(text: str) -> dict:
+    """--memory: channel-memory entries ({key: {lang, misses, hits}}, the extension's
+    languageMemory) written before the run, as an earlier visit would have left them."""
+    try:
+        seed = json.loads(text)
+    except ValueError as e:
+        raise ValueError(f"--memory is not JSON: {e}") from None
+    if not isinstance(seed, dict):
+        raise ValueError("--memory must be a JSON object {key: {lang, misses, hits}}")
+    out = {}
+    for key, entry in seed.items():
+        if not isinstance(entry, dict) or entry.get("lang") not in ("en", "zh", "bn"):
+            raise ValueError(f"--memory entry {key!r} needs a lang out of en, zh, bn")
+        out[key] = {"lang": entry["lang"], "misses": int(entry.get("misses", 0)), "hits": int(entry.get("hits", 1)),
+                    "ts": int(entry.get("ts", 1))}
+    return out
 
 
 # YouTube's player; else the first video with a source (Wikimedia Commons keeps a sourceless
@@ -776,6 +823,8 @@ def test_extension_copy(extension: Path, scratch: Path, extra_origins=()) -> Pat
     for the user's activeTab click, caption-mode grant and first-use tabCapture
     prompt, which automation cannot give)."""
     dst = scratch / "extension-test"
+    if dst.exists():  # a kept profile (--profile): a fresh copy at the same path keeps the id
+        shutil.rmtree(dst)
     shutil.copytree(extension, dst, ignore=shutil.ignore_patterns("tests", "node_modules"))
     mf = dst / "manifest.json"
     m = json.loads(mf.read_text(encoding="utf-8"))
@@ -1408,7 +1457,22 @@ def main() -> int:
                     help="--geometry: poll fast and record how long each final translation stays on screen")
     ap.add_argument("--hover-controls", action="store_true",
                     help="audio path: keep the mouse over the player so the site's control bar is showing")
+    ap.add_argument("--profile", type=Path,
+                    help="keep the browser profile and the extension's test copy in this folder between runs: a second "
+                         "run is a second visit (same chrome.storage, so the same channel memory); not under backend/data")
+    ap.add_argument("--memory", help="audio path: channel-memory entries (JSON {key: {lang, misses, hits}}, key yt:<channel "
+                                     "id> or site:<origin>) written to the extension's languageMemory before the run")
     args = ap.parse_args()
+    if args.profile:
+        try:
+            args.profile = harness_profile_path(args.profile)
+        except ValueError as e:
+            ap.error(str(e))
+    if args.memory:
+        try:
+            args.memory = memory_seed(args.memory)
+        except ValueError as e:
+            ap.error(str(e))
     if args.shots and not args.geometry:
         args.geometry = True
     if (args.partial_updates or args.display_times) and not args.geometry:
@@ -1429,7 +1493,7 @@ def main() -> int:
     try:
         if args.path == "permissions":
             with sync_playwright() as pw:
-                ctx = launch(pw, scratch / "profile", None, not args.headful, args.extension)
+                ctx = launch(pw, (args.profile or scratch) / "profile", None, not args.headful, args.extension)
                 ext_id = service_worker(ctx).url.split("/")[2]
                 summary["extension_id"] = ext_id
                 summary["ok"] = permissions_checks(ctx, ext_id, summary)
@@ -1437,7 +1501,7 @@ def main() -> int:
             return 0 if summary["ok"] else 1
         if not args.no_test_grant:
             extra = [origin_pattern(args.url)] if args.url else []
-            args.extension = test_extension_copy(args.extension, scratch, extra)
+            args.extension = test_extension_copy(args.extension, args.profile or scratch, extra)
             summary["test_grant"] = list(TEST_ORIGINS) + extra
         if args.start_backend:
             backend = start_backend(args.port, scratch, [extension_id_for_path(str(args.extension))], tm=args.tm,
@@ -1478,7 +1542,7 @@ def main() -> int:
 
         with sync_playwright() as pw:
             # 1st launch: learn the unpacked extension's id
-            ctx = launch(pw, scratch / "profile", None, not args.headful, args.extension)
+            ctx = launch(pw, (args.profile or scratch) / "profile", None, not args.headful, args.extension)
             ext_id = service_worker(ctx).url.split("/")[2]
             ctx.close()
             summary["extension_id"] = ext_id
@@ -1487,7 +1551,7 @@ def main() -> int:
 
             # 2nd launch: allowlist it for tabCapture without a gesture
             size = tuple(int(x) for x in args.size.split("x")) if args.size else None
-            ctx = launch(pw, scratch / "profile", ext_id, not args.headful, args.extension,
+            ctx = launch(pw, (args.profile or scratch) / "profile", ext_id, not args.headful, args.extension,
                          record_dir=args.record, size=size)
             sw = service_worker(ctx)
             auto = args.targets == "auto"  # English first; switched to Chinese if the speech turns out to be English
@@ -1499,6 +1563,12 @@ def main() -> int:
                 await chrome.storage.local.set({settings: {...cur, serverUrl: url, ...langs, captionMode, ...extra, showOriginal: !!showSource}});
             }""", {"url": f"ws://127.0.0.1:{args.port}/ws", "langs": target_settings(targets), "captionMode": caption_mode,
                    "fontSize": args.font_size, "showSource": args.show_source})
+            if args.memory:  # what an earlier visit would have left in the channel memory
+                sw.evaluate("""async (seed) => {
+                    const cur = (await chrome.storage.local.get('languageMemory')).languageMemory || {};
+                    await chrome.storage.local.set({languageMemory: {...cur, ...seed}});
+                }""", args.memory)
+                summary["memory_seeded"] = args.memory
             if caption_mode:  # caption mode registers the content scripts for the granted origins
                 end = time.time() + 10
                 while time.time() < end and not sw.evaluate(
@@ -1716,6 +1786,7 @@ def main() -> int:
                 summary["tm_rows_after"] = tm_rows(args.port)
                 summary["line_latency"] = line_latency_summary(records, play_t)
                 summary["language_prior"] = prior_summary(run_log_records(summary.get("run_id"), args.backend_dir))
+                summary["language_memory"] = read_language_memory(sw)
                 summary["asr_models"] = asr_models(args.port)
                 summary["finals"] = [(r.get("context") or {}).get("text_len") for r in records
                                      if r.get("stage") == "ext_render" and (r.get("context") or {}).get("kind") == "final"][:5]

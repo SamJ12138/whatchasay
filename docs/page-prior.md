@@ -130,8 +130,9 @@ present) and the channel name alone (8 of 17) are weaker than the three together
   the only signal that sees a dub: the "ENG SUB" drama's title promises Chinese audio with English
   subtitles, and its default track is English.
 - **Added: the channel memory** (Batch 1): the language that language ID last confirmed on the
-  same YouTube channel (elsewhere: the same site), weight **0.9**, halved for every time it turned
-  out wrong on that channel or site, for good (a channel that switches languages stops counting).
+  same YouTube channel (elsewhere: the same site), weight **0.97** (0.9 until 2026-10-05, see
+  "Channel memory" below), halved for every time it turned out wrong on that channel or site, for
+  good (a channel that switches languages stops counting).
 
 **How they combine.** Naive Bayes over {en, zh, bn} from a flat start: a signal that names language
 L with weight a multiplies L by a and each other language by (1 - a) / 2; the prior is the
@@ -187,6 +188,33 @@ Bengali starts got English at 0.97 or more, and one English start got Mandarin a
 in, at 0.6 s). The first attempt stays at 1.0 s of speech, which bounds the best case: a
 subtitle confirmed at the first attempt is on screen about 1 s of speech plus the capture and the
 first partial after the video starts to play (`docs/latency.md`, "Language prior").
+
+## Channel memory: why 0.97 (2026-10-05)
+
+The memory is what the second visit to a channel adds, so it has to win where the page is wrong.
+The one YouTube page here whose prior is wrong and above the threshold is the cold case, the Durga
+Pujo vlog: romanised title (`pageScript:en`, 0.65) and YouTube's caption language English
+(`captionAsr:en`, 0.8), Bengali speech. Against those two a remembered Bengali at 0.9 lost: the prior
+came out en 0.61, bn 0.37, English was the first recognizer and Bengali was reached by a switch at
+the second attempt (browser test `backend/tests/test_channel_memory_browser.py`, run before the
+change). For the memory to reach the 0.6 threshold against both, its weight has to be at least
+0.959; it is now **0.97** (bn 0.68 on that page).
+
+The cost is symmetric: a wrong memory now outweighs a right page of two signals. A channel
+remembered as English opening a video with a Bengali title and YouTube's Bengali caption language
+gets bn 0.58, under the threshold, so the session starts in English as it did before any prior,
+and language ID decides as before. That costs one session: the miss replaces the remembered
+language with the confirmed one and halves its weight (0.485, on its own under the threshold;
+0.243 after a second miss). A wrong page, by contrast, is wrong on every visit to that video and
+usually on the channel's other videos.
+
+What the memory learns is only as good as language ID's answer on the first visit. On the cold
+case's channel whisper-tiny confirmed English or Mandarin on 9 of 10 stretches of its other videos
+(right prior or not: talking over music, English words in Bengali sentences), and on the cold case
+itself from 0:30 it confirmed Bengali in 5 of 6 runs on 2026-10-04 but Mandarin in 3 of 6 first
+visits on 2026-10-05 (`docs/latency.md`, "Channel memory on a second visit"). A first visit that confirms
+the wrong language leaves a wrong memory for the second; the miss count then limits it to one
+session.
 
 Re-running: `python backend/scripts/page_prior_eval.py --pages docs/page-prior-pages.tsv --cache DIR`
 (the 23 pages with their spoken languages; the fetched HTML is not kept in the repository, and

@@ -26,7 +26,10 @@
   const LANGS = ['en', 'zh', 'bn'];
   // a signal's accuracy when present (docs/page-prior.md, "Weights")
   const ACCURACY = { captionAsr: 0.8, audioTrack: 0.8, scriptNonLatin: 0.85, scriptLatin: 0.65 };
-  const MEMORY_CONFIDENCE = 0.9;   // a remembered language never wrong so far
+  // a remembered language never wrong so far: strong enough to beat the strongest wrong page
+  // measured (romanised title + YouTube's English caption language, en 0.94: needs >= 0.959;
+  // docs/page-prior.md, "Channel memory")
+  const MEMORY_CONFIDENCE = 0.97;
   const MEMORY_DECAY = 0.5;        // ...times this for every time it was wrong
   const MEMORY_MAX_KEYS = 500;
 

@@ -73,18 +73,37 @@ test('a remembered channel language is a strong vote on its own', () => {
   assert.ok(prior.zh >= 0.6, JSON.stringify(prior));
 });
 
+test('on a second visit the remembered language beats a wrong page (romanised title, English caption language)', () => {
+  // the cold case of docs/latency.md: a Bengali vlog whose title is romanised and whose YouTube
+  // caption language is English; language ID confirmed Bengali on the channel's previous video
+  const mem = P.remember({}, 'yt:UC1', 'bn', 1);
+  const page = yt({ title: 'Panchmi te Kolkata e thakur dekhte gelam 🪷✨|| Durga Pujo Vlog', author: 'Bidisha Das',
+    description: 'Hey everyone , I hope you will enjoy this vlog.', captionAsr: 'en' });
+  assert.ok(P.priorFrom(page).prior.en >= 0.6);  // the page alone: English
+  const { prior, votes } = P.priorFrom(page, mem['yt:UC1']);
+  assert.deepEqual(votes.map((v) => v.signal + ':' + v.lang), ['captionAsr:en', 'pageScript:en', 'memory:bn']);
+  assert.ok(prior.bn >= 0.6 && prior.bn > prior.en, JSON.stringify(prior));
+});
+
+test('a memory wrong once alone stays under the threshold', () => {
+  let mem = P.remember({}, 'yt:UC1', 'en', 1);
+  mem = P.remember(mem, 'yt:UC1', 'bn', 2);  // it said en, language ID confirmed bn
+  const { prior } = P.priorFrom({ origin: 'https://www.youtube.com', youtube: { channelId: 'UC1' } }, mem['yt:UC1']);
+  assert.ok(prior.bn < 0.6, JSON.stringify(prior));
+});
+
 test('the memory weakens with every time it was wrong, and never recovers', () => {
   let mem = P.remember({}, 'k', 'zh', 1);
-  assert.equal(P.memoryConfidence(mem.k), 0.9);
+  assert.equal(P.memoryConfidence(mem.k), 0.97);
   mem = P.remember(mem, 'k', 'zh', 2);
   assert.deepEqual([mem.k.lang, mem.k.misses, mem.k.hits], ['zh', 0, 2]);
   mem = P.remember(mem, 'k', 'en', 3);            // it said zh, the speech was English
   assert.deepEqual([mem.k.lang, mem.k.misses], ['en', 1]);
-  assert.equal(P.memoryConfidence(mem.k), 0.45);
+  assert.equal(P.memoryConfidence(mem.k), 0.485);
   mem = P.remember(mem, 'k', 'en', 4);
-  assert.equal(P.memoryConfidence(mem.k), 0.45);  // right again: still once wrong
+  assert.equal(P.memoryConfidence(mem.k), 0.485);  // right again: still once wrong
   mem = P.remember(mem, 'k', 'zh', 5);
-  assert.equal(P.memoryConfidence(mem.k), 0.225);
+  assert.equal(P.memoryConfidence(mem.k), 0.2425);
   const { prior } = P.priorFrom(yt({ title: 'x y z' }), mem.k);  // a weak memory alone stays under the threshold
   assert.ok(prior.zh < 0.6, JSON.stringify(prior));
 });

@@ -593,3 +593,45 @@ takes 27-38 ms with the parallel recognizer against 73-166 ms for the replay.
 
 The headline GIF is not re-recorded: it plays the clip on a local page whose title is English, so its first guess
 is English as before, and the confirmation it shows would look the same.
+
+## Channel memory on a second visit (2026-10-05)
+
+The cold case above is a channel never seen. On a second video of the same channel the prior also
+carries the channel memory: the language that language ID confirmed there last time. Measured on
+the cold case itself (the Durga Pujo vlog: romanised title and YouTube's English caption language,
+so the page alone says en 0.94; Bengali speech; from 0:30, as above), opened twice in one browser
+profile (harness `--profile DIR`, which keeps the profile and the extension's storage between runs),
+so that the memory is the only difference between the visits. Not another video of the channel
+for the first visit: on 9 of 10 stretches of its other videos (six videos, Bengali or romanised
+titles, from 0:00 to 0:30) whisper-tiny confirmed English or Mandarin, with the prior right or not
+(`docs/page-prior.md`, "Channel memory").
+
+**The memory lost before this change.** With its weight at 0.9, a remembered Bengali against that
+page gave en 0.61, bn 0.37: English stayed the first recognizer and Bengali came by a switch at
+attempt 2 or 4 (browser test `backend/tests/test_channel_memory_browser.py`, red on the old weight).
+The weight is now 0.97, the least that beats both wrong signals with a margin (0.959 needed); the
+prior on the second visit is bn 0.678 (`captionAsr:en`, `pageScript:en`, `memory:bn`).
+
+| Run | First visit (empty memory): confirmed, attempt, first confirmed subtitle | Second visit: prior favourite | Second visit: confirmed, attempt | Second visit: first confirmed subtitle (s) | run_ids (first / second) |
+|---|---|---|---|---|---|
+| pair 3 | bn, 2, 1.77 s | bn (memory) | bn, 1 | **1.25** | `20261005T003637-f8c757` / `20261005T003727-19e095` |
+| pair 4 | bn, 2, 1.80 s | bn (memory) | bn, 1 | **1.26** | `20261005T003757-1adc37` / `20261005T003829-d99329` |
+| seeded 1 | (memory written: bn, hits 1) | bn (memory) | bn, 3 | **2.31** | - / `20261005T004221-8631f4` |
+| seeded 2 | (memory written: bn, hits 1) | bn (memory) | bn, 1 | **1.29** | - / `20261005T004255-002855` |
+| seeded 3 | (memory written: bn, hits 1) | bn (memory) | bn, 1 | **1.42** | - / `20261005T004332-924cca` |
+| pair 1 | **zh**, 4, 4.05 s | zh (a wrong memory) | bn by a switch, 4 | 3.02 | `20261005T003123-804c10` / `20261005T003214-496da2` |
+| pair 2 | **zh**, 3, 1.98 s | zh (a wrong memory) | bn by a switch, 2 | 2.15 | `20261005T003443-a86475` / `20261005T003542-8a145b` |
+
+**Second open with a right memory: 1.25-2.31 s, median 1.29 s** (five runs), against 1.77-1.80 s for
+the first visit that day and a median of 1.86 s for the cold case on 2026-10-04: in the range of the
+right-prior rows above (Bengali runs 1.28-1.51 s, all right-prior runs 1.28-2.74 s). Four of the five confirmed at
+the first attempt; seeded 1 waited for the third (whisper-tiny: bn 0.57 under the floor, then zh
+0.71, then bn 0.93), never switching. "Seeded" runs had the memory written with `--memory` as a
+right first visit leaves it, because the first visit's own answer is whisper-tiny's and varies on
+this stretch: Bengali in 5 of 6 runs on 2026-10-04, Mandarin in 3 of 6 first visits on 2026-10-05.
+
+**A wrong memory** (pairs 1 and 2: the first visit confirmed Mandarin) made Mandarin the second
+visit's first recognizer; language ID switched to Bengali (2.15 and 3.02 s), and the miss left the
+memory as Bengali at half weight (0.485, under the threshold on its own: the browser test
+`test_a_memory_wrong_once_drops_under_the_threshold` checks that). A wrong memory costs one
+session, then the channel's page decides again until a right confirmation is remembered.
